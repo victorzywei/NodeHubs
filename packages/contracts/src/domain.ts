@@ -1,0 +1,205 @@
+export type NodeKind = 'vps' | 'edge'
+
+export type ReleaseKind = 'runtime' | 'bootstrap'
+
+export type ReleaseStatus = 'pending' | 'applying' | 'healthy' | 'failed'
+
+export type StorageMode = 'cloudflare' | 'docker'
+
+export type SubscriptionDocumentFormat = 'plain' | 'base64' | 'json'
+
+export type RuntimeArchiveFormat = 'tar.gz' | 'zip'
+
+export interface NodeRecord {
+  id: string
+  name: string
+  nodeType: NodeKind
+  region: string
+  tags: string[]
+  primaryDomain: string
+  backupDomain: string
+  entryIp: string
+  installWarp: boolean
+  installArgo: boolean
+  configRevision: number
+  bootstrapRevision: number
+  desiredReleaseRevision: number
+  currentReleaseRevision: number
+  currentReleaseStatus: ReleaseStatus | 'idle'
+  lastSeenAt: string | null
+  cpuUsagePercent: number | null
+  memoryUsagePercent: number | null
+  bytesInTotal: number
+  bytesOutTotal: number
+  currentConnections: number
+  protocolRuntimeVersion: string
+  updatedAt: string
+  createdAt: string
+}
+
+export interface TemplateRecord {
+  id: string
+  name: string
+  engine: 'sing-box' | 'xray'
+  protocol: string
+  transport: string
+  tlsMode: 'none' | 'tls' | 'reality'
+  defaults: Record<string, unknown>
+  notes: string
+  updatedAt: string
+  createdAt: string
+}
+
+export interface ReleaseRecord {
+  id: string
+  nodeId: string
+  kind: ReleaseKind
+  revision: number
+  status: ReleaseStatus
+  configRevision: number
+  bootstrapRevision: number
+  artifactKey: string
+  artifactSha256: string
+  summary: string
+  message: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface SubscriptionRecord {
+  id: string
+  token: string
+  name: string
+  enabled: boolean
+  visibleNodeIds: string[]
+  updatedAt: string
+  createdAt: string
+}
+
+export interface TrafficSample {
+  nodeId: string
+  at: string
+  bytesInTotal: number
+  bytesOutTotal: number
+  currentConnections: number
+  cpuUsagePercent: number | null
+  memoryUsagePercent: number | null
+}
+
+export interface DashboardSummary {
+  mode: StorageMode
+  nodeCount: number
+  templateCount: number
+  releaseCount: number
+  onlineCount: number
+  totalBytesIn: number
+  totalBytesOut: number
+}
+
+export interface SystemStatus {
+  appVersion: string
+  mode: StorageMode
+  databaseDriver: 'd1' | 'sqlite'
+  artifactDriver: 'r2' | 'minio'
+  publicBaseUrl: string
+  summary: DashboardSummary
+  now: string
+}
+
+export interface ReleaseConfigFile {
+  path: string
+  contentType: 'application/json' | 'text/plain'
+  content: string
+}
+
+export interface ReleaseRuntimePlan {
+  engine: TemplateRecord['engine']
+  binary: RuntimeBinaryPlan
+  entryConfigPath: string
+  files: ReleaseConfigFile[]
+}
+
+export interface SubscriptionEndpoint {
+  nodeId: string
+  nodeName: string
+  templateId: string
+  templateName: string
+  engine: TemplateRecord['engine']
+  protocol: string
+  transport: string
+  tlsMode: TemplateRecord['tlsMode']
+  label: string
+  server: string
+  port: number
+  uri: string
+}
+
+export interface BootstrapPlan {
+  serviceName: string
+  runtimeServiceName: string
+  installWarp: boolean
+  installArgo: boolean
+  mode: 'runtime-only' | 'bootstrap-required'
+  notes: string[]
+}
+
+export interface RuntimeBinaryPlan {
+  engine: TemplateRecord['engine']
+  version: string
+  binaryName: string
+  installPath: string
+  archiveFormat: RuntimeArchiveFormat
+  downloadBaseUrl: string
+  assetNameTemplate: string
+  binaryPathTemplate: string
+  runArgsTemplate: string
+}
+
+export interface ReleaseArtifact {
+  schema: 'newnodeshub-release-v2'
+  releaseId: string
+  nodeId: string
+  revision: number
+  kind: ReleaseKind
+  configRevision: number
+  bootstrapRevision: number
+  summary: string
+  message: string
+  createdAt: string
+  node: Pick<
+    NodeRecord,
+    | 'id'
+    | 'name'
+    | 'nodeType'
+    | 'region'
+    | 'tags'
+    | 'primaryDomain'
+    | 'backupDomain'
+    | 'entryIp'
+    | 'installWarp'
+    | 'installArgo'
+  >
+  templates: Array<Pick<TemplateRecord, 'id' | 'name' | 'engine' | 'protocol' | 'transport' | 'tlsMode' | 'defaults'>>
+  runtime: ReleaseRuntimePlan
+  bootstrap: BootstrapPlan
+  subscriptionEndpoints: SubscriptionEndpoint[]
+}
+
+export interface PublicSubscriptionDocument {
+  subscriptionId: string
+  name: string
+  format: SubscriptionDocumentFormat
+  generatedAt: string
+  entries: SubscriptionEndpoint[]
+}
+
+export interface TemplatePreset {
+  id: string
+  name: string
+  engine: TemplateRecord['engine']
+  protocol: string
+  transport: string
+  tlsMode: TemplateRecord['tlsMode']
+  defaults: Record<string, unknown>
+  notes: string
+}

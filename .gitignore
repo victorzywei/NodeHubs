@@ -1,0 +1,14 @@
+node_modules
+dist
+.wrangler
+.env
+.env.local
+.env.*
+!.env.example
+coverage
+apps/api/dev.db
+apps/api/dev.db-shm
+apps/api/dev.db-wal
+apps/api/storage
+apps/web/dist
+*.tsbuildinfo

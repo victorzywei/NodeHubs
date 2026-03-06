@@ -1,0 +1,20 @@
+{
+  "name": "@newnodeshub/api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/node.ts",
+    "build": "tsup src/node.ts --format esm --out-dir dist/node --clean && tsup src/worker.ts --format esm --out-dir dist/worker",
+    "start": "node dist/node/node.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "db:init": "tsx src/scripts/init-sqlite.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1003.0",
+    "@hono/node-server": "^1.19.11",
+    "hono": "^4.12.5",
+    "zod": "^4.3.6"
+  }
+}

@@ -1,0 +1,121 @@
+import type {
+  NodeRecord,
+  ReleaseRecord,
+  SubscriptionRecord,
+  SystemStatus,
+  TemplatePreset,
+  TemplateRecord,
+  TrafficSample,
+} from '@contracts/index'
+
+const API_BASE = import.meta.env.VITE_API_BASE || ''
+
+interface Envelope<T> {
+  success: boolean
+  data: T
+  error?: {
+    code: string
+    message: string
+  }
+}
+
+async function request<T>(path: string, init: RequestInit = {}, adminKey = ''): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(adminKey ? { 'X-Admin-Key': adminKey } : {}),
+      ...(init.headers || {}),
+    },
+  })
+
+  const body = await response.json() as Envelope<T>
+  if (!response.ok || !body.success) {
+    throw new Error(body.error?.message || `Request failed: ${response.status}`)
+  }
+  return body.data
+}
+
+async function requestText(path: string, init: RequestInit = {}, adminKey = ''): Promise<string> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      ...(adminKey ? { 'X-Admin-Key': adminKey } : {}),
+      ...(init.headers || {}),
+    },
+  })
+
+  if (!response.ok) {
+    const body = await response.text()
+    let message = body || `Request failed: ${response.status}`
+    try {
+      const parsed = JSON.parse(body) as Envelope<never>
+      message = parsed.error?.message || message
+    } catch {
+      // Fall back to the raw response body.
+    }
+    throw new Error(message)
+  }
+
+  return response.text()
+}
+
+export function getSystemStatus(adminKey: string): Promise<SystemStatus> {
+  return request('/api/system/status', {}, adminKey)
+}
+
+export function listNodes(adminKey: string): Promise<NodeRecord[]> {
+  return request('/api/nodes', {}, adminKey)
+}
+
+export function createNode(adminKey: string, payload: Record<string, unknown>): Promise<NodeRecord> {
+  return request('/api/nodes', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, adminKey)
+}
+
+export function listTemplates(adminKey: string): Promise<TemplateRecord[]> {
+  return request('/api/templates', {}, adminKey)
+}
+
+export function createTemplate(adminKey: string, payload: Record<string, unknown>): Promise<TemplateRecord> {
+  return request('/api/templates', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, adminKey)
+}
+
+export function listTemplateCatalog(adminKey: string): Promise<TemplatePreset[]> {
+  return request('/api/templates/catalog', {}, adminKey)
+}
+
+export function listSubscriptions(adminKey: string): Promise<SubscriptionRecord[]> {
+  return request('/api/subscriptions', {}, adminKey)
+}
+
+export function createSubscription(adminKey: string, payload: Record<string, unknown>): Promise<SubscriptionRecord> {
+  return request('/api/subscriptions', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, adminKey)
+}
+
+export function listNodeReleases(adminKey: string, nodeId: string): Promise<ReleaseRecord[]> {
+  return request(`/api/nodes/${nodeId}/releases`, {}, adminKey)
+}
+
+export function publishNode(adminKey: string, nodeId: string, payload: Record<string, unknown>): Promise<ReleaseRecord> {
+  return request(`/api/nodes/${nodeId}/releases`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, adminKey)
+}
+
+export function listNodeTraffic(adminKey: string, nodeId: string): Promise<TrafficSample[]> {
+  return request(`/api/nodes/${nodeId}/traffic`, {}, adminKey)
+}
+
+export function getNodeInstallScript(adminKey: string, nodeId: string): Promise<string> {
+  return requestText(`/api/nodes/${nodeId}/install-script`, {}, adminKey)
+}

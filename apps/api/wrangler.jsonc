@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "newnodeshub",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-03-06",
+  "assets": {
+    "directory": "../web/dist"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "newnodeshub",
+      "database_id": "replace-me"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "newnodeshub-artifacts"
+    }
+  ],
+  "vars": {
+    "PUBLIC_BASE_URL": "https://example.com"
+  }
+}
