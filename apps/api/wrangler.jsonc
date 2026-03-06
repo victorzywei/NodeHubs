@@ -17,6 +17,6 @@
     }
   ],
   "vars": {
-    "PUBLIC_BASE_URL": "https://example.com"
+    "PUBLIC_BASE_URL": "https://nodehubsapi.victor-zhiyu-wei-50b.workers.dev"
   }
 }
