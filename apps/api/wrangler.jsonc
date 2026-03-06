@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "newnodeshub",
+  "name": "nodehubsapi",
   "main": "src/worker.ts",
   "compatibility_date": "2026-03-06",
   "d1_databases": [
@@ -13,7 +13,7 @@
   "r2_buckets": [
     {
       "binding": "ARTIFACTS",
-      "bucket_name": "newnodeshub-artifacts"
+      "bucket_name": "nodehubsapi-artifacts"
     }
   ],
   "vars": {
