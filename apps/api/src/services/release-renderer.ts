@@ -50,7 +50,7 @@ type NormalizedTemplate = {
 }
 
 const SUPPORTED_PROTOCOLS = new Set(['vless', 'trojan', 'shadowsocks', 'vmess', 'hysteria2'])
-const SUPPORTED_TRANSPORTS = new Set(['ws', 'grpc', 'tcp', 'h2', 'hysteria2'])
+const SUPPORTED_TRANSPORTS = new Set(['ws', 'grpc', 'tcp', 'h2', 'hysteria2', 'xhttp'])
 
 const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
@@ -334,6 +334,12 @@ function buildSingBoxInbound(template: NormalizedTemplate, index: number) {
       type: 'grpc',
       service_name: template.serviceName,
     }
+  } else if (template.transport === 'xhttp') {
+    inbound.transport = {
+      type: 'http',
+      path: template.path,
+      headers: template.host ? { Host: template.host } : undefined,
+    }
   }
 
   if (template.protocol === 'hysteria2') {
@@ -426,6 +432,12 @@ function buildXrayInbound(template: NormalizedTemplate, index: number) {
     streamSettings.grpcSettings = {
       serviceName: template.serviceName,
     }
+  } else if (template.transport === 'xhttp') {
+    streamSettings.xhttpSettings = {
+      path: template.path,
+      host: template.host,
+      mode: 'auto',
+    }
   }
 
   if (template.tlsMode === 'tls') {
@@ -466,7 +478,7 @@ function buildSubscriptionUri(node: NodeRecord, template: NormalizedTemplate): s
   if (template.protocol === 'vless') {
     params.set('encryption', 'none')
   }
-  if (template.transport === 'ws') {
+  if (template.transport === 'ws' || template.transport === 'xhttp') {
     params.set('path', template.path)
     if (template.host) params.set('host', template.host)
   }

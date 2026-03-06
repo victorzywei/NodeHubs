@@ -184,6 +184,7 @@ const transportOptions = computed(() => {
     { value:'tcp', label:'TCP' },
     { value:'ws', label:'WebSocket' },
     { value:'grpc', label:'gRPC' },
+    { value:'xhttp', label:'XHTTP' },
   ]
 })
 
@@ -207,27 +208,27 @@ const templateDefaultFields = computed(() => {
   const p = newTemplate.value.protocol
   const t = newTemplate.value.transport
   const tls = newTemplate.value.tlsMode
-  const fields: Array<{key:string, label:string, placeholder:string, type?:string}> = []
+  const fields: Array<{key:string, label:string, placeholder:string, type?:string, generator?:string, list?:string}> = []
 
   // Port
   fields.push({ key:'serverPort', label:'端口', placeholder:'443', type:'number' })
 
   // UUID for vless/vmess
   if (p === 'vless' || p === 'vmess') {
-    fields.push({ key:'uuid', label:'UUID', placeholder:'00000000-0000-4000-8000-000000000001' })
+    fields.push({ key:'uuid', label:'UUID', placeholder:'00000000-0000-4000-8000-000000000001', generator:'uuid' })
   }
   // Password for trojan/ss/hy2
   if (p === 'trojan' || p === 'shadowsocks' || p === 'hysteria2') {
-    fields.push({ key:'password', label:'密码', placeholder:'your-password' })
+    fields.push({ key:'password', label:'密码', placeholder:'your-password', generator:'random-password' })
   }
   // SS method
   if (p === 'shadowsocks') {
     fields.push({ key:'method', label:'加密方式', placeholder:'aes-128-gcm / 2022-blake3-aes-128-gcm' })
   }
-  // WS path
-  if (t === 'ws') {
-    fields.push({ key:'path', label:'路径', placeholder:'/ws' })
-    fields.push({ key:'host', label:'Host', placeholder:'可选' })
+  // WS/XHTTP path
+  if (t === 'ws' || t === 'xhttp') {
+    fields.push({ key:'path', label:'路径', placeholder: t === 'ws' ? '/ws' : '/' })
+    fields.push({ key:'host', label:'Host (可选)', placeholder: '例如 example.com' })
   }
   // gRPC service name
   if (t === 'grpc') {
@@ -235,7 +236,7 @@ const templateDefaultFields = computed(() => {
   }
   // TLS SNI
   if (tls === 'tls' || tls === 'reality' || p === 'hysteria2') {
-    fields.push({ key:'sni', label:'SNI', placeholder:'可选' })
+    fields.push({ key:'sni', label:'SNI', placeholder: tls === 'reality' ? '例如 www.microsoft.com' : '例如 node.example.com', list: tls === 'reality' ? 'reality-sni-list' : undefined })
   }
   // VLESS flow for Reality
   if (p === 'vless' && tls === 'reality') {
@@ -243,9 +244,9 @@ const templateDefaultFields = computed(() => {
   }
   // Reality keys
   if (tls === 'reality') {
+    fields.push({ key:'realityPrivateKey', label:'Reality 私钥', placeholder:'replace-me', generator:'x25519' })
     fields.push({ key:'realityPublicKey', label:'Reality 公钥', placeholder:'replace-me' })
-    fields.push({ key:'realityPrivateKey', label:'Reality 私钥', placeholder:'replace-me' })
-    fields.push({ key:'realityShortId', label:'Reality ShortId', placeholder:'0123456789abcdef' })
+    fields.push({ key:'realityShortId', label:'Reality ShortId', placeholder:'0123456789abcdef', generator:'shortId' })
   }
   // Hysteria2 bandwidth
   if (p === 'hysteria2') {
@@ -294,6 +295,51 @@ async function createTemplate() {
     newTemplate.value = { name:'', engine:'xray', protocol:'vless', transport:'ws', tlsMode:'none', defaults:{}, notes:'' }
     toast('success', '模板创建成功'); await loadAll(); await refreshStatus()
   } catch (e:any) { toast('error', e.message) }
+}
+
+// ---- Generators ----
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = (Math.random() * 16) | 0, v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  })
+}
+
+function generateRandomHex(bytes: number) {
+  const arr = new Uint8Array(bytes)
+  crypto.getRandomValues(arr)
+  return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+function generateRandomPassword() {
+  return generateRandomHex(12) // 24 chars hex
+}
+
+async function generateRealityKeys() {
+  try {
+    const keyPair = await window.crypto.subtle.generateKey({ name: "X25519" }, true, ["deriveBits"])
+    const pubKeyBuf = await window.crypto.subtle.exportKey("raw", keyPair.publicKey)
+    const privKeyBuf = await window.crypto.subtle.exportKey("pkcs8", keyPair.privateKey)
+    const privRaw = new Uint8Array(privKeyBuf).slice(-32) // extract raw 32 bytes from pkcs8
+    const toBase64Url = (buf: Uint8Array) => btoa(String.fromCharCode(...buf)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    newTemplate.value.defaults.realityPublicKey = toBase64Url(new Uint8Array(pubKeyBuf))
+    newTemplate.value.defaults.realityPrivateKey = toBase64Url(privRaw)
+    toast('success', '已生成新的 Reality 密钥对')
+  } catch (e) {
+    toast('error', '当前浏览器不支持 X25519 密钥生成，请手动输入')
+  }
+}
+
+function handleGenerate(type: string) {
+  if (type === 'uuid') {
+    newTemplate.value.defaults.uuid = generateUUID()
+  } else if (type === 'random-password') {
+    newTemplate.value.defaults.password = generateRandomPassword()
+  } else if (type === 'shortId') {
+    newTemplate.value.defaults.realityShortId = generateRandomHex(8)
+  } else if (type === 'x25519') {
+    generateRealityKeys()
+  }
 }
 
 // ---- Subscription Actions ----
@@ -786,12 +832,26 @@ onMounted(() => { if (adminKey.value) login() })
 
           <!-- Dynamic default fields -->
           <div class="form-section-divider">协议参数</div>
+          <datalist id="reality-sni-list">
+            <option value="www.microsoft.com"></option>
+            <option value="www.yahoo.com"></option>
+            <option value="www.apple.com"></option>
+            <option value="cloudflare.com"></option>
+            <option value="aws.amazon.com"></option>
+          </datalist>
+          
           <div v-for="field in templateDefaultFields" :key="field.key" class="form-group">
-            <label class="form-label">{{ field.label }}</label>
+            <label class="form-label" style="display:flex;justify-content:space-between;align-items:center">
+              <span>{{ field.label }}</span>
+              <button v-if="field.generator" type="button" class="btn btn-xs btn-secondary" @click="handleGenerate(field.generator)">
+                {{ field.generator === 'x25519' ? '生成密钥对' : '生成' }}
+              </button>
+            </label>
             <input
               class="form-input"
               :type="field.type || 'text'"
               :placeholder="field.placeholder"
+              :list="field.list"
               :value="(newTemplate.defaults as any)[field.key] ?? ''"
               @input="(e:any) => { (newTemplate.defaults as any)[field.key] = field.type === 'number' ? Number(e.target.value) : e.target.value }"
             />
