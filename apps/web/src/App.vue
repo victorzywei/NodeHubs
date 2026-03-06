@@ -546,13 +546,13 @@ onMounted(() => { if (adminKey.value) login() })
             </div>
           </div>
           <div class="table-wrapper">
-            <table class="data-table">
+            <table class="data-table node-table">
               <thead><tr>
                 <th>名称</th><th>类型</th><th>地区</th><th>域名</th><th>状态</th><th>连接数</th><th>流量</th><th>操作</th>
               </tr></thead>
               <tbody>
                 <tr v-for="n in nodes" :key="n.id" class="cursor-pointer" @click="selectNode(n)">
-                  <td style="font-weight:600;color:var(--color-text-primary)">{{ n.name }}</td>
+                  <td class="node-name" :class="isOnline(n) ? 'online' : 'offline'">{{ n.name }}</td>
                   <td><span class="tag" :class="{accent:n.nodeType==='edge'}">{{ n.nodeType }}</span></td>
                   <td>{{ n.region || '-' }}</td>
                   <td class="text-mono truncate">{{ n.primaryDomain || n.argoTunnelDomain || '-' }}</td>

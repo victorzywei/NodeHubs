@@ -570,6 +570,24 @@ a:hover {
     border-bottom: none;
 }
 
+.node-table th:nth-child(5),
+.node-table td:nth-child(5) {
+    display: none;
+}
+
+.node-name {
+    font-weight: 600;
+    transition: color var(--transition-fast);
+}
+
+.node-name.online {
+    color: var(--color-success);
+}
+
+.node-name.offline {
+    color: var(--color-danger);
+}
+
 /* ---- Status Badge ---- */
 .status-badge {
     display: inline-flex;
