@@ -307,7 +307,7 @@ function generateUUID() {
 
 function generateRandomHex(bytes: number) {
   const arr = new Uint8Array(bytes)
-  crypto.getRandomValues(arr)
+  window.crypto.getRandomValues(arr)
   return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
@@ -321,9 +321,9 @@ async function generateRealityKeys() {
     const pubKeyBuf = await window.crypto.subtle.exportKey("raw", keyPair.publicKey)
     const privKeyBuf = await window.crypto.subtle.exportKey("pkcs8", keyPair.privateKey)
     const privRaw = new Uint8Array(privKeyBuf).slice(-32) // extract raw 32 bytes from pkcs8
-    const toBase64Url = (buf: Uint8Array) => btoa(String.fromCharCode(...buf)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-    newTemplate.value.defaults.realityPublicKey = toBase64Url(new Uint8Array(pubKeyBuf))
-    newTemplate.value.defaults.realityPrivateKey = toBase64Url(privRaw)
+    const toBase64Url = (buf: Uint8Array) => btoa(String.fromCharCode(...Array.from(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    newTemplate.value.defaults['realityPublicKey'] = toBase64Url(new Uint8Array(pubKeyBuf))
+    newTemplate.value.defaults['realityPrivateKey'] = toBase64Url(privRaw)
     toast('success', '已生成新的 Reality 密钥对')
   } catch (e) {
     toast('error', '当前浏览器不支持 X25519 密钥生成，请手动输入')
@@ -332,11 +332,11 @@ async function generateRealityKeys() {
 
 function handleGenerate(type: string) {
   if (type === 'uuid') {
-    newTemplate.value.defaults.uuid = generateUUID()
+    newTemplate.value.defaults['uuid'] = generateUUID()
   } else if (type === 'random-password') {
-    newTemplate.value.defaults.password = generateRandomPassword()
+    newTemplate.value.defaults['password'] = generateRandomPassword()
   } else if (type === 'shortId') {
-    newTemplate.value.defaults.realityShortId = generateRandomHex(8)
+    newTemplate.value.defaults['realityShortId'] = generateRandomHex(8)
   } else if (type === 'x25519') {
     generateRealityKeys()
   }
