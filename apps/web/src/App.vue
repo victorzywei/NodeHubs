@@ -1,1010 +1,516 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import type {
-  NodeRecord,
-  ReleaseRecord,
-  SubscriptionRecord,
-  SystemStatus,
-  TemplatePreset,
-  TemplateRecord,
-  TrafficSample,
-} from '@contracts/index'
-import {
-  createNode,
-  createSubscription,
-  createTemplate,
-  getNodeInstallScript,
-  getSystemStatus,
-  listNodeReleases,
-  listNodeTraffic,
-  listNodes,
-  listSubscriptions,
-  listTemplateCatalog,
-  listTemplates,
-  publishNode,
-} from './lib/api'
+import { ref, onMounted, computed } from 'vue'
+import type { SystemStatus, NodeRecord, TemplateRecord, SubscriptionRecord, ReleaseRecord } from '@contracts/index'
+import * as api from './lib/api'
 
-const STORAGE_KEY = 'nodehubsapi_admin_key'
-
-const numberFormatter = new Intl.NumberFormat('en-US')
-const dateTimeFormatter = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  hour12: false,
-})
-const timeFormatter = new Intl.DateTimeFormat('en-US', {
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  hour12: false,
-})
-
-const adminKey = ref(localStorage.getItem(STORAGE_KEY) || 'dev-admin-key')
+// ---- State ----
+const adminKey = ref(localStorage.getItem('nh_admin_key') || '')
+const loggedIn = ref(false)
+const currentPage = ref<'dashboard'|'nodes'|'templates'|'subscriptions'>('dashboard')
 const loading = ref(false)
-const notice = ref('')
+const error = ref('')
 
-const status = ref<SystemStatus | null>(null)
+// Data
+const status = ref<SystemStatus|null>(null)
 const nodes = ref<NodeRecord[]>([])
 const templates = ref<TemplateRecord[]>([])
-const templateCatalog = ref<TemplatePreset[]>([])
 const subscriptions = ref<SubscriptionRecord[]>([])
-const selectedNodeId = ref('')
-const releases = ref<ReleaseRecord[]>([])
-const traffic = ref<TrafficSample[]>([])
+
+// Modals
+const showCreateNode = ref(false)
+const showCreateTemplate = ref(false)
+const showCreateSub = ref(false)
+const selectedNode = ref<NodeRecord|null>(null)
+const nodeReleases = ref<ReleaseRecord[]>([])
 const installScript = ref('')
-const publishTemplateIds = ref<string[]>([])
-const presetId = ref('')
 
-const nodeForm = reactive({
-  name: '',
-  nodeType: 'vps',
-  region: '',
-  primaryDomain: '',
-  backupDomain: '',
-  entryIp: '',
-  installWarp: false,
-  installArgo: false,
-})
-
-const templateForm = reactive({
-  name: '',
-  engine: 'sing-box',
-  protocol: 'vless',
-  transport: 'ws',
-  tlsMode: 'tls',
-  notes: '',
-  defaultsJson: `{
-  "serverPort": 443,
-  "path": "/ws",
-  "uuid": "00000000-0000-4000-8000-000000000001"
-}`,
-})
-
-const subscriptionForm = reactive({
-  name: '',
-  enabled: true,
-})
-
-const selectedNode = computed(() => nodes.value.find((item) => item.id === selectedNodeId.value) || null)
-const publishTemplates = computed(() => templates.value.filter((item) => publishTemplateIds.value.includes(item.id)))
-const activeSubscriptionCount = computed(() => subscriptions.value.filter((item) => item.enabled).length)
-const selectedTemplateSummary = computed(
-  () => publishTemplates.value.map((item) => item.name).join(', ') || 'No templates selected',
-)
-const subscriptionLinks = computed(() => {
-  const baseUrl = status.value?.publicBaseUrl || ''
-  return subscriptions.value.map((item) => ({
-    ...item,
-    url: baseUrl ? `${baseUrl.replace(/\/+$/, '')}/sub/${item.token}` : '',
-  }))
-})
-const overviewMetrics = computed(() => {
-  const summary = status.value?.summary
-  const totalInbound = summary?.totalBytesIn ?? nodes.value.reduce((total, node) => total + node.bytesInTotal, 0)
-  const totalOutbound = summary?.totalBytesOut ?? nodes.value.reduce((total, node) => total + node.bytesOutTotal, 0)
-
-  return [
-    {
-      label: 'Managed nodes',
-      value: formatNumber(summary?.nodeCount ?? nodes.value.length),
-      note: `${formatNumber(summary?.onlineCount ?? 0)} online now`,
-    },
-    {
-      label: 'Release artifacts',
-      value: formatNumber(summary?.releaseCount ?? 0),
-      note: `${formatNumber(templates.value.length)} templates available`,
-    },
-    {
-      label: 'Inbound traffic',
-      value: formatBytes(totalInbound),
-      note: `Outbound ${formatBytes(totalOutbound)}`,
-    },
-    {
-      label: 'Subscriptions',
-      value: formatNumber(subscriptions.value.length),
-      note: `${formatNumber(activeSubscriptionCount.value)} active feeds`,
-    },
-  ]
-})
-const stackFacts = computed(() => [
-  {
-    label: 'Storage mode',
-    value: status.value?.mode || 'unknown',
-    note: `Database ${status.value?.databaseDriver || 'n/a'}`,
-  },
-  {
-    label: 'Artifacts',
-    value: status.value?.artifactDriver || 'unknown',
-    note: status.value?.publicBaseUrl ? 'Public delivery origin is configured' : 'Public base URL is missing',
-  },
-  {
-    label: 'Snapshot time',
-    value: formatDateTime(status.value?.now),
-    note: status.value?.appVersion ? `App ${status.value.appVersion}` : 'Version unavailable',
-  },
-])
-const selectedNodeHealth = computed(() => describeNodeHealth(selectedNode.value))
-const selectedNodeFacts = computed(() => {
-  if (!selectedNode.value) return []
-
-  return [
-    {
-      label: 'Node type',
-      value: selectedNode.value.nodeType.toUpperCase(),
-      note: selectedNode.value.region || 'Region not set',
-    },
-    {
-      label: 'Primary endpoint',
-      value: selectedNode.value.primaryDomain || selectedNode.value.entryIp || 'Pending configuration',
-      note: selectedNode.value.backupDomain || 'No backup domain configured',
-    },
-    {
-      label: 'Last heartbeat',
-      value: formatDateTime(selectedNode.value.lastSeenAt),
-      note: selectedNodeHealth.value.detail,
-    },
-    {
-      label: 'Runtime version',
-      value: selectedNode.value.protocolRuntimeVersion || 'Unknown',
-      note: `Connections ${formatNumber(selectedNode.value.currentConnections)}`,
-    },
-  ]
-})
-const selectedNodeMetrics = computed(() => {
-  if (!selectedNode.value) return []
-
-  return [
-    {
-      label: 'Current release',
-      value: `r${selectedNode.value.currentReleaseRevision}`,
-      note: selectedNode.value.currentReleaseStatus,
-    },
-    {
-      label: 'Desired release',
-      value: `r${selectedNode.value.desiredReleaseRevision}`,
-      note:
-        selectedNode.value.desiredReleaseRevision > selectedNode.value.currentReleaseRevision
-          ? 'Rollout queued'
-          : 'Runtime in sync',
-    },
-    {
-      label: 'Inbound',
-      value: formatBytes(selectedNode.value.bytesInTotal),
-      note: `Connections ${formatNumber(selectedNode.value.currentConnections)}`,
-    },
-    {
-      label: 'Outbound',
-      value: formatBytes(selectedNode.value.bytesOutTotal),
-      note: selectedNode.value.protocolRuntimeVersion || 'Runtime version pending',
-    },
-    {
-      label: 'CPU load',
-      value: formatPercent(selectedNode.value.cpuUsagePercent),
-      note: `Memory ${formatPercent(selectedNode.value.memoryUsagePercent)}`,
-    },
-    {
-      label: 'Last change',
-      value: formatDateTime(selectedNode.value.updatedAt),
-      note: `Created ${formatDateTime(selectedNode.value.createdAt)}`,
-    },
-  ]
-})
-
-function formatNumber(value: number | null | undefined): string {
-  return numberFormatter.format(value ?? 0)
+// Toast
+const toasts = ref<{id:number,type:string,msg:string}[]>([])
+let toastId = 0
+function toast(type:string, msg:string) {
+  const id = ++toastId
+  toasts.value.push({id,type,msg})
+  setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id) }, 4000)
 }
 
-function formatBytes(value: number | null | undefined): string {
-  let amount = value ?? 0
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let unitIndex = 0
-
-  while (amount >= 1024 && unitIndex < units.length - 1) {
-    amount /= 1024
-    unitIndex += 1
-  }
-
-  const decimals = amount >= 100 || unitIndex === 0 ? 0 : 1
-  return `${amount.toFixed(decimals)} ${units[unitIndex]}`
-}
-
-function formatPercent(value: number | null | undefined): string {
-  if (value == null) return 'n/a'
-  return `${value.toFixed(1)}%`
-}
-
-function formatDateTime(value: string | null | undefined): string {
-  if (!value) return 'No data'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return 'Invalid time'
-  return dateTimeFormatter.format(date)
-}
-
-function formatClock(value: string | null | undefined): string {
-  if (!value) return '--:--:--'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '--:--:--'
-  return timeFormatter.format(date)
-}
-
-function isNodeOnline(node: NodeRecord): boolean {
-  if (!node.lastSeenAt) return false
-  const heartbeatAt = Date.parse(node.lastSeenAt)
-  if (Number.isNaN(heartbeatAt)) return false
-  return Date.now() - heartbeatAt < 5 * 60 * 1000
-}
-
-function describeNodeHealth(node: NodeRecord | null): {
-  label: string
-  tone: 'healthy' | 'warning' | 'critical' | 'neutral'
-  detail: string
-} {
-  if (!node) {
-    return {
-      label: 'No node selected',
-      tone: 'neutral',
-      detail: 'Pick a node from the fleet rail to inspect releases and runtime state.',
-    }
-  }
-
-  if (node.currentReleaseStatus === 'failed') {
-    return {
-      label: 'Release failed',
-      tone: 'critical',
-      detail: 'The latest rollout did not finish healthy and needs operator attention.',
-    }
-  }
-
-  if (node.currentReleaseStatus === 'pending' || node.currentReleaseStatus === 'applying') {
-    return {
-      label: 'Update in progress',
-      tone: 'warning',
-      detail: 'A publish action is currently moving through the node pipeline.',
-    }
-  }
-
-  if (node.desiredReleaseRevision > node.currentReleaseRevision) {
-    return {
-      label: 'Update pending',
-      tone: 'warning',
-      detail: 'Desired release revision is newer than the runtime that is currently applied.',
-    }
-  }
-
-  if (isNodeOnline(node) && node.currentReleaseStatus === 'healthy') {
-    return {
-      label: 'Healthy',
-      tone: 'healthy',
-      detail: 'Telemetry is fresh and the applied release matches the desired runtime.',
-    }
-  }
-
-  if (isNodeOnline(node)) {
-    return {
-      label: 'Heartbeat live',
-      tone: 'warning',
-      detail: 'The node is reachable, but runtime health has not settled into a healthy state yet.',
-    }
-  }
-
-  return {
-    label: 'Heartbeat stale',
-    tone: 'neutral',
-    detail: 'No fresh telemetry was received during the recent heartbeat window.',
-  }
-}
-
-function ensureTemplateSelection(): void {
-  const validIds = new Set(templates.value.map((item) => item.id))
-  publishTemplateIds.value = publishTemplateIds.value.filter((id) => validIds.has(id))
-  if (publishTemplateIds.value.length === 0) {
-    publishTemplateIds.value = templates.value.slice(0, 2).map((item) => item.id)
-  }
-}
-
-async function runAction(action: () => Promise<void>): Promise<void> {
-  notice.value = ''
+// ---- Auth ----
+async function login() {
+  loading.value = true; error.value = ''
   try {
-    await action()
-  } catch (error) {
-    notice.value = error instanceof Error ? error.message : 'Request failed'
-  }
+    const s = await api.getSystemStatus(adminKey.value)
+    status.value = s; loggedIn.value = true
+    localStorage.setItem('nh_admin_key', adminKey.value)
+    await loadAll()
+  } catch (e:any) { error.value = e.message || 'Authentication failed' }
+  loading.value = false
 }
 
-async function loadDashboard(): Promise<void> {
+function logout() {
+  loggedIn.value = false; adminKey.value = ''; localStorage.removeItem('nh_admin_key')
+  status.value = null; nodes.value = []; templates.value = []; subscriptions.value = []
+}
+
+// ---- Data Loading ----
+async function loadAll() {
   loading.value = true
-  notice.value = ''
-  localStorage.setItem(STORAGE_KEY, adminKey.value)
-
   try {
-    const [statusData, nodeRows, templateRows, subscriptionRows, catalogRows] = await Promise.all([
-      getSystemStatus(adminKey.value),
-      listNodes(adminKey.value),
-      listTemplates(adminKey.value),
-      listSubscriptions(adminKey.value),
-      listTemplateCatalog(adminKey.value),
+    const [n, t, s] = await Promise.all([
+      api.listNodes(adminKey.value),
+      api.listTemplates(adminKey.value),
+      api.listSubscriptions(adminKey.value),
     ])
-
-    status.value = statusData
-    nodes.value = nodeRows
-    templates.value = templateRows
-    subscriptions.value = subscriptionRows
-    templateCatalog.value = catalogRows
-    ensureTemplateSelection()
-
-    if (!selectedNodeId.value && nodeRows.length > 0) {
-      selectedNodeId.value = nodeRows[0].id
-    }
-
-    if (selectedNodeId.value) {
-      await inspectNode(selectedNodeId.value)
-    } else {
-      releases.value = []
-      traffic.value = []
-      installScript.value = ''
-    }
-  } catch (error) {
-    notice.value = error instanceof Error ? error.message : 'Failed to load dashboard'
-  } finally {
-    loading.value = false
-  }
+    nodes.value = n; templates.value = t; subscriptions.value = s
+  } catch (e:any) { toast('error', e.message) }
+  loading.value = false
 }
 
-async function inspectNode(nodeId: string): Promise<void> {
-  selectedNodeId.value = nodeId
-  installScript.value = ''
-  const [releaseRows, trafficRows] = await Promise.all([
-    listNodeReleases(adminKey.value, nodeId),
-    listNodeTraffic(adminKey.value, nodeId),
-  ])
-  releases.value = releaseRows
-  traffic.value = trafficRows
+async function refreshStatus() {
+  try { status.value = await api.getSystemStatus(adminKey.value) } catch {}
 }
 
-function applyPreset(): void {
-  const preset = templateCatalog.value.find((item) => item.id === presetId.value)
-  if (!preset) return
-  Object.assign(templateForm, {
-    name: preset.name,
-    engine: preset.engine,
-    protocol: preset.protocol,
-    transport: preset.transport,
-    tlsMode: preset.tlsMode,
-    notes: preset.notes,
-    defaultsJson: JSON.stringify(preset.defaults, null, 2),
-  })
+// ---- Node Actions ----
+const newNode = ref({ name:'', nodeType:'vps' as 'vps'|'edge', region:'', primaryDomain:'', entryIp:'', installWarp:false, installArgo:false })
+
+async function createNode() {
+  try {
+    await api.createNode(adminKey.value, newNode.value)
+    showCreateNode.value = false
+    newNode.value = { name:'', nodeType:'vps', region:'', primaryDomain:'', entryIp:'', installWarp:false, installArgo:false }
+    toast('success', 'Node created'); await loadAll(); await refreshStatus()
+  } catch (e:any) { toast('error', e.message) }
 }
 
-async function submitNode(): Promise<void> {
-  await runAction(async () => {
-    await createNode(adminKey.value, nodeForm)
-    Object.assign(nodeForm, {
-      name: '',
-      nodeType: 'vps',
-      region: '',
-      primaryDomain: '',
-      backupDomain: '',
-      entryIp: '',
-      installWarp: false,
-      installArgo: false,
-    })
-    await loadDashboard()
-  })
+async function selectNode(n: NodeRecord) {
+  selectedNode.value = n; installScript.value = ''
+  try { nodeReleases.value = await api.listNodeReleases(adminKey.value, n.id) } catch { nodeReleases.value = [] }
 }
 
-async function submitTemplate(): Promise<void> {
-  await runAction(async () => {
-    let defaults = {}
-    try {
-      defaults = JSON.parse(templateForm.defaultsJson)
-    } catch {
-      throw new Error('Template defaults must be valid JSON')
-    }
-
-    await createTemplate(adminKey.value, {
-      name: templateForm.name,
-      engine: templateForm.engine,
-      protocol: templateForm.protocol,
-      transport: templateForm.transport,
-      tlsMode: templateForm.tlsMode,
-      notes: templateForm.notes,
-      defaults,
-    })
-
-    Object.assign(templateForm, {
-      name: '',
-      engine: 'sing-box',
-      protocol: 'vless',
-      transport: 'ws',
-      tlsMode: 'tls',
-      notes: '',
-      defaultsJson: `{
-  "serverPort": 443,
-  "path": "/ws",
-  "uuid": "00000000-0000-4000-8000-000000000001"
-}`,
-    })
-    presetId.value = ''
-    await loadDashboard()
-  })
-}
-
-async function submitSubscription(): Promise<void> {
-  await runAction(async () => {
-    await createSubscription(adminKey.value, {
-      ...subscriptionForm,
-      visibleNodeIds: selectedNode.value ? [selectedNode.value.id] : [],
-    })
-    Object.assign(subscriptionForm, {
-      name: '',
-      enabled: true,
-    })
-    await loadDashboard()
-  })
-}
-
-function togglePublishTemplate(templateId: string, enabled: boolean): void {
-  if (enabled) {
-    publishTemplateIds.value = Array.from(new Set([...publishTemplateIds.value, templateId]))
-    return
-  }
-  publishTemplateIds.value = publishTemplateIds.value.filter((id) => id !== templateId)
-}
-
-function handlePublishCheckbox(event: Event, templateId: string): void {
-  const target = event.target
-  if (!(target instanceof HTMLInputElement)) return
-  togglePublishTemplate(templateId, target.checked)
-}
-
-async function publishSelected(kind: 'runtime' | 'bootstrap'): Promise<void> {
+async function loadInstallScript() {
   if (!selectedNode.value) return
-  const nodeId = selectedNode.value.id
-  await runAction(async () => {
-    await publishNode(adminKey.value, nodeId, {
-      kind,
-      templateIds: publishTemplateIds.value,
-      message: `dashboard publish ${kind}`,
-    })
-    await inspectNode(nodeId)
-    await loadDashboard()
-  })
+  try { installScript.value = await api.getNodeInstallScript(adminKey.value, selectedNode.value.id) }
+  catch (e:any) { toast('error', e.message) }
 }
 
-async function loadInstallScript(): Promise<void> {
-  if (!selectedNode.value) return
-  const nodeId = selectedNode.value.id
-  await runAction(async () => {
-    installScript.value = await getNodeInstallScript(adminKey.value, nodeId)
-  })
+async function publishRelease(nodeId: string) {
+  try {
+    await api.publishNode(adminKey.value, nodeId, { kind:'runtime', templateIds: templates.value.map(t=>t.id) })
+    toast('success', 'Release published'); await loadAll(); await refreshStatus()
+    if (selectedNode.value?.id === nodeId) await selectNode(selectedNode.value)
+  } catch (e:any) { toast('error', e.message) }
 }
 
-onMounted(() => {
-  void loadDashboard()
-})
+// ---- Template Actions ----
+const catalogPresets = ref<any[]>([])
+const newTemplate = ref({ name:'', engine:'xray' as 'sing-box'|'xray', protocol:'vless', transport:'ws', tlsMode:'none' as 'none'|'tls'|'reality', defaults:{}, notes:'' })
+
+async function openCreateTemplate() {
+  showCreateTemplate.value = true
+  try { catalogPresets.value = await api.listTemplateCatalog(adminKey.value) } catch {}
+}
+
+function applyPreset(p: any) {
+  newTemplate.value = { name: p.name, engine: p.engine, protocol: p.protocol, transport: p.transport, tlsMode: p.tlsMode, defaults: p.defaults || {}, notes: p.notes || '' }
+}
+
+async function createTemplate() {
+  try {
+    await api.createTemplate(adminKey.value, newTemplate.value)
+    showCreateTemplate.value = false
+    newTemplate.value = { name:'', engine:'xray', protocol:'vless', transport:'ws', tlsMode:'none', defaults:{}, notes:'' }
+    toast('success', 'Template created'); await loadAll(); await refreshStatus()
+  } catch (e:any) { toast('error', e.message) }
+}
+
+// ---- Subscription Actions ----
+const newSub = ref({ name:'', enabled:true, visibleNodeIds:[] as string[] })
+
+async function createSub() {
+  try {
+    await api.createSubscription(adminKey.value, newSub.value)
+    showCreateSub.value = false; newSub.value = { name:'', enabled:true, visibleNodeIds:[] }
+    toast('success', 'Subscription created'); await loadAll(); await refreshStatus()
+  } catch (e:any) { toast('error', e.message) }
+}
+
+// Helpers
+function formatBytes(b: number) {
+  if (b === 0) return '0 B'
+  const k = 1024, s = ['B','KB','MB','GB','TB']
+  const i = Math.floor(Math.log(b) / Math.log(k))
+  return parseFloat((b / Math.pow(k, i)).toFixed(1)) + ' ' + s[i]
+}
+
+function isOnline(n: NodeRecord) {
+  if (!n.lastSeenAt) return false
+  return Date.now() - new Date(n.lastSeenAt).getTime() < 120000
+}
+
+function timeAgo(d: string|null) {
+  if (!d) return 'Never'
+  const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000)
+  if (s < 60) return s + 's ago'
+  if (s < 3600) return Math.floor(s/60) + 'm ago'
+  if (s < 86400) return Math.floor(s/3600) + 'h ago'
+  return Math.floor(s/86400) + 'd ago'
+}
+
+const onlineCount = computed(() => nodes.value.filter(isOnline).length)
+
+onMounted(() => { if (adminKey.value) login() })
 </script>
 
 <template>
-  <div class="app-shell">
-    <header class="panel topbar">
-      <div class="brand-block">
-        <p class="eyebrow">newnodeshub</p>
-        <h1>Deployment control center</h1>
-        <p class="lead">
-          Operate edge and single-VPS nodes from one workspace. Releases, bootstrap scripts, protocol templates,
-          and public subscriptions stay visible in the same control surface.
-        </p>
+  <!-- Toast -->
+  <div class="toast-container">
+    <div v-for="t in toasts" :key="t.id" class="toast" :class="t.type">
+      <span class="toast-message">{{ t.msg }}</span>
+      <button class="toast-close" @click="toasts = toasts.filter(x=>x.id!==t.id)">✕</button>
+    </div>
+  </div>
 
-        <div class="topbar-facts">
-          <div class="fact-chip">
-            <strong>Mode</strong>
-            <span>{{ status?.mode || 'unknown' }}</span>
+  <!-- Login -->
+  <div v-if="!loggedIn" class="login-page">
+    <div class="login-card">
+      <div class="login-logo-row">
+        <div class="login-logo">N</div>
+        <div class="login-brand-name">NodeHub</div>
+      </div>
+      <p class="login-description">Node Management Control Plane</p>
+      <form @submit.prevent="login">
+        <div class="form-group">
+          <label class="form-label">Admin Key</label>
+          <input class="form-input" type="password" v-model="adminKey" placeholder="Enter your admin key" autofocus />
+        </div>
+        <p v-if="error" style="color:var(--color-danger);font-size:12px;margin-bottom:12px">{{ error }}</p>
+        <button class="btn btn-primary w-full" type="submit" :disabled="loading">
+          {{ loading ? 'Connecting...' : 'Sign In' }}
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Dashboard Layout -->
+  <div v-else class="app-layout">
+    <!-- Sidebar -->
+    <aside class="app-sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">N</div>
+        <div>
+          <div class="sidebar-title">NodeHub</div>
+          <div class="sidebar-version">v{{ status?.appVersion || '0.1.0' }}</div>
+        </div>
+      </div>
+      <nav class="sidebar-nav">
+        <div class="nav-section-label">Overview</div>
+        <div class="nav-item" :class="{active: currentPage==='dashboard'}" @click="currentPage='dashboard'">
+          <span class="nav-icon">📊</span><span>Dashboard</span>
+        </div>
+        <div class="nav-section-label">Management</div>
+        <div class="nav-item" :class="{active: currentPage==='nodes'}" @click="currentPage='nodes'">
+          <span class="nav-icon">🖥️</span><span>Nodes</span>
+          <span class="nav-badge">{{ nodes.length }}</span>
+        </div>
+        <div class="nav-item" :class="{active: currentPage==='templates'}" @click="currentPage='templates'">
+          <span class="nav-icon">📋</span><span>Templates</span>
+          <span class="nav-badge">{{ templates.length }}</span>
+        </div>
+        <div class="nav-item" :class="{active: currentPage==='subscriptions'}" @click="currentPage='subscriptions'">
+          <span class="nav-icon">🔗</span><span>Subscriptions</span>
+          <span class="nav-badge">{{ subscriptions.length }}</span>
+        </div>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="sidebar-mode-badge" :class="status?.mode||'docker'">
+          {{ status?.mode === 'cloudflare' ? '☁️ Cloudflare' : '🐳 Docker' }}
+        </div>
+        <button class="btn btn-ghost btn-sm mt-md" @click="logout" style="width:100%;justify-content:flex-start;gap:8px">
+          🚪 <span>Sign Out</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="app-main">
+      <div class="app-content">
+
+        <!-- Dashboard Page -->
+        <div v-if="currentPage==='dashboard'" class="animate-fade-in">
+          <div class="page-header">
+            <div class="page-header-row">
+              <div><h1 class="page-title">Dashboard</h1><p class="page-subtitle">System overview and statistics</p></div>
+              <button class="btn btn-secondary" @click="loadAll();refreshStatus()">↻ Refresh</button>
+            </div>
           </div>
-          <div class="fact-chip">
-            <strong>Database</strong>
-            <span>{{ status?.databaseDriver || 'n/a' }}</span>
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-card-icon accent">🖥️</div>
+              <div class="stat-value">{{ status?.summary.nodeCount ?? 0 }}</div>
+              <div class="stat-label">Total Nodes</div>
+              <div class="stat-glow accent"></div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-card-icon success">🟢</div>
+              <div class="stat-value">{{ onlineCount }}</div>
+              <div class="stat-label">Online Nodes</div>
+              <div class="stat-glow success"></div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-card-icon info">📋</div>
+              <div class="stat-value">{{ status?.summary.templateCount ?? 0 }}</div>
+              <div class="stat-label">Templates</div>
+              <div class="stat-glow info"></div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-card-icon warning">📦</div>
+              <div class="stat-value">{{ status?.summary.releaseCount ?? 0 }}</div>
+              <div class="stat-label">Releases</div>
+              <div class="stat-glow warning"></div>
+            </div>
           </div>
-          <div class="fact-chip">
-            <strong>Artifacts</strong>
-            <span>{{ status?.artifactDriver || 'n/a' }}</span>
+          <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+            <div class="card">
+              <div class="card-header"><span class="card-title">Traffic In</span></div>
+              <div class="stat-value" style="font-size:22px">{{ formatBytes(status?.summary.totalBytesIn ?? 0) }}</div>
+              <div class="stat-label">Total inbound traffic</div>
+            </div>
+            <div class="card">
+              <div class="card-header"><span class="card-title">Traffic Out</span></div>
+              <div class="stat-value" style="font-size:22px">{{ formatBytes(status?.summary.totalBytesOut ?? 0) }}</div>
+              <div class="stat-label">Total outbound traffic</div>
+            </div>
+            <div class="card">
+              <div class="card-header"><span class="card-title">Database</span></div>
+              <div class="stat-value" style="font-size:22px">{{ status?.databaseDriver ?? '-' }}</div>
+              <div class="stat-label">{{ status?.artifactDriver ?? '-' }} artifact storage</div>
+            </div>
+          </div>
+          <!-- Recent Nodes -->
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">Recent Nodes</span>
+              <button class="btn btn-sm btn-secondary" @click="currentPage='nodes'">View All →</button>
+            </div>
+            <div class="table-wrapper" style="border:none;background:transparent">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Name</th><th>Type</th><th>Region</th><th>Status</th><th>Last Seen</th>
+                </tr></thead>
+                <tbody>
+                  <tr v-for="n in nodes.slice(0,5)" :key="n.id">
+                    <td style="font-weight:600;color:var(--color-text-primary)">{{ n.name }}</td>
+                    <td><span class="tag" :class="{accent:n.nodeType==='edge'}">{{ n.nodeType }}</span></td>
+                    <td>{{ n.region || '-' }}</td>
+                    <td><span class="status-badge" :class="isOnline(n)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(n)?'Online':'Offline' }}</span></td>
+                    <td class="text-muted">{{ timeAgo(n.lastSeenAt) }}</td>
+                  </tr>
+                  <tr v-if="nodes.length===0"><td colspan="5" class="text-center text-muted" style="padding:32px">No nodes yet</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Nodes Page -->
+        <div v-if="currentPage==='nodes'" class="animate-fade-in">
+          <div class="page-header">
+            <div class="page-header-row">
+              <div><h1 class="page-title">Nodes</h1><p class="page-subtitle">Manage your proxy nodes</p></div>
+              <button class="btn btn-primary" @click="showCreateNode=true">+ Add Node</button>
+            </div>
+          </div>
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead><tr>
+                <th>Name</th><th>Type</th><th>Region</th><th>Domain</th><th>Status</th><th>Connections</th><th>Traffic</th><th>Actions</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="n in nodes" :key="n.id" class="cursor-pointer" @click="selectNode(n)">
+                  <td style="font-weight:600;color:var(--color-text-primary)">{{ n.name }}</td>
+                  <td><span class="tag" :class="{accent:n.nodeType==='edge'}">{{ n.nodeType }}</span></td>
+                  <td>{{ n.region || '-' }}</td>
+                  <td class="text-mono truncate">{{ n.primaryDomain || '-' }}</td>
+                  <td><span class="status-badge" :class="isOnline(n)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(n)?'Online':'Offline' }}</span></td>
+                  <td>{{ n.currentConnections }}</td>
+                  <td class="text-muted" style="font-size:12px">↑{{ formatBytes(n.bytesOutTotal) }} ↓{{ formatBytes(n.bytesInTotal) }}</td>
+                  <td>
+                    <button class="btn btn-sm btn-secondary" @click.stop="publishRelease(n.id)">Publish</button>
+                  </td>
+                </tr>
+                <tr v-if="nodes.length===0"><td colspan="8"><div class="empty-state"><div class="empty-state-icon">🖥️</div><div class="empty-state-title">No nodes yet</div><div class="empty-state-text">Add your first proxy node to get started</div><button class="btn btn-primary" @click="showCreateNode=true">+ Add Node</button></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Templates Page -->
+        <div v-if="currentPage==='templates'" class="animate-fade-in">
+          <div class="page-header">
+            <div class="page-header-row">
+              <div><h1 class="page-title">Templates</h1><p class="page-subtitle">Protocol configuration templates</p></div>
+              <button class="btn btn-primary" @click="openCreateTemplate">+ Add Template</button>
+            </div>
+          </div>
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead><tr><th>Name</th><th>Engine</th><th>Protocol</th><th>Transport</th><th>TLS</th><th>Updated</th></tr></thead>
+              <tbody>
+                <tr v-for="t in templates" :key="t.id">
+                  <td style="font-weight:600;color:var(--color-text-primary)">{{ t.name }}</td>
+                  <td><span class="tag" :class="{accent:t.engine==='sing-box'}">{{ t.engine }}</span></td>
+                  <td>{{ t.protocol }}</td>
+                  <td>{{ t.transport }}</td>
+                  <td><span class="status-badge" :class="t.tlsMode==='reality'?'applying':t.tlsMode==='tls'?'healthy':'offline'">{{ t.tlsMode }}</span></td>
+                  <td class="text-muted">{{ timeAgo(t.updatedAt) }}</td>
+                </tr>
+                <tr v-if="templates.length===0"><td colspan="6"><div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-title">No templates</div><div class="empty-state-text">Create a protocol template to configure your nodes</div><button class="btn btn-primary" @click="openCreateTemplate">+ Add Template</button></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Subscriptions Page -->
+        <div v-if="currentPage==='subscriptions'" class="animate-fade-in">
+          <div class="page-header">
+            <div class="page-header-row">
+              <div><h1 class="page-title">Subscriptions</h1><p class="page-subtitle">Manage subscription endpoints</p></div>
+              <button class="btn btn-primary" @click="showCreateSub=true">+ Add Subscription</button>
+            </div>
+          </div>
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead><tr><th>Name</th><th>Token</th><th>Status</th><th>Visible Nodes</th><th>Created</th></tr></thead>
+              <tbody>
+                <tr v-for="s in subscriptions" :key="s.id">
+                  <td style="font-weight:600;color:var(--color-text-primary)">{{ s.name }}</td>
+                  <td class="text-mono truncate">{{ s.token }}</td>
+                  <td><span class="status-badge" :class="s.enabled?'online':'offline'"><span class="status-dot"></span>{{ s.enabled?'Active':'Disabled' }}</span></td>
+                  <td>{{ s.visibleNodeIds.length || 'All' }}</td>
+                  <td class="text-muted">{{ timeAgo(s.createdAt) }}</td>
+                </tr>
+                <tr v-if="subscriptions.length===0"><td colspan="5"><div class="empty-state"><div class="empty-state-icon">🔗</div><div class="empty-state-title">No subscriptions</div><div class="empty-state-text">Create a subscription for client access</div><button class="btn btn-primary" @click="showCreateSub=true">+ Add Subscription</button></div></td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
-
-      <div class="topbar-side">
-        <div class="access-panel">
-          <div>
-            <p class="section-label">Access control</p>
-            <h2>Admin session</h2>
-            <p class="panel-copy">
-              Refresh the full snapshot after every structural change to keep node telemetry and release state in
-              sync.
-            </p>
-          </div>
-
-          <label class="field">
-            <span>Admin key</span>
-            <input v-model="adminKey" type="password" placeholder="Enter admin key" />
-          </label>
-
-          <button class="primary-button primary-button--block" :disabled="loading" @click="loadDashboard()">
-            {{ loading ? 'Refreshing snapshot...' : 'Refresh dashboard snapshot' }}
-          </button>
-        </div>
-
-        <div class="topbar-note">
-          <p class="section-label">Delivery origin</p>
-          <strong>{{ status?.publicBaseUrl || 'Public base URL not configured' }}</strong>
-          <span>Subscriptions are built from this public endpoint.</span>
-        </div>
-      </div>
-    </header>
-
-    <p v-if="notice" class="notice-banner">{{ notice }}</p>
-
-    <main class="dashboard">
-      <section class="overview-grid">
-        <article class="panel hero-card">
-          <div class="panel-header">
-            <div>
-              <p class="section-label">Operations overview</p>
-              <h2>Fleet status at a glance</h2>
-              <p class="panel-copy">
-                This view prioritizes node coverage, release volume, traffic footprint, and subscription exposure so
-                operators can decide where to act first.
-              </p>
-            </div>
-            <span class="status-pill" :class="`status-pill--${status?.summary.onlineCount ? 'healthy' : 'neutral'}`">
-              {{ status?.summary.onlineCount ? 'Nodes online' : 'Awaiting heartbeat' }}
-            </span>
-          </div>
-
-          <div class="metric-tile-grid">
-            <article v-for="metric in overviewMetrics" :key="metric.label" class="metric-tile">
-              <span>{{ metric.label }}</span>
-              <strong>{{ metric.value }}</strong>
-              <small>{{ metric.note }}</small>
-            </article>
-          </div>
-
-          <div class="hero-footer">
-            <div class="hero-footer-item">
-              <span>Selected node</span>
-              <strong>{{ selectedNode?.name || 'No node selected' }}</strong>
-            </div>
-            <div class="hero-footer-item">
-              <span>Template publish set</span>
-              <strong>{{ selectedTemplateSummary }}</strong>
-            </div>
-            <div class="hero-footer-item">
-              <span>Snapshot captured</span>
-              <strong>{{ formatDateTime(status?.now) }}</strong>
-            </div>
-          </div>
-        </article>
-
-        <article class="panel system-panel">
-          <div class="panel-header">
-            <div>
-              <p class="section-label">Platform details</p>
-              <h2>Delivery stack</h2>
-            </div>
-          </div>
-
-          <ul class="facts-list">
-            <li v-for="fact in stackFacts" :key="fact.label">
-              <span>{{ fact.label }}</span>
-              <strong>{{ fact.value }}</strong>
-              <small>{{ fact.note }}</small>
-            </li>
-          </ul>
-        </article>
-
-        <article class="panel focus-panel">
-          <div class="panel-header">
-            <div>
-              <p class="section-label">Active focus</p>
-              <h2>{{ selectedNode?.name || 'Pick a node' }}</h2>
-              <p class="panel-copy">{{ selectedNodeHealth.detail }}</p>
-            </div>
-            <span class="status-pill" :class="`status-pill--${selectedNodeHealth.tone}`">
-              {{ selectedNodeHealth.label }}
-            </span>
-          </div>
-
-          <ul v-if="selectedNodeFacts.length" class="facts-list">
-            <li v-for="fact in selectedNodeFacts" :key="fact.label">
-              <span>{{ fact.label }}</span>
-              <strong>{{ fact.value }}</strong>
-              <small>{{ fact.note }}</small>
-            </li>
-          </ul>
-
-          <div v-else class="empty-state empty-state--inline">
-            <strong>Node workspace is empty</strong>
-            <span>Create a node or select an existing one to unlock publish and telemetry tools.</span>
-          </div>
-        </article>
-      </section>
-
-      <section class="workspace-grid">
-        <div class="composer-column">
-          <article class="panel form-panel">
-            <div class="panel-header">
-              <div>
-                <p class="section-label">Provisioning</p>
-                <h2>Create node</h2>
-                <p class="panel-copy">Register a new edge or VPS endpoint before releases can be published.</p>
-              </div>
-              <span class="status-pill status-pill--neutral">Fleet</span>
-            </div>
-
-            <div class="form-grid">
-              <input v-model="nodeForm.name" placeholder="Node name" />
-              <select v-model="nodeForm.nodeType">
-                <option value="vps">VPS</option>
-                <option value="edge">Edge</option>
-              </select>
-              <input v-model="nodeForm.region" placeholder="Region" />
-              <input v-model="nodeForm.primaryDomain" placeholder="Primary domain" />
-              <input v-model="nodeForm.backupDomain" placeholder="Backup domain" />
-              <input v-model="nodeForm.entryIp" placeholder="Entry IP" />
-            </div>
-
-            <div class="toggle-grid">
-              <label class="toggle-card">
-                <input v-model="nodeForm.installWarp" type="checkbox" />
-                <span>Install WARP hooks</span>
-              </label>
-              <label class="toggle-card">
-                <input v-model="nodeForm.installArgo" type="checkbox" />
-                <span>Install Argo hooks</span>
-              </label>
-            </div>
-
-            <button class="secondary-button secondary-button--block" @click="submitNode()">Save node</button>
-          </article>
-
-          <article class="panel form-panel">
-            <div class="panel-header">
-              <div>
-                <p class="section-label">Protocol library</p>
-                <h2>Create template</h2>
-                <p class="panel-copy">
-                  Start from a preset when possible, then refine transport, TLS mode, and runtime defaults.
-                </p>
-              </div>
-              <span class="status-pill status-pill--neutral">Catalog</span>
-            </div>
-
-            <div class="form-grid">
-              <select v-model="presetId" @change="applyPreset()">
-                <option value="">Preset catalog</option>
-                <option v-for="preset in templateCatalog" :key="preset.id" :value="preset.id">
-                  {{ preset.name }}
-                </option>
-              </select>
-              <input v-model="templateForm.name" placeholder="Template name" />
-              <select v-model="templateForm.engine">
-                <option value="sing-box">sing-box</option>
-                <option value="xray">xray</option>
-              </select>
-              <input v-model="templateForm.protocol" placeholder="Protocol" />
-              <input v-model="templateForm.transport" placeholder="Transport" />
-              <select v-model="templateForm.tlsMode">
-                <option value="none">none</option>
-                <option value="tls">tls</option>
-                <option value="reality">reality</option>
-              </select>
-              <input v-model="templateForm.notes" placeholder="Notes" />
-            </div>
-
-            <label class="field field--block">
-              <span>Template defaults JSON</span>
-              <textarea v-model="templateForm.defaultsJson" rows="8" class="code-area" />
-            </label>
-
-            <button class="secondary-button secondary-button--block" @click="submitTemplate()">Save template</button>
-          </article>
-
-          <article class="panel form-panel">
-            <div class="panel-header">
-              <div>
-                <p class="section-label">Distribution</p>
-                <h2>Create subscription</h2>
-                <p class="panel-copy">
-                  The subscription is generated against the currently selected node and only serves healthy state.
-                </p>
-              </div>
-              <span class="status-pill status-pill--neutral">Public feed</span>
-            </div>
-
-            <div class="form-grid form-grid--single">
-              <input v-model="subscriptionForm.name" placeholder="Subscription name" />
-            </div>
-
-            <label class="toggle-card">
-              <input v-model="subscriptionForm.enabled" type="checkbox" />
-              <span>Enabled</span>
-            </label>
-
-            <button class="secondary-button secondary-button--block" @click="submitSubscription()">
-              Save subscription
-            </button>
-          </article>
-        </div>
-
-        <article class="panel node-workbench">
-          <div class="panel-header">
-            <div>
-              <p class="section-label">Node workbench</p>
-              <h2>Release and telemetry workspace</h2>
-              <p class="panel-copy">
-                Select a fleet member to compare applied revisions, push new releases, and inspect telemetry samples.
-              </p>
-            </div>
-
-            <div class="action-row">
-              <button class="secondary-button" :disabled="!selectedNode" @click="publishSelected('runtime')">
-                Publish runtime
-              </button>
-              <button class="secondary-button" :disabled="!selectedNode" @click="publishSelected('bootstrap')">
-                Publish bootstrap
-              </button>
-              <button class="secondary-button" :disabled="!selectedNode" @click="loadInstallScript()">
-                Load install script
-              </button>
-            </div>
-          </div>
-
-          <div class="workbench-grid">
-            <aside class="node-rail">
-              <div>
-                <p class="section-label">Fleet rail</p>
-                <h3>{{ nodes.length ? 'Available nodes' : 'No nodes yet' }}</h3>
-              </div>
-
-              <div v-if="nodes.length" class="node-list">
-                <button
-                  v-for="node in nodes"
-                  :key="node.id"
-                  class="node-card"
-                  :class="{ 'is-active': node.id === selectedNodeId }"
-                  @click="inspectNode(node.id)"
-                >
-                  <div class="node-card__head">
-                    <div>
-                      <strong>{{ node.name }}</strong>
-                      <p>{{ node.primaryDomain || node.entryIp || 'Endpoint pending' }}</p>
-                    </div>
-                    <span class="status-pill" :class="`status-pill--${describeNodeHealth(node).tone}`">
-                      {{ describeNodeHealth(node).label }}
-                    </span>
-                  </div>
-
-                  <div class="node-card__meta">
-                    <span class="meta-chip">{{ node.nodeType }}</span>
-                    <span class="meta-chip">{{ node.region || 'unassigned' }}</span>
-                    <span class="meta-chip">cfg r{{ node.configRevision }}</span>
-                    <span class="meta-chip">boot r{{ node.bootstrapRevision }}</span>
-                  </div>
-                </button>
-              </div>
-
-              <div v-else class="empty-state empty-state--inline">
-                <strong>No nodes registered</strong>
-                <span>Create the first node from the provisioning column to activate this workspace.</span>
-              </div>
-            </aside>
-
-            <div v-if="selectedNode" class="node-stage">
-              <div class="node-stage-header">
-                <div>
-                  <div class="title-row">
-                    <h3>{{ selectedNode.name }}</h3>
-                    <span class="status-pill" :class="`status-pill--${selectedNodeHealth.tone}`">
-                      {{ selectedNodeHealth.label }}
-                    </span>
-                  </div>
-                  <p class="panel-copy">
-                    {{ selectedNode.primaryDomain || selectedNode.entryIp || 'Endpoint pending configuration' }}
-                  </p>
-                </div>
-                <div class="node-stage-note">
-                  <span>Last heartbeat</span>
-                  <strong>{{ formatDateTime(selectedNode.lastSeenAt) }}</strong>
-                </div>
-              </div>
-
-              <div class="node-metric-grid">
-                <article v-for="metric in selectedNodeMetrics" :key="metric.label" class="mini-metric">
-                  <span>{{ metric.label }}</span>
-                  <strong>{{ metric.value }}</strong>
-                  <small>{{ metric.note }}</small>
-                </article>
-              </div>
-
-              <section class="selection-panel">
-                <div class="panel-header panel-header--compact">
-                  <div>
-                    <p class="section-label">Release scope</p>
-                    <h3>Publish templates</h3>
-                  </div>
-                </div>
-
-                <div class="tag-grid">
-                  <label v-for="template in templates" :key="template.id" class="tag-check">
-                    <input
-                      :checked="publishTemplateIds.includes(template.id)"
-                      type="checkbox"
-                      @change="handlePublishCheckbox($event, template.id)"
-                    />
-                    <span>{{ template.name }}</span>
-                  </label>
-                </div>
-
-                <span class="helper-copy">Selected templates: {{ selectedTemplateSummary }}</span>
-              </section>
-
-              <div class="timeline-grid">
-                <section class="list-panel">
-                  <div class="panel-header panel-header--compact">
-                    <div>
-                      <p class="section-label">Recent releases</p>
-                      <h3>Artifact history</h3>
-                    </div>
-                  </div>
-
-                  <ul v-if="releases.length" class="stack-list">
-                    <li v-for="release in releases" :key="release.id">
-                      <div class="list-row-head">
-                        <strong>r{{ release.revision }}</strong>
-                        <span
-                          class="status-pill"
-                          :class="`status-pill--${release.status === 'healthy' ? 'healthy' : release.status === 'failed' ? 'critical' : 'warning'}`"
-                        >
-                          {{ release.kind }} / {{ release.status }}
-                        </span>
-                      </div>
-                      <p>{{ release.summary }}</p>
-                      <small>{{ formatDateTime(release.createdAt) }}</small>
-                    </li>
-                  </ul>
-
-                  <div v-else class="empty-state empty-state--inline">
-                    <strong>No releases yet</strong>
-                    <span>Publish runtime or bootstrap artifacts to start the release timeline.</span>
-                  </div>
-                </section>
-
-                <section class="list-panel">
-                  <div class="panel-header panel-header--compact">
-                    <div>
-                      <p class="section-label">Telemetry</p>
-                      <h3>Recent samples</h3>
-                    </div>
-                  </div>
-
-                  <ul v-if="traffic.length" class="stack-list">
-                    <li v-for="sample in traffic" :key="sample.at">
-                      <div class="list-row-head">
-                        <strong>{{ formatClock(sample.at) }}</strong>
-                        <span class="meta-chip">conn {{ formatNumber(sample.currentConnections) }}</span>
-                      </div>
-                      <p>Inbound {{ formatBytes(sample.bytesInTotal) }} / Outbound {{ formatBytes(sample.bytesOutTotal) }}</p>
-                      <small>CPU {{ formatPercent(sample.cpuUsagePercent) }} / Memory {{ formatPercent(sample.memoryUsagePercent) }}</small>
-                    </li>
-                  </ul>
-
-                  <div v-else class="empty-state empty-state--inline">
-                    <strong>No telemetry samples</strong>
-                    <span>Heartbeat and traffic data will appear here after the node reports in.</span>
-                  </div>
-                </section>
-              </div>
-
-              <label v-if="installScript" class="field field--block">
-                <span>Install script preview</span>
-                <textarea :value="installScript" rows="16" readonly class="code-area" />
-              </label>
-            </div>
-
-            <div v-else class="empty-state empty-state--large">
-              <strong>Select a node to continue</strong>
-              <span>The workbench shows release history, live telemetry, and install artifacts for the active node.</span>
-            </div>
-          </div>
-        </article>
-      </section>
-
-      <section class="resource-grid">
-        <article class="panel resource-panel">
-          <div class="panel-header">
-            <div>
-              <p class="section-label">Template library</p>
-              <h2>Available protocol presets</h2>
-            </div>
-            <span class="status-pill status-pill--neutral">{{ templates.length }} templates</span>
-          </div>
-
-          <ul v-if="templates.length" class="resource-list">
-            <li v-for="template in templates" :key="template.id" class="resource-item">
-              <div class="resource-item__head">
-                <div>
-                  <strong>{{ template.name }}</strong>
-                  <p>{{ template.notes || 'No operator notes attached.' }}</p>
-                </div>
-                <span class="status-pill status-pill--neutral">{{ template.engine }}</span>
-              </div>
-              <div class="resource-meta">
-                <span>{{ template.protocol }}/{{ template.transport }}/{{ template.tlsMode }}</span>
-                <span>Updated {{ formatDateTime(template.updatedAt) }}</span>
-              </div>
-            </li>
-          </ul>
-
-          <div v-else class="empty-state empty-state--inline">
-            <strong>No templates created</strong>
-            <span>Save the first protocol template to enable publish actions for selected nodes.</span>
-          </div>
-        </article>
-
-        <article class="panel resource-panel">
-          <div class="panel-header">
-            <div>
-              <p class="section-label">Subscriptions</p>
-              <h2>Public feed endpoints</h2>
-            </div>
-            <span class="status-pill status-pill--neutral">{{ subscriptions.length }} feeds</span>
-          </div>
-
-          <ul v-if="subscriptionLinks.length" class="resource-list">
-            <li v-for="subscription in subscriptionLinks" :key="subscription.id" class="resource-item">
-              <div class="resource-item__head">
-                <div>
-                  <strong>{{ subscription.name }}</strong>
-                  <p>{{ subscription.enabled ? 'Enabled for delivery' : 'Disabled from public delivery' }}</p>
-                </div>
-                <span class="status-pill" :class="`status-pill--${subscription.enabled ? 'healthy' : 'neutral'}`">
-                  {{ subscription.enabled ? 'enabled' : 'disabled' }}
-                </span>
-              </div>
-              <div class="resource-meta">
-                <span>{{ subscription.visibleNodeIds.length }} visible nodes</span>
-                <span>Updated {{ formatDateTime(subscription.updatedAt) }}</span>
-              </div>
-              <p class="resource-url">{{ subscription.url || 'Public base URL not configured' }}</p>
-            </li>
-          </ul>
-
-          <div v-else class="empty-state empty-state--inline">
-            <strong>No subscriptions created</strong>
-            <span>Create a subscription to generate a public endpoint from healthy node state.</span>
-          </div>
-        </article>
-      </section>
     </main>
+
+    <!-- Node Detail Panel -->
+    <template v-if="selectedNode">
+      <div class="detail-overlay" @click="selectedNode=null"></div>
+      <aside class="detail-panel">
+        <div class="detail-panel-header">
+          <h2 style="font-size:16px;font-weight:700">{{ selectedNode.name }}</h2>
+          <button class="modal-close-btn" @click="selectedNode=null">✕</button>
+        </div>
+        <div class="detail-panel-body">
+          <div class="detail-section">
+            <div class="detail-section-title">General</div>
+            <div class="detail-row"><span class="detail-label">ID</span><span class="detail-value text-mono">{{ selectedNode.id }}</span></div>
+            <div class="detail-row"><span class="detail-label">Type</span><span class="detail-value"><span class="tag" :class="{accent:selectedNode.nodeType==='edge'}">{{ selectedNode.nodeType }}</span></span></div>
+            <div class="detail-row"><span class="detail-label">Region</span><span class="detail-value">{{ selectedNode.region || '-' }}</span></div>
+            <div class="detail-row"><span class="detail-label">Domain</span><span class="detail-value text-mono">{{ selectedNode.primaryDomain || '-' }}</span></div>
+            <div class="detail-row"><span class="detail-label">Entry IP</span><span class="detail-value text-mono">{{ selectedNode.entryIp || '-' }}</span></div>
+            <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value"><span class="status-badge" :class="isOnline(selectedNode)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(selectedNode)?'Online':'Offline' }}</span></span></div>
+            <div class="detail-row"><span class="detail-label">Last Seen</span><span class="detail-value">{{ timeAgo(selectedNode.lastSeenAt) }}</span></div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-section-title">Resources</div>
+            <div class="detail-row"><span class="detail-label">CPU</span><span class="detail-value">{{ selectedNode.cpuUsagePercent !== null ? selectedNode.cpuUsagePercent + '%' : '-' }}</span></div>
+            <div v-if="selectedNode.cpuUsagePercent!==null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="selectedNode.cpuUsagePercent>80?'danger':selectedNode.cpuUsagePercent>50?'warning':'success'" :style="{width:selectedNode.cpuUsagePercent+'%'}"></div></div>
+            <div class="detail-row"><span class="detail-label">Memory</span><span class="detail-value">{{ selectedNode.memoryUsagePercent !== null ? selectedNode.memoryUsagePercent + '%' : '-' }}</span></div>
+            <div v-if="selectedNode.memoryUsagePercent!==null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="selectedNode.memoryUsagePercent>80?'danger':selectedNode.memoryUsagePercent>50?'warning':'success'" :style="{width:selectedNode.memoryUsagePercent+'%'}"></div></div>
+            <div class="detail-row"><span class="detail-label">Connections</span><span class="detail-value">{{ selectedNode.currentConnections }}</span></div>
+            <div class="detail-row"><span class="detail-label">Traffic In</span><span class="detail-value">{{ formatBytes(selectedNode.bytesInTotal) }}</span></div>
+            <div class="detail-row"><span class="detail-label">Traffic Out</span><span class="detail-value">{{ formatBytes(selectedNode.bytesOutTotal) }}</span></div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-section-title">Releases ({{ nodeReleases.length }})</div>
+            <div v-for="r in nodeReleases.slice(0,5)" :key="r.id" class="card mb-md" style="padding:12px">
+              <div class="flex items-center justify-between gap-sm">
+                <span style="font-weight:600;font-size:13px">Rev #{{ r.revision }}</span>
+                <span class="status-badge" :class="r.status">{{ r.status }}</span>
+              </div>
+              <div class="text-muted" style="font-size:11px;margin-top:4px">{{ r.kind }} · {{ timeAgo(r.createdAt) }}</div>
+              <div v-if="r.summary" style="font-size:12px;margin-top:4px;color:var(--color-text-secondary)">{{ r.summary }}</div>
+            </div>
+            <div v-if="nodeReleases.length===0" class="text-muted text-center" style="padding:16px;font-size:12px">No releases yet</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-section-title">Install Script</div>
+            <button v-if="!installScript" class="btn btn-secondary btn-sm w-full" @click="loadInstallScript">Load Install Script</button>
+            <div v-else class="code-block" style="max-height:200px;overflow-y:auto">{{ installScript }}</div>
+          </div>
+        </div>
+      </aside>
+    </template>
+
+    <!-- Create Node Modal -->
+    <div v-if="showCreateNode" class="modal-overlay" @click.self="showCreateNode=false">
+      <div class="modal-content">
+        <div class="modal-header"><h3 class="modal-title">New Node</h3><button class="modal-close-btn" @click="showCreateNode=false">✕</button></div>
+        <div class="modal-body">
+          <div class="form-group"><label class="form-label">Name *</label><input class="form-input" v-model="newNode.name" placeholder="e.g. US-West-01" /></div>
+          <div class="form-row">
+            <div class="form-group"><label class="form-label">Type</label><select class="form-select" v-model="newNode.nodeType"><option value="vps">VPS</option><option value="edge">Edge</option></select></div>
+            <div class="form-group"><label class="form-label">Region</label><input class="form-input" v-model="newNode.region" placeholder="e.g. us-west" /></div>
+          </div>
+          <div class="form-group"><label class="form-label">Primary Domain</label><input class="form-input" v-model="newNode.primaryDomain" placeholder="node.example.com" /></div>
+          <div class="form-group"><label class="form-label">Entry IP</label><input class="form-input" v-model="newNode.entryIp" placeholder="1.2.3.4" /></div>
+          <div class="form-row">
+            <div class="form-checkbox-group"><input type="checkbox" class="form-checkbox" v-model="newNode.installWarp" id="warp"><label for="warp" class="form-label" style="margin:0">Install WARP</label></div>
+            <div class="form-checkbox-group"><input type="checkbox" class="form-checkbox" v-model="newNode.installArgo" id="argo"><label for="argo" class="form-label" style="margin:0">Install Argo</label></div>
+          </div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateNode=false">Cancel</button><button class="btn btn-primary" @click="createNode">Create</button></div>
+      </div>
+    </div>
+
+    <!-- Create Template Modal -->
+    <div v-if="showCreateTemplate" class="modal-overlay" @click.self="showCreateTemplate=false">
+      <div class="modal-content">
+        <div class="modal-header"><h3 class="modal-title">New Template</h3><button class="modal-close-btn" @click="showCreateTemplate=false">✕</button></div>
+        <div class="modal-body">
+          <div v-if="catalogPresets.length" class="mb-lg">
+            <label class="form-label">Quick Start from Preset</label>
+            <div class="flex gap-sm" style="flex-wrap:wrap">
+              <button v-for="p in catalogPresets" :key="p.id" class="btn btn-sm btn-secondary" @click="applyPreset(p)">{{ p.name }}</button>
+            </div>
+          </div>
+          <div class="form-group"><label class="form-label">Name *</label><input class="form-input" v-model="newTemplate.name" placeholder="e.g. VLESS-WS-TLS" /></div>
+          <div class="form-row">
+            <div class="form-group"><label class="form-label">Engine</label><select class="form-select" v-model="newTemplate.engine"><option value="xray">Xray</option><option value="sing-box">Sing-Box</option></select></div>
+            <div class="form-group"><label class="form-label">Protocol</label><input class="form-input" v-model="newTemplate.protocol" placeholder="vless" /></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label class="form-label">Transport</label><input class="form-input" v-model="newTemplate.transport" placeholder="ws" /></div>
+            <div class="form-group"><label class="form-label">TLS Mode</label><select class="form-select" v-model="newTemplate.tlsMode"><option value="none">None</option><option value="tls">TLS</option><option value="reality">Reality</option></select></div>
+          </div>
+          <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" v-model="newTemplate.notes" placeholder="Optional notes..."></textarea></div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateTemplate=false">Cancel</button><button class="btn btn-primary" @click="createTemplate">Create</button></div>
+      </div>
+    </div>
+
+    <!-- Create Subscription Modal -->
+    <div v-if="showCreateSub" class="modal-overlay" @click.self="showCreateSub=false">
+      <div class="modal-content">
+        <div class="modal-header"><h3 class="modal-title">New Subscription</h3><button class="modal-close-btn" @click="showCreateSub=false">✕</button></div>
+        <div class="modal-body">
+          <div class="form-group"><label class="form-label">Name *</label><input class="form-input" v-model="newSub.name" placeholder="e.g. Main Subscription" /></div>
+          <div class="form-checkbox-group mb-md"><input type="checkbox" class="form-checkbox" v-model="newSub.enabled" id="sub-en"><label for="sub-en" class="form-label" style="margin:0">Enabled</label></div>
+          <div class="form-group" v-if="nodes.length">
+            <label class="form-label">Visible Nodes (leave empty for all)</label>
+            <div style="max-height:150px;overflow-y:auto;border:1px solid var(--glass-border);border-radius:var(--radius-md);padding:8px">
+              <label v-for="n in nodes" :key="n.id" class="form-checkbox-group mb-md" style="cursor:pointer">
+                <input type="checkbox" class="form-checkbox" :value="n.id" v-model="newSub.visibleNodeIds" />
+                <span style="font-size:13px">{{ n.name }}</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateSub=false">Cancel</button><button class="btn btn-primary" @click="createSub">Create</button></div>
+      </div>
+    </div>
   </div>
 </template>
