@@ -317,9 +317,9 @@ function generateRandomPassword() {
 
 async function generateRealityKeys() {
   try {
-    const keyPair = await window.crypto.subtle.generateKey({ name: "X25519" }, true, ["deriveBits"])
-    const pubKeyBuf = await window.crypto.subtle.exportKey("raw", keyPair.publicKey)
-    const privKeyBuf = await window.crypto.subtle.exportKey("pkcs8", keyPair.privateKey)
+    const keyPair = await window.crypto.subtle.generateKey({ name: "X25519" } as any, true, ["deriveBits"])
+    const pubKeyBuf = await window.crypto.subtle.exportKey("raw", (keyPair as any).publicKey)
+    const privKeyBuf = await window.crypto.subtle.exportKey("pkcs8", (keyPair as any).privateKey)
     const privRaw = new Uint8Array(privKeyBuf).slice(-32) // extract raw 32 bytes from pkcs8
     const toBase64Url = (buf: Uint8Array) => btoa(String.fromCharCode(...Array.from(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
     newTemplate.value.defaults['realityPublicKey'] = toBase64Url(new Uint8Array(pubKeyBuf))
