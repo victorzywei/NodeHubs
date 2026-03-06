@@ -8,7 +8,7 @@ function buildRuntimeFileBlocks(artifact: ReleaseArtifact): string {
   return artifact.runtime.files
     .map((file, index) => {
       const label = `NODESHUB_FILE_${index + 1}`
-      const targetPath = `/etc/newnodeshub/${file.path}`
+      const targetPath = `/etc/nodehubsapi/${file.path}`
       return [
         `mkdir -p "$(dirname ${shellQuote(targetPath)})"`,
         `cat >${shellQuote(targetPath)} <<'${label}'`,
@@ -44,7 +44,7 @@ export function buildAgentReconcileEnv(input: {
 export function buildReleaseApplyScript(artifact: ReleaseArtifact): string {
   const runtime = artifact.runtime
   const binary = runtime.binary
-  const configPath = `/etc/newnodeshub/${runtime.entryConfigPath}`
+  const configPath = `/etc/nodehubsapi/${runtime.entryConfigPath}`
   const runtimeFileBlocks = buildRuntimeFileBlocks(artifact)
 
   return `#!/usr/bin/env bash
@@ -64,8 +64,8 @@ RUNTIME_ARCHIVE_FORMAT=${shellQuote(binary.archiveFormat)}
 RUNTIME_CONFIG_PATH=${shellQuote(configPath)}
 RUNTIME_SERVICE_NAME=${shellQuote(artifact.bootstrap.runtimeServiceName)}
 RUNTIME_SERVICE_FILE=${shellQuote(`/etc/systemd/system/${artifact.bootstrap.runtimeServiceName}.service`)}
-ETC_DIR=${shellQuote('/etc/newnodeshub')}
-STATE_DIR=${shellQuote('/opt/newnodeshub')}
+ETC_DIR=${shellQuote('/etc/nodehubsapi')}
+STATE_DIR=${shellQuote('/opt/nodehubsapi')}
 
 json_escape() {
   local value="$1"
@@ -278,7 +278,7 @@ write_runtime_service() {
   exec_args="$(render_template "$RUNTIME_RUN_ARGS_TEMPLATE" "")"
   cat >"$RUNTIME_SERVICE_FILE" <<EOF
 [Unit]
-Description=NewNodesHub runtime ($RUNTIME_ENGINE)
+Description=nodehubsapi runtime ($RUNTIME_ENGINE)
 After=network-online.target
 Wants=network-online.target
 
@@ -372,10 +372,10 @@ set -euo pipefail
 API_BASE=${shellQuote(apiBase)}
 NODE_ID=${shellQuote(input.nodeId)}
 AGENT_TOKEN=${shellQuote(input.agentToken)}
-STATE_DIR=${shellQuote('/opt/newnodeshub')}
-ETC_DIR=${shellQuote('/etc/newnodeshub')}
-AGENT_BIN=${shellQuote('/usr/local/bin/newnodeshub-agent')}
-SERVICE_FILE=${shellQuote('/etc/systemd/system/newnodeshub-agent.service')}
+STATE_DIR=${shellQuote('/opt/nodehubsapi')}
+ETC_DIR=${shellQuote('/etc/nodehubsapi')}
+AGENT_BIN=${shellQuote('/usr/local/bin/nodehubsapi-agent')}
+SERVICE_FILE=${shellQuote('/etc/systemd/system/nodehubsapi-agent.service')}
 POLL_INTERVAL=15
 
 json_escape() {
@@ -427,7 +427,7 @@ write_agent_binary() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-. /etc/newnodeshub/agent.env
+. /etc/nodehubsapi/agent.env
 
 json_escape() {
   local value="$1"
@@ -626,7 +626,7 @@ EOF
 write_service() {
   cat >"$SERVICE_FILE" <<EOF
 [Unit]
-Description=NewNodesHub agent
+Description=nodehubsapi agent
 After=network-online.target
 Wants=network-online.target
 
@@ -642,12 +642,12 @@ WantedBy=multi-user.target
 EOF
 
   systemctl daemon-reload
-  systemctl enable --now newnodeshub-agent.service
+  systemctl enable --now nodehubsapi-agent.service
 }
 
 print_summary() {
   cat <<EOF
-NewNodesHub agent installed.
+nodehubsapi agent installed.
 
 - API base: $API_BASE
 - Node ID: $NODE_ID

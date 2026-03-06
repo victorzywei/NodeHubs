@@ -194,8 +194,8 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
     realityPrivateKey: readString(defaults, 'realityPrivateKey'),
     realityPublicKey: readString(defaults, 'realityPublicKey'),
     realityShortId: readString(defaults, 'realityShortId'),
-    certPath: readString(defaults, 'certPath', '/etc/newnodeshub/certs/server.crt'),
-    keyPath: readString(defaults, 'keyPath', '/etc/newnodeshub/certs/server.key'),
+    certPath: readString(defaults, 'certPath', '/etc/nodehubsapi/certs/server.crt'),
+    keyPath: readString(defaults, 'keyPath', '/etc/nodehubsapi/certs/server.key'),
     defaults,
   }
 
@@ -446,8 +446,8 @@ function buildRuntimeConfig(engine: TemplateRecord['engine'], templates: Normali
 
 function buildBootstrapNotes(node: NodeRecord, kind: ReleaseKind): string[] {
   const notes = [
-    'The agent always applies files under /etc/newnodeshub/runtime.',
-    'Create a local systemd unit named newnodeshub-runtime.service if you want automatic process restarts.',
+    'The agent always applies files under /etc/nodehubsapi/runtime.',
+    'Create a local systemd unit named nodehubsapi-runtime.service if you want automatic process restarts.',
   ]
   if (node.installWarp) {
     notes.push('This node requests WARP-enabled bootstrap steps.')
@@ -482,7 +482,7 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
   const binaryPlan = cloneBinaryPlan(runtimeCatalog[engine])
 
   return {
-    schema: 'newnodeshub-release-v2',
+    schema: 'nodehubsapi-release-v2',
     releaseId: context.releaseId,
     nodeId: context.node.id,
     revision: context.revision,
@@ -544,8 +544,8 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
       ],
     },
     bootstrap: {
-      serviceName: 'newnodeshub-agent',
-      runtimeServiceName: 'newnodeshub-runtime',
+      serviceName: 'nodehubsapi-agent',
+      runtimeServiceName: 'nodehubsapi-runtime',
       installWarp: context.node.installWarp,
       installArgo: context.node.installArgo,
       mode: context.kind === 'bootstrap' ? 'bootstrap-required' : 'runtime-only',
@@ -558,7 +558,7 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
 export function parseReleaseArtifact(payload: string): ReleaseArtifact | null {
   try {
     const parsed = JSON.parse(payload) as Partial<ReleaseArtifact> | null
-    if (!parsed || parsed.schema !== 'newnodeshub-release-v2') return null
+    if (!parsed || parsed.schema !== 'nodehubsapi-release-v2') return null
     if (!Array.isArray(parsed.subscriptionEndpoints) || !parsed.runtime || !Array.isArray(parsed.runtime.files)) {
       return null
     }

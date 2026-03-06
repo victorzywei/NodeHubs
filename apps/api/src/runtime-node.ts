@@ -49,7 +49,7 @@ export function getNodeServices(): AppServices {
   sqlite.exec('PRAGMA journal_mode = WAL;')
   applyMigrations(sqlite)
   const artifacts = new MinioArtifactStore(
-    process.env.MINIO_BUCKET || 'newnodeshub',
+    process.env.MINIO_BUCKET || 'nodehubsapi',
     {
       endpoint: process.env.MINIO_ENDPOINT || 'http://127.0.0.1:9000',
       region: process.env.MINIO_REGION || 'auto',

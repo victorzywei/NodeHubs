@@ -24,7 +24,7 @@ import {
   publishNode,
 } from './lib/api'
 
-const STORAGE_KEY = 'newnodeshub_admin_key'
+const STORAGE_KEY = 'nodehubsapi_admin_key'
 
 const adminKey = ref(localStorage.getItem(STORAGE_KEY) || 'dev-admin-key')
 const loading = ref(false)
@@ -275,7 +275,7 @@ onMounted(() => {
 <template>
   <div class="page-shell">
     <aside class="hero-panel">
-      <p class="eyebrow">NewNodesHub</p>
+      <p class="eyebrow">nodehubsapi</p>
       <h1>Dual deploy control plane</h1>
       <p class="hero-copy">
         Fresh control plane for Cloudflare and single-VPS Docker. Runtime updates and bootstrap updates are

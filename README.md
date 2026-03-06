@@ -1,4 +1,4 @@
-# NewNodesHub
+# nodehubsapi
 
 New control plane for dual deployment targets:
 
@@ -128,7 +128,7 @@ Use `apps/api/.dev.vars.example` as the local Worker env template.
 - Release artifacts store rendered runtime files, pinned runtime binary metadata, and subscription URIs
 - The generated agent install script does not use `apt`, `yum`, `dnf`, or `apk`
 - The generated agent uses `curl`, `wget`, or `busybox wget` and falls back to `unzip`, `bsdtar`, `python3`, or `busybox unzip` for zip archives
-- Hooks can be dropped into `/etc/newnodeshub/hooks/pre-apply.d`, `/etc/newnodeshub/hooks/post-apply.d`, and `/etc/newnodeshub/hooks/bootstrap.d`
+- Hooks can be dropped into `/etc/nodehubsapi/hooks/pre-apply.d`, `/etc/nodehubsapi/hooks/post-apply.d`, and `/etc/nodehubsapi/hooks/bootstrap.d`
 
 ## Validation
 

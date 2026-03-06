@@ -104,6 +104,6 @@ describe('agent install scripts', () => {
     expect(script).toContain('RUNTIME_DOWNLOAD_BASE_URL=')
     expect(script).toContain('resolve_runtime_arch')
     expect(script).toContain('systemctl restart "$RUNTIME_SERVICE_NAME.service"')
-    expect(script).toContain('/etc/newnodeshub/runtime/sing-box.json')
+    expect(script).toContain('/etc/nodehubsapi/runtime/sing-box.json')
   })
 })

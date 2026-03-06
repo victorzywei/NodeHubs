@@ -74,7 +74,7 @@ describe('release renderer', () => {
     expect(artifact.runtime.files[0]?.path).toBe('runtime/sing-box.json')
     expect(artifact.subscriptionEndpoints[0]?.uri).toContain('vless://11111111-1111-4111-8111-111111111111@edge.example.com:443')
     expect(parseReleaseArtifact(JSON.stringify(artifact)))?.toMatchObject({
-      schema: 'newnodeshub-release-v2',
+      schema: 'nodehubsapi-release-v2',
       releaseId: 'rel_1',
     })
   })

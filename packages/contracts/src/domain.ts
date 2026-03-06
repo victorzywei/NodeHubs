@@ -156,7 +156,7 @@ export interface RuntimeBinaryPlan {
 }
 
 export interface ReleaseArtifact {
-  schema: 'newnodeshub-release-v2'
+  schema: 'nodehubsapi-release-v2'
   releaseId: string
   nodeId: string
   revision: number

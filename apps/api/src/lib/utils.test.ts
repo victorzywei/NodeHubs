@@ -12,7 +12,7 @@ describe('utils', () => {
   })
 
   it('hashes strings deterministically', async () => {
-    await expect(sha256Hex('newnodeshub')).resolves.toHaveLength(64)
-    await expect(sha256Hex('newnodeshub')).resolves.toBe(await sha256Hex('newnodeshub'))
+    await expect(sha256Hex('nodehubsapi')).resolves.toHaveLength(64)
+    await expect(sha256Hex('nodehubsapi')).resolves.toBe(await sha256Hex('nodehubsapi'))
   })
 })
