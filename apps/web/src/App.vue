@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import type { SystemStatus, NodeRecord, TemplateRecord, SubscriptionRecord, ReleaseRecord } from '@contracts/index'
 import * as api from './lib/api'
 
@@ -22,7 +22,8 @@ const showCreateTemplate = ref(false)
 const showCreateSub = ref(false)
 const selectedNode = ref<NodeRecord|null>(null)
 const nodeReleases = ref<ReleaseRecord[]>([])
-const installScript = ref('')
+const deployCommand = ref('')
+const uninstallCommand = ref('')
 
 // Toast
 const toasts = ref<{id:number,type:string,msg:string}[]>([])
@@ -69,26 +70,83 @@ async function refreshStatus() {
 }
 
 // ---- Node Actions ----
-const newNode = ref({ name:'', nodeType:'vps' as 'vps'|'edge', region:'', primaryDomain:'', entryIp:'', installWarp:false, installArgo:false })
+const newNode = ref({
+  name:'', nodeType:'vps' as 'vps'|'edge', region:'',
+  networkType:'public' as 'public'|'noPublicIp',
+  primaryDomain:'', backupDomain:'', entryIp:'',
+  useGithubMirror:false, githubMirrorUrl:'',
+  installWarp:false, warpLicenseKey:'',
+  useCfDnsToken:false, cfDnsToken:'',
+  installArgo:false,
+  useArgoTunnelToken:false, argoTunnelToken:'',
+  useArgoTunnelDomain:false, argoTunnelDomain:'',
+  useArgoTunnelPort:false, argoTunnelPort:2053,
+})
+
+function resetNewNode() {
+  newNode.value = {
+    name:'', nodeType:'vps', region:'',
+    networkType:'public',
+    primaryDomain:'', backupDomain:'', entryIp:'',
+    useGithubMirror:false, githubMirrorUrl:'',
+    installWarp:false, warpLicenseKey:'',
+    useCfDnsToken:false, cfDnsToken:'',
+    installArgo:false,
+    useArgoTunnelToken:false, argoTunnelToken:'',
+    useArgoTunnelDomain:false, argoTunnelDomain:'',
+    useArgoTunnelPort:false, argoTunnelPort:2053,
+  }
+}
 
 async function createNode() {
+  const n = newNode.value
   try {
-    await api.createNode(adminKey.value, newNode.value)
+    await api.createNode(adminKey.value, {
+      name: n.name,
+      nodeType: n.nodeType,
+      region: n.region,
+      networkType: n.networkType,
+      primaryDomain: n.primaryDomain,
+      backupDomain: n.backupDomain,
+      entryIp: n.entryIp,
+      githubMirrorUrl: n.useGithubMirror ? n.githubMirrorUrl : '',
+      installWarp: n.installWarp,
+      warpLicenseKey: n.installWarp ? n.warpLicenseKey : '',
+      cfDnsToken: n.useCfDnsToken ? n.cfDnsToken : '',
+      installArgo: n.installArgo || n.networkType === 'noPublicIp',
+      argoTunnelToken: n.useArgoTunnelToken ? n.argoTunnelToken : '',
+      argoTunnelDomain: n.useArgoTunnelDomain ? n.argoTunnelDomain : '',
+      argoTunnelPort: n.useArgoTunnelPort ? n.argoTunnelPort : 2053,
+    })
     showCreateNode.value = false
-    newNode.value = { name:'', nodeType:'vps', region:'', primaryDomain:'', entryIp:'', installWarp:false, installArgo:false }
+    resetNewNode()
     toast('success', '节点创建成功'); await loadAll(); await refreshStatus()
   } catch (e:any) { toast('error', e.message) }
 }
 
 async function selectNode(n: NodeRecord) {
-  selectedNode.value = n; installScript.value = ''
+  selectedNode.value = n; deployCommand.value = ''; uninstallCommand.value = ''
   try { nodeReleases.value = await api.listNodeReleases(adminKey.value, n.id) } catch { nodeReleases.value = [] }
 }
 
-async function loadInstallScript() {
+async function loadDeployCommand() {
   if (!selectedNode.value) return
-  try { installScript.value = await api.getNodeInstallScript(adminKey.value, selectedNode.value.id) }
-  catch (e:any) { toast('error', e.message) }
+  try {
+    const result = await api.getNodeDeployCommand(adminKey.value, selectedNode.value.id)
+    deployCommand.value = result.command
+  } catch (e:any) { toast('error', e.message) }
+}
+
+async function loadUninstallCommand() {
+  if (!selectedNode.value) return
+  try {
+    const result = await api.getNodeUninstallCommand(adminKey.value, selectedNode.value.id)
+    uninstallCommand.value = result.command
+  } catch (e:any) { toast('error', e.message) }
+}
+
+function copyToClipboard(text: string) {
+  navigator.clipboard.writeText(text).then(() => toast('success', '已复制到剪贴板')).catch(() => toast('error', '复制失败'))
 }
 
 async function publishRelease(nodeId: string) {
@@ -101,7 +159,120 @@ async function publishRelease(nodeId: string) {
 
 // ---- Template Actions ----
 const catalogPresets = ref<any[]>([])
-const newTemplate = ref({ name:'', engine:'xray' as 'sing-box'|'xray', protocol:'vless', transport:'ws', tlsMode:'none' as 'none'|'tls'|'reality', defaults:{}, notes:'' })
+const newTemplate = ref({
+  name:'', engine:'xray' as 'sing-box'|'xray',
+  protocol:'vless', transport:'ws', tlsMode:'none' as 'none'|'tls'|'reality',
+  defaults:{} as Record<string,unknown>, notes:''
+})
+
+// Protocol options based on engine
+const protocolOptions = computed(() => {
+  return [
+    { value:'vless', label:'VLESS' },
+    { value:'vmess', label:'VMESS' },
+    { value:'trojan', label:'Trojan' },
+    { value:'shadowsocks', label:'Shadowsocks' },
+    { value:'hysteria2', label:'Hysteria2' },
+  ]
+})
+
+// Transport options based on protocol
+const transportOptions = computed(() => {
+  const p = newTemplate.value.protocol
+  if (p === 'hysteria2') return [{ value:'hysteria2', label:'Hysteria2 (QUIC)' }]
+  return [
+    { value:'tcp', label:'TCP' },
+    { value:'ws', label:'WebSocket' },
+    { value:'grpc', label:'gRPC' },
+  ]
+})
+
+// TLS options based on protocol/transport
+const tlsOptions = computed(() => {
+  const p = newTemplate.value.protocol
+  if (p === 'hysteria2') return [{ value:'tls', label:'TLS' }]
+  if (p === 'shadowsocks') return [{ value:'none', label:'无' }]
+  const opts = [
+    { value:'none', label:'无' },
+    { value:'tls', label:'TLS' },
+  ]
+  if (p === 'vless' && newTemplate.value.transport === 'tcp') {
+    opts.push({ value:'reality', label:'Reality' })
+  }
+  return opts
+})
+
+// Dynamic fields for template defaults
+const templateDefaultFields = computed(() => {
+  const p = newTemplate.value.protocol
+  const t = newTemplate.value.transport
+  const tls = newTemplate.value.tlsMode
+  const fields: Array<{key:string, label:string, placeholder:string, type?:string}> = []
+
+  // Port
+  fields.push({ key:'serverPort', label:'端口', placeholder:'443', type:'number' })
+
+  // UUID for vless/vmess
+  if (p === 'vless' || p === 'vmess') {
+    fields.push({ key:'uuid', label:'UUID', placeholder:'00000000-0000-4000-8000-000000000001' })
+  }
+  // Password for trojan/ss/hy2
+  if (p === 'trojan' || p === 'shadowsocks' || p === 'hysteria2') {
+    fields.push({ key:'password', label:'密码', placeholder:'your-password' })
+  }
+  // SS method
+  if (p === 'shadowsocks') {
+    fields.push({ key:'method', label:'加密方式', placeholder:'aes-128-gcm / 2022-blake3-aes-128-gcm' })
+  }
+  // WS path
+  if (t === 'ws') {
+    fields.push({ key:'path', label:'路径', placeholder:'/ws' })
+    fields.push({ key:'host', label:'Host', placeholder:'可选' })
+  }
+  // gRPC service name
+  if (t === 'grpc') {
+    fields.push({ key:'serviceName', label:'服务名', placeholder:'grpc' })
+  }
+  // TLS SNI
+  if (tls === 'tls' || tls === 'reality' || p === 'hysteria2') {
+    fields.push({ key:'sni', label:'SNI', placeholder:'可选' })
+  }
+  // VLESS flow for Reality
+  if (p === 'vless' && tls === 'reality') {
+    fields.push({ key:'flow', label:'Flow', placeholder:'xtls-rprx-vision' })
+  }
+  // Reality keys
+  if (tls === 'reality') {
+    fields.push({ key:'realityPublicKey', label:'Reality 公钥', placeholder:'replace-me' })
+    fields.push({ key:'realityPrivateKey', label:'Reality 私钥', placeholder:'replace-me' })
+    fields.push({ key:'realityShortId', label:'Reality ShortId', placeholder:'0123456789abcdef' })
+  }
+  // Hysteria2 bandwidth
+  if (p === 'hysteria2') {
+    fields.push({ key:'upMbps', label:'上行带宽 (Mbps)', placeholder:'100', type:'number' })
+    fields.push({ key:'downMbps', label:'下行带宽 (Mbps)', placeholder:'100', type:'number' })
+  }
+  // VMESS alterId
+  if (p === 'vmess') {
+    fields.push({ key:'alterId', label:'AlterId', placeholder:'0', type:'number' })
+  }
+
+  return fields
+})
+
+// Watch protocol changes and auto-fix transport/tls
+watch(() => newTemplate.value.protocol, (p) => {
+  if (p === 'hysteria2') {
+    newTemplate.value.transport = 'hysteria2'
+    newTemplate.value.tlsMode = 'tls'
+    if (newTemplate.value.engine !== 'sing-box') newTemplate.value.engine = 'sing-box'
+  } else if (p === 'shadowsocks') {
+    newTemplate.value.tlsMode = 'none'
+    if (newTemplate.value.transport === 'hysteria2') newTemplate.value.transport = 'tcp'
+  } else {
+    if (newTemplate.value.transport === 'hysteria2') newTemplate.value.transport = 'tcp'
+  }
+})
 
 async function openCreateTemplate() {
   showCreateTemplate.value = true
@@ -109,7 +280,11 @@ async function openCreateTemplate() {
 }
 
 function applyPreset(p: any) {
-  newTemplate.value = { name: p.name, engine: p.engine, protocol: p.protocol, transport: p.transport, tlsMode: p.tlsMode, defaults: p.defaults || {}, notes: p.notes || '' }
+  newTemplate.value = {
+    name: p.name, engine: p.engine, protocol: p.protocol,
+    transport: p.transport, tlsMode: p.tlsMode,
+    defaults: p.defaults ? { ...p.defaults } : {}, notes: p.notes || ''
+  }
 }
 
 async function createTemplate() {
@@ -130,6 +305,12 @@ async function createSub() {
     showCreateSub.value = false; newSub.value = { name:'', enabled:true, visibleNodeIds:[] }
     toast('success', '订阅创建成功'); await loadAll(); await refreshStatus()
   } catch (e:any) { toast('error', e.message) }
+}
+
+// Subscription URL helper
+function getSubscriptionUrl(token: string, format: string) {
+  const base = status.value?.publicBaseUrl || window.location.origin
+  return `${base}/sub/${token}?format=${format}`
 }
 
 // Helpers
@@ -328,7 +509,7 @@ onMounted(() => { if (adminKey.value) login() })
                   <td style="font-weight:600;color:var(--color-text-primary)">{{ n.name }}</td>
                   <td><span class="tag" :class="{accent:n.nodeType==='edge'}">{{ n.nodeType }}</span></td>
                   <td>{{ n.region || '-' }}</td>
-                  <td class="text-mono truncate">{{ n.primaryDomain || '-' }}</td>
+                  <td class="text-mono truncate">{{ n.primaryDomain || n.argoTunnelDomain || '-' }}</td>
                   <td><span class="status-badge" :class="isOnline(n)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(n)?'在线':'离线' }}</span></td>
                   <td>{{ n.currentConnections }}</td>
                   <td class="text-muted" style="font-size:12px">↑{{ formatBytes(n.bytesOutTotal) }} ↓{{ formatBytes(n.bytesInTotal) }}</td>
@@ -378,7 +559,7 @@ onMounted(() => { if (adminKey.value) login() })
           </div>
           <div class="table-wrapper">
             <table class="data-table">
-              <thead><tr><th>名称</th><th>令牌</th><th>状态</th><th>可见节点</th><th>创建时间</th></tr></thead>
+              <thead><tr><th>名称</th><th>令牌</th><th>状态</th><th>可见节点</th><th>创建时间</th><th>订阅地址</th></tr></thead>
               <tbody>
                 <tr v-for="s in subscriptions" :key="s.id">
                   <td style="font-weight:600;color:var(--color-text-primary)">{{ s.name }}</td>
@@ -386,8 +567,16 @@ onMounted(() => { if (adminKey.value) login() })
                   <td><span class="status-badge" :class="s.enabled?'online':'offline'"><span class="status-dot"></span>{{ s.enabled?'已启用':'已禁用' }}</span></td>
                   <td>{{ s.visibleNodeIds.length || '全部' }}</td>
                   <td class="text-muted">{{ timeAgo(s.createdAt) }}</td>
+                  <td>
+                    <div class="sub-url-actions">
+                      <button class="btn btn-xs btn-secondary" @click="copyToClipboard(getSubscriptionUrl(s.token,'v2ray'))" title="V2Ray 订阅 (Base64)">V2Ray</button>
+                      <button class="btn btn-xs btn-secondary" @click="copyToClipboard(getSubscriptionUrl(s.token,'clash'))" title="Clash 订阅 (YAML)">Clash</button>
+                      <button class="btn btn-xs btn-secondary" @click="copyToClipboard(getSubscriptionUrl(s.token,'singbox'))" title="Sing-Box 订阅 (JSON)">SingBox</button>
+                      <button class="btn btn-xs btn-ghost" @click="copyToClipboard(getSubscriptionUrl(s.token,'plain'))" title="通用订阅 (明文)">通用</button>
+                    </div>
+                  </td>
                 </tr>
-                <tr v-if="subscriptions.length===0"><td colspan="5"><div class="empty-state"><div class="empty-state-icon">🔗</div><div class="empty-state-title">暂无订阅</div><div class="empty-state-text">创建订阅以供客户端访问</div><button class="btn btn-primary" @click="showCreateSub=true">+ 添加订阅</button></div></td></tr>
+                <tr v-if="subscriptions.length===0"><td colspan="6"><div class="empty-state"><div class="empty-state-icon">🔗</div><div class="empty-state-title">暂无订阅</div><div class="empty-state-text">创建订阅以供客户端访问</div><button class="btn btn-primary" @click="showCreateSub=true">+ 添加订阅</button></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -409,10 +598,14 @@ onMounted(() => { if (adminKey.value) login() })
             <div class="detail-row"><span class="detail-label">ID</span><span class="detail-value text-mono">{{ selectedNode.id }}</span></div>
             <div class="detail-row"><span class="detail-label">类型</span><span class="detail-value"><span class="tag" :class="{accent:selectedNode.nodeType==='edge'}">{{ selectedNode.nodeType }}</span></span></div>
             <div class="detail-row"><span class="detail-label">地区</span><span class="detail-value">{{ selectedNode.region || '-' }}</span></div>
-            <div class="detail-row"><span class="detail-label">域名</span><span class="detail-value text-mono">{{ selectedNode.primaryDomain || '-' }}</span></div>
+            <div class="detail-row"><span class="detail-label">网络类型</span><span class="detail-value"><span class="tag" :class="{accent:selectedNode.networkType==='noPublicIp'}">{{ selectedNode.networkType === 'noPublicIp' ? '无公网IP (Argo)' : '有公网IP' }}</span></span></div>
+            <div class="detail-row"><span class="detail-label">主域名</span><span class="detail-value text-mono">{{ selectedNode.primaryDomain || '-' }}</span></div>
+            <div class="detail-row" v-if="selectedNode.backupDomain"><span class="detail-label">备域名</span><span class="detail-value text-mono">{{ selectedNode.backupDomain }}</span></div>
             <div class="detail-row"><span class="detail-label">入口 IP</span><span class="detail-value text-mono">{{ selectedNode.entryIp || '-' }}</span></div>
+            <div class="detail-row" v-if="selectedNode.argoTunnelDomain"><span class="detail-label">Argo 域名</span><span class="detail-value text-mono">{{ selectedNode.argoTunnelDomain }}</span></div>
             <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value"><span class="status-badge" :class="isOnline(selectedNode)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(selectedNode)?'在线':'离线' }}</span></span></div>
             <div class="detail-row"><span class="detail-label">最后在线</span><span class="detail-value">{{ timeAgo(selectedNode.lastSeenAt) }}</span></div>
+            <div class="detail-row" v-if="selectedNode.installWarp"><span class="detail-label">WARP</span><span class="detail-value"><span class="tag accent">已启用</span></span></div>
           </div>
           <div class="detail-section">
             <div class="detail-section-title">资源监控</div>
@@ -437,9 +630,20 @@ onMounted(() => { if (adminKey.value) login() })
             <div v-if="nodeReleases.length===0" class="text-muted text-center" style="padding:16px;font-size:12px">暂无发布记录</div>
           </div>
           <div class="detail-section">
-            <div class="detail-section-title">安装脚本</div>
-            <button v-if="!installScript" class="btn btn-secondary btn-sm w-full" @click="loadInstallScript">加载安装脚本</button>
-            <div v-else class="code-block" style="max-height:200px;overflow-y:auto">{{ installScript }}</div>
+            <div class="detail-section-title">部署命令</div>
+            <button v-if="!deployCommand" class="btn btn-secondary btn-sm w-full" @click="loadDeployCommand">生成部署命令</button>
+            <div v-else>
+              <div class="code-block" style="max-height:120px;overflow-y:auto;font-size:11px;word-break:break-all">{{ deployCommand }}</div>
+              <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(deployCommand)">📋 复制部署命令</button>
+            </div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-section-title">一键卸载</div>
+            <button v-if="!uninstallCommand" class="btn btn-danger btn-sm w-full" style="--btn-bg:var(--color-danger);--btn-hover:var(--color-danger)" @click="loadUninstallCommand">生成卸载命令</button>
+            <div v-else>
+              <div class="code-block" style="max-height:120px;overflow-y:auto;font-size:11px;word-break:break-all">{{ uninstallCommand }}</div>
+              <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(uninstallCommand)">📋 复制卸载命令</button>
+            </div>
           </div>
         </div>
       </aside>
@@ -447,20 +651,88 @@ onMounted(() => { if (adminKey.value) login() })
 
     <!-- Create Node Modal -->
     <div v-if="showCreateNode" class="modal-overlay" @click.self="showCreateNode=false">
-      <div class="modal-content">
+      <div class="modal-content" style="max-width:600px">
         <div class="modal-header"><h3 class="modal-title">新建节点</h3><button class="modal-close-btn" @click="showCreateNode=false">✕</button></div>
-        <div class="modal-body">
+        <div class="modal-body" style="max-height:60vh;overflow-y:auto">
           <div class="form-group"><label class="form-label">名称 *</label><input class="form-input" v-model="newNode.name" placeholder="例如 US-West-01" /></div>
           <div class="form-row">
             <div class="form-group"><label class="form-label">类型</label><select class="form-select" v-model="newNode.nodeType"><option value="vps">VPS</option><option value="edge">Edge</option></select></div>
             <div class="form-group"><label class="form-label">地区</label><input class="form-input" v-model="newNode.region" placeholder="例如 us-west" /></div>
           </div>
-          <div class="form-group"><label class="form-label">主域名</label><input class="form-input" v-model="newNode.primaryDomain" placeholder="node.example.com" /></div>
-          <div class="form-group"><label class="form-label">入口 IP</label><input class="form-input" v-model="newNode.entryIp" placeholder="1.2.3.4" /></div>
-          <div class="form-row">
-            <div class="form-checkbox-group"><input type="checkbox" class="form-checkbox" v-model="newNode.installWarp" id="warp"><label for="warp" class="form-label" style="margin:0">安装 WARP</label></div>
-            <div class="form-checkbox-group"><input type="checkbox" class="form-checkbox" v-model="newNode.installArgo" id="argo"><label for="argo" class="form-label" style="margin:0">安装 Argo</label></div>
+
+          <!-- GitHub Mirror -->
+          <div class="form-section-divider">扩展选项</div>
+          <div class="form-checkbox-group mb-md">
+            <input type="checkbox" class="form-checkbox" v-model="newNode.useGithubMirror" id="github-mirror">
+            <label for="github-mirror" class="form-label" style="margin:0">使用 GitHub 镜像</label>
           </div>
+          <div v-if="newNode.useGithubMirror" class="form-group">
+            <label class="form-label">GitHub 镜像地址</label>
+            <input class="form-input" v-model="newNode.githubMirrorUrl" placeholder="https://ghproxy.com/https://github.com" />
+          </div>
+
+          <!-- Install WARP -->
+          <div class="form-checkbox-group mb-md">
+            <input type="checkbox" class="form-checkbox" v-model="newNode.installWarp" id="warp">
+            <label for="warp" class="form-label" style="margin:0">安装 WARP</label>
+          </div>
+          <div v-if="newNode.installWarp" class="form-group">
+            <label class="form-label">WARP 升级密钥（可选，用于升级 WARP+ 账号）</label>
+            <input class="form-input" v-model="newNode.warpLicenseKey" placeholder="WARP+ License Key" />
+          </div>
+
+          <!-- Network Type -->
+          <div class="form-section-divider">服务器网络</div>
+          <div class="form-group">
+            <label class="form-label">网络类型</label>
+            <select class="form-select" v-model="newNode.networkType">
+              <option value="public">有公网 IP</option>
+              <option value="noPublicIp">无公网 IP (Argo 隧道)</option>
+            </select>
+          </div>
+
+          <!-- Public IP options -->
+          <template v-if="newNode.networkType==='public'">
+            <div class="form-group"><label class="form-label">主域名</label><input class="form-input" v-model="newNode.primaryDomain" placeholder="node.example.com" /></div>
+            <div class="form-group"><label class="form-label">备域名</label><input class="form-input" v-model="newNode.backupDomain" placeholder="node2.example.com（可选）" /></div>
+            <div class="form-group"><label class="form-label">入口 IP</label><input class="form-input" v-model="newNode.entryIp" placeholder="1.2.3.4" /></div>
+            <div class="form-checkbox-group mb-md">
+              <input type="checkbox" class="form-checkbox" v-model="newNode.useCfDnsToken" id="cf-dns">
+              <label for="cf-dns" class="form-label" style="margin:0">CF-DNS-TOKEN (自动 DNS 管理)</label>
+            </div>
+            <div v-if="newNode.useCfDnsToken" class="form-group">
+              <label class="form-label">Cloudflare DNS API Token</label>
+              <input class="form-input" v-model="newNode.cfDnsToken" placeholder="Cloudflare API Token" />
+            </div>
+          </template>
+
+          <!-- No Public IP (Argo) options -->
+          <template v-if="newNode.networkType==='noPublicIp'">
+            <div class="form-checkbox-group mb-md">
+              <input type="checkbox" class="form-checkbox" v-model="newNode.useArgoTunnelToken" id="argo-token">
+              <label for="argo-token" class="form-label" style="margin:0">Tunnel Token</label>
+            </div>
+            <div v-if="newNode.useArgoTunnelToken" class="form-group">
+              <label class="form-label">Argo Tunnel Token</label>
+              <input class="form-input" v-model="newNode.argoTunnelToken" placeholder="Cloudflare Tunnel Token" />
+            </div>
+            <div class="form-checkbox-group mb-md">
+              <input type="checkbox" class="form-checkbox" v-model="newNode.useArgoTunnelDomain" id="argo-domain">
+              <label for="argo-domain" class="form-label" style="margin:0">固定隧道域名</label>
+            </div>
+            <div v-if="newNode.useArgoTunnelDomain" class="form-group">
+              <label class="form-label">隧道域名</label>
+              <input class="form-input" v-model="newNode.argoTunnelDomain" placeholder="tunnel.example.com" />
+            </div>
+            <div class="form-checkbox-group mb-md">
+              <input type="checkbox" class="form-checkbox" v-model="newNode.useArgoTunnelPort" id="argo-port">
+              <label for="argo-port" class="form-label" style="margin:0">隧道回源端口（默认 2053）</label>
+            </div>
+            <div v-if="newNode.useArgoTunnelPort" class="form-group">
+              <label class="form-label">回源端口</label>
+              <input class="form-input" type="number" v-model.number="newNode.argoTunnelPort" placeholder="2053" />
+            </div>
+          </template>
         </div>
         <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateNode=false">取消</button><button class="btn btn-primary" @click="createNode">创建</button></div>
       </div>
@@ -468,24 +740,63 @@ onMounted(() => { if (adminKey.value) login() })
 
     <!-- Create Template Modal -->
     <div v-if="showCreateTemplate" class="modal-overlay" @click.self="showCreateTemplate=false">
-      <div class="modal-content">
+      <div class="modal-content" style="max-width:640px">
         <div class="modal-header"><h3 class="modal-title">新建模板</h3><button class="modal-close-btn" @click="showCreateTemplate=false">✕</button></div>
-        <div class="modal-body">
+        <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+          <!-- Presets -->
           <div v-if="catalogPresets.length" class="mb-lg">
             <label class="form-label">从预设快速创建</label>
-            <div class="flex gap-sm" style="flex-wrap:wrap">
-              <button v-for="p in catalogPresets" :key="p.id" class="btn btn-sm btn-secondary" @click="applyPreset(p)">{{ p.name }}</button>
+            <div class="preset-grid">
+              <button v-for="p in catalogPresets" :key="p.id" class="preset-btn" @click="applyPreset(p)" :title="p.notes">
+                <span class="preset-btn-name">{{ p.name }}</span>
+                <span class="preset-btn-meta">{{ p.engine }} · {{ p.protocol }}</span>
+              </button>
             </div>
           </div>
           <div class="form-group"><label class="form-label">名称 *</label><input class="form-input" v-model="newTemplate.name" placeholder="例如 VLESS-WS-TLS" /></div>
           <div class="form-row">
-            <div class="form-group"><label class="form-label">引擎</label><select class="form-select" v-model="newTemplate.engine"><option value="xray">Xray</option><option value="sing-box">Sing-Box</option></select></div>
-            <div class="form-group"><label class="form-label">协议</label><input class="form-input" v-model="newTemplate.protocol" placeholder="vless" /></div>
+            <div class="form-group">
+              <label class="form-label">引擎</label>
+              <select class="form-select" v-model="newTemplate.engine">
+                <option value="xray">Xray</option>
+                <option value="sing-box">Sing-Box</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">协议</label>
+              <select class="form-select" v-model="newTemplate.protocol">
+                <option v-for="o in protocolOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+              </select>
+            </div>
           </div>
           <div class="form-row">
-            <div class="form-group"><label class="form-label">传输方式</label><input class="form-input" v-model="newTemplate.transport" placeholder="ws" /></div>
-            <div class="form-group"><label class="form-label">TLS 模式</label><select class="form-select" v-model="newTemplate.tlsMode"><option value="none">无</option><option value="tls">TLS</option><option value="reality">Reality</option></select></div>
+            <div class="form-group">
+              <label class="form-label">传输方式</label>
+              <select class="form-select" v-model="newTemplate.transport">
+                <option v-for="o in transportOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">TLS 模式</label>
+              <select class="form-select" v-model="newTemplate.tlsMode">
+                <option v-for="o in tlsOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+              </select>
+            </div>
           </div>
+
+          <!-- Dynamic default fields -->
+          <div class="form-section-divider">协议参数</div>
+          <div v-for="field in templateDefaultFields" :key="field.key" class="form-group">
+            <label class="form-label">{{ field.label }}</label>
+            <input
+              class="form-input"
+              :type="field.type || 'text'"
+              :placeholder="field.placeholder"
+              :value="(newTemplate.defaults as any)[field.key] ?? ''"
+              @input="(e:any) => { (newTemplate.defaults as any)[field.key] = field.type === 'number' ? Number(e.target.value) : e.target.value }"
+            />
+          </div>
+
           <div class="form-group"><label class="form-label">备注</label><textarea class="form-textarea" v-model="newTemplate.notes" placeholder="可选备注信息..."></textarea></div>
         </div>
         <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateTemplate=false">取消</button><button class="btn btn-primary" @click="createTemplate">创建</button></div>
@@ -513,4 +824,5 @@ onMounted(() => { if (adminKey.value) login() })
       </div>
     </div>
   </div>
+
 </template>

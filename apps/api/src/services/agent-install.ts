@@ -4,6 +4,18 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`
 }
 
+export function buildDeployCommand(input: {
+  publicBaseUrl: string
+  nodeId: string
+}): string {
+  const apiBase = input.publicBaseUrl.replace(/\/+$/, '')
+  return `URL=${shellQuote(`${apiBase}/agent/install`)}; if command -v curl >/dev/null 2>&1; then curl -fsSL $URL; else wget -q -O - $URL; fi | bash -s -- --api-base ${shellQuote(apiBase)} --node-id ${shellQuote(input.nodeId)}`
+}
+
+export function buildUninstallCommand(): string {
+  return `systemctl stop nodehubsapi-agent.service nodehubsapi-runtime.service 2>/dev/null; systemctl disable nodehubsapi-agent.service nodehubsapi-runtime.service 2>/dev/null; rm -f /etc/systemd/system/nodehubsapi-agent.service /etc/systemd/system/nodehubsapi-runtime.service; systemctl daemon-reload; rm -f /usr/local/bin/nodehubsapi-agent /usr/local/bin/xray /usr/local/bin/sing-box; rm -rf /etc/nodehubsapi /opt/nodehubsapi; echo '✅ NodeHub agent uninstalled.'`
+}
+
 function buildRuntimeFileBlocks(artifact: ReleaseArtifact): string {
   return artifact.runtime.files
     .map((file, index) => {
@@ -268,9 +280,9 @@ install_runtime_binary() {
 
 write_runtime_files() {
 ${runtimeFileBlocks
-  .split('\n')
-  .map((line) => (line ? `  ${line}` : ''))
-  .join('\n')}
+      .split('\n')
+      .map((line) => (line ? `  ${line}` : ''))
+      .join('\n')}
 }
 
 write_runtime_service() {

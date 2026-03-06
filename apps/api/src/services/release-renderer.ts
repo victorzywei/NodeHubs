@@ -49,14 +49,44 @@ type NormalizedTemplate = {
   defaults: Record<string, unknown>
 }
 
-const SUPPORTED_PROTOCOLS = new Set(['vless', 'trojan', 'shadowsocks'])
-const SUPPORTED_TRANSPORTS = new Set(['ws', 'grpc', 'tcp'])
+const SUPPORTED_PROTOCOLS = new Set(['vless', 'trojan', 'shadowsocks', 'vmess', 'hysteria2'])
+const SUPPORTED_TRANSPORTS = new Set(['ws', 'grpc', 'tcp', 'h2', 'hysteria2'])
 
 const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
-    id: 'singbox-vless-ws-tls',
-    name: 'VLESS WS TLS',
+    id: 'preset-hysteria2',
+    name: 'Hysteria2',
     engine: 'sing-box',
+    protocol: 'hysteria2',
+    transport: 'hysteria2',
+    tlsMode: 'tls',
+    defaults: {
+      serverPort: 443,
+      password: 'replace-me',
+      sni: '',
+      upMbps: 100,
+      downMbps: 100,
+    },
+    notes: '高性能 QUIC 协议，适合视频和游戏加速。支持 sing-box 引擎。',
+  },
+  {
+    id: 'preset-ss2022',
+    name: 'Shadowsocks 2022',
+    engine: 'xray',
+    protocol: 'shadowsocks',
+    transport: 'tcp',
+    tlsMode: 'none',
+    defaults: {
+      serverPort: 8388,
+      method: '2022-blake3-aes-128-gcm',
+      password: 'replace-me-base64-key',
+    },
+    notes: 'Shadowsocks 2022 协议，使用 AEAD-2022 加密，兼容 Xray / sing-box。',
+  },
+  {
+    id: 'preset-vless-ws-tls',
+    name: 'VLESS + WS + TLS',
+    engine: 'xray',
     protocol: 'vless',
     transport: 'ws',
     tlsMode: 'tls',
@@ -67,28 +97,43 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
       sni: '',
       uuid: '00000000-0000-4000-8000-000000000001',
     },
-    notes: 'TLS over WebSocket for CDN-style deployments.',
+    notes: 'CDN 友好的经典组合，适合反代部署。兼容 Xray / sing-box。',
   },
   {
-    id: 'singbox-vless-reality',
-    name: 'VLESS Reality',
-    engine: 'sing-box',
+    id: 'preset-vless-reality-tcp',
+    name: 'VLESS + Reality + TCP',
+    engine: 'xray',
     protocol: 'vless',
     transport: 'tcp',
     tlsMode: 'reality',
     defaults: {
       serverPort: 443,
       uuid: '00000000-0000-4000-8000-000000000002',
+      flow: 'xtls-rprx-vision',
       sni: 'www.cloudflare.com',
       realityPublicKey: 'replace-me',
       realityPrivateKey: 'replace-me',
       realityShortId: '0123456789abcdef',
     },
-    notes: 'Direct TCP with Reality handshake fields.',
+    notes: 'Reality 免证书 TLS 伪装，抗检测能力强。兼容 Xray / sing-box。',
   },
   {
-    id: 'xray-trojan-grpc',
-    name: 'Trojan gRPC TLS',
+    id: 'preset-trojan-tcp-tls',
+    name: 'Trojan + TCP + TLS',
+    engine: 'xray',
+    protocol: 'trojan',
+    transport: 'tcp',
+    tlsMode: 'tls',
+    defaults: {
+      serverPort: 443,
+      password: 'replace-me',
+      sni: '',
+    },
+    notes: '经典 Trojan 协议，需要有效 TLS 证书。兼容 Xray / sing-box。',
+  },
+  {
+    id: 'preset-trojan-grpc-tls',
+    name: 'Trojan + gRPC + TLS',
     engine: 'xray',
     protocol: 'trojan',
     transport: 'grpc',
@@ -99,7 +144,24 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
       password: 'replace-me',
       sni: '',
     },
-    notes: 'Trojan on gRPC for Xray runtime.',
+    notes: 'gRPC 多路复用传输，CDN 友好。兼容 Xray / sing-box。',
+  },
+  {
+    id: 'preset-vmess-tls-ws',
+    name: 'VMESS + TLS + WS',
+    engine: 'xray',
+    protocol: 'vmess',
+    transport: 'ws',
+    tlsMode: 'tls',
+    defaults: {
+      serverPort: 443,
+      path: '/ws',
+      host: '',
+      sni: '',
+      uuid: '00000000-0000-4000-8000-000000000003',
+      alterId: 0,
+    },
+    notes: 'VMESS 经典 WebSocket 组合，CDN 可用。兼容 Xray / sing-box。',
   },
 ]
 
@@ -199,10 +261,10 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
     defaults,
   }
 
-  if (protocol === 'vless') {
+  if (protocol === 'vless' || protocol === 'vmess') {
     normalized.uuid = ensureField(normalized.uuid, 'uuid', template.name)
   }
-  if (protocol === 'trojan') {
+  if (protocol === 'trojan' || protocol === 'hysteria2') {
     normalized.password = ensureField(normalized.password, 'password', template.name)
   }
   if (protocol === 'shadowsocks') {
@@ -220,8 +282,9 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
 }
 
 function buildSingBoxInbound(template: NormalizedTemplate, index: number) {
+  const protocol = template.protocol === 'shadowsocks' ? 'shadowsocks' : template.protocol
   const inbound: Record<string, unknown> = {
-    type: template.protocol,
+    type: protocol,
     tag: `in-${index + 1}`,
     listen: '::',
     listen_port: template.port,
@@ -234,12 +297,27 @@ function buildSingBoxInbound(template: NormalizedTemplate, index: number) {
         flow: template.flow || undefined,
       },
     ]
+  } else if (template.protocol === 'vmess') {
+    inbound.users = [
+      {
+        uuid: template.uuid,
+        alterId: readNumber(template.defaults, ['alterId'], 0),
+      },
+    ]
   } else if (template.protocol === 'trojan') {
     inbound.users = [
       {
         password: template.password,
       },
     ]
+  } else if (template.protocol === 'hysteria2') {
+    inbound.users = [
+      {
+        password: template.password,
+      },
+    ]
+    inbound.up_mbps = readNumber(template.defaults, ['upMbps'], 100)
+    inbound.down_mbps = readNumber(template.defaults, ['downMbps'], 100)
   } else if (template.protocol === 'shadowsocks') {
     inbound.method = template.method
     inbound.password = template.password
@@ -258,7 +336,14 @@ function buildSingBoxInbound(template: NormalizedTemplate, index: number) {
     }
   }
 
-  if (template.tlsMode === 'tls') {
+  if (template.protocol === 'hysteria2') {
+    inbound.tls = {
+      enabled: true,
+      server_name: template.sni || template.server,
+      certificate_path: template.certPath,
+      key_path: template.keyPath,
+    }
+  } else if (template.tlsMode === 'tls') {
     inbound.tls = {
       enabled: true,
       server_name: template.sni || template.server,
@@ -281,6 +366,11 @@ function buildSingBoxInbound(template: NormalizedTemplate, index: number) {
 }
 
 function buildXrayInbound(template: NormalizedTemplate, index: number) {
+  // Hysteria2 is not supported by Xray, skip
+  if (template.protocol === 'hysteria2') {
+    return buildSingBoxInbound(template, index)
+  }
+
   const inbound: Record<string, unknown> = {
     tag: `in-${index + 1}`,
     port: template.port,
@@ -297,6 +387,15 @@ function buildXrayInbound(template: NormalizedTemplate, index: number) {
         },
       ],
       decryption: 'none',
+    }
+  } else if (template.protocol === 'vmess') {
+    inbound.settings = {
+      clients: [
+        {
+          id: template.uuid,
+          alterId: readNumber(template.defaults, ['alterId'], 0),
+        },
+      ],
     }
   } else if (template.protocol === 'trojan') {
     inbound.settings = {
@@ -374,7 +473,7 @@ function buildSubscriptionUri(node: NodeRecord, template: NormalizedTemplate): s
   if (template.transport === 'grpc') {
     params.set('serviceName', template.serviceName)
   }
-  if (template.tlsMode === 'tls') {
+  if (template.tlsMode === 'tls' || template.protocol === 'hysteria2') {
     params.set('security', 'tls')
     if (template.sni) params.set('sni', template.sni)
   } else if (template.tlsMode === 'reality') {
@@ -389,8 +488,28 @@ function buildSubscriptionUri(node: NodeRecord, template: NormalizedTemplate): s
   if (template.protocol === 'vless') {
     return `vless://${template.uuid}@${template.server}:${template.port}?${params.toString()}#${label}`
   }
+  if (template.protocol === 'vmess') {
+    const vmessConfig = {
+      v: '2',
+      ps: `${node.name} ${template.name}`,
+      add: template.server,
+      port: String(template.port),
+      id: template.uuid,
+      aid: String(readNumber(template.defaults, ['alterId'], 0)),
+      net: template.transport,
+      type: 'none',
+      host: template.host || '',
+      path: template.path || '',
+      tls: template.tlsMode === 'tls' ? 'tls' : '',
+      sni: template.sni || '',
+    }
+    return `vmess://${btoa(JSON.stringify(vmessConfig))}`
+  }
   if (template.protocol === 'trojan') {
     return `trojan://${template.password}@${template.server}:${template.port}?${params.toString()}#${label}`
+  }
+  if (template.protocol === 'hysteria2') {
+    return `hysteria2://${template.password}@${template.server}:${template.port}?${params.toString()}#${label}`
   }
   const credentials = btoa(`${template.method}:${template.password}`)
   return `ss://${credentials}@${template.server}:${template.port}#${label}`
@@ -498,9 +617,16 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
       nodeType: context.node.nodeType,
       region: context.node.region,
       tags: [...context.node.tags],
+      networkType: context.node.networkType,
       primaryDomain: context.node.primaryDomain,
       backupDomain: context.node.backupDomain,
       entryIp: context.node.entryIp,
+      githubMirrorUrl: context.node.githubMirrorUrl,
+      warpLicenseKey: context.node.warpLicenseKey,
+      cfDnsToken: context.node.cfDnsToken,
+      argoTunnelToken: context.node.argoTunnelToken,
+      argoTunnelDomain: context.node.argoTunnelDomain,
+      argoTunnelPort: context.node.argoTunnelPort,
       installWarp: context.node.installWarp,
       installArgo: context.node.installArgo,
     },
@@ -592,6 +718,90 @@ export function renderSubscriptionDocument(
       contentType: 'text/plain; charset=utf-8',
     }
   }
+  // v2ray format: base64 encoded share links (compatible with v2rayN, v2rayNG, etc.)
+  if (format === 'v2ray') {
+    return {
+      body: encodeBase64(plain),
+      contentType: 'text/plain; charset=utf-8',
+    }
+  }
+  // clash format: YAML proxy config
+  if (format === 'clash') {
+    const proxies = payload.entries.map((entry) => {
+      const proxy: Record<string, unknown> = {
+        name: entry.label,
+        server: entry.server,
+        port: entry.port,
+      }
+      if (entry.protocol === 'vless') {
+        proxy.type = 'vless'
+        proxy.uuid = '' // requires parsing from URI
+        proxy.network = entry.transport
+        proxy.tls = entry.tlsMode !== 'none'
+      } else if (entry.protocol === 'vmess') {
+        proxy.type = 'vmess'
+        proxy.uuid = ''
+        proxy.alterId = 0
+        proxy.cipher = 'auto'
+        proxy.network = entry.transport
+        proxy.tls = entry.tlsMode !== 'none'
+      } else if (entry.protocol === 'trojan') {
+        proxy.type = 'trojan'
+        proxy.password = ''
+        proxy.network = entry.transport
+      } else if (entry.protocol === 'shadowsocks') {
+        proxy.type = 'ss'
+        proxy.cipher = 'aes-128-gcm'
+        proxy.password = ''
+      } else if (entry.protocol === 'hysteria2') {
+        proxy.type = 'hysteria2'
+        proxy.password = ''
+      }
+      return proxy
+    })
+    const clashConfig = {
+      proxies,
+      'proxy-groups': [
+        {
+          name: 'NodeHub',
+          type: 'select',
+          proxies: payload.entries.map((e) => e.label),
+        },
+      ],
+    }
+    // Simple YAML serialization
+    let yaml = 'proxies:\n'
+    for (const p of proxies) {
+      yaml += `  - ${JSON.stringify(p)}\n`
+    }
+    yaml += 'proxy-groups:\n'
+    yaml += `  - ${JSON.stringify(clashConfig['proxy-groups'][0])}\n`
+    return {
+      body: yaml,
+      contentType: 'text/yaml; charset=utf-8',
+    }
+  }
+  // singbox format: JSON outbound config
+  if (format === 'singbox') {
+    const outbounds = payload.entries.map((entry) => ({
+      tag: entry.label,
+      type: entry.protocol,
+      server: entry.server,
+      server_port: entry.port,
+    }))
+    const singboxConfig = {
+      outbounds: [
+        ...outbounds,
+        { type: 'direct', tag: 'direct' },
+        { type: 'block', tag: 'block' },
+      ],
+    }
+    return {
+      body: JSON.stringify(singboxConfig, null, 2),
+      contentType: 'application/json; charset=utf-8',
+    }
+  }
+  // default: base64
   return {
     body: encodeBase64(plain),
     contentType: 'text/plain; charset=utf-8',

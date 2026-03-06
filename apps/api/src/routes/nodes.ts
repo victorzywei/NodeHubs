@@ -17,7 +17,7 @@ import {
   resolveAgentNode,
   updateNode,
 } from '../services/control-plane'
-import { buildAgentInstallScript, buildAgentReconcileEnv, buildReleaseApplyScript } from '../services/agent-install'
+import { buildAgentInstallScript, buildAgentReconcileEnv, buildReleaseApplyScript, buildDeployCommand, buildUninstallCommand } from '../services/agent-install'
 import { parseReleaseArtifact } from '../services/release-renderer'
 import type { AppServices } from '../lib/app-types'
 
@@ -106,6 +106,27 @@ nodeRoutes.get('/:id/install-script', async (c) => {
       'Content-Disposition': `inline; filename="${target.name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase() || 'node'}-install.sh"`,
     },
   })
+})
+
+nodeRoutes.get('/:id/deploy-command', async (c) => {
+  const auth = requireAdmin(c)
+  if (auth) return auth
+  const node = await getNodeById(c.get('services'), c.req.param('id'))
+  if (!node) return fail('NOT_FOUND', 'Node not found', 404)
+  const command = buildDeployCommand({
+    publicBaseUrl: c.get('services').publicBaseUrl,
+    nodeId: node.id,
+  })
+  return ok({ command })
+})
+
+nodeRoutes.get('/:id/uninstall-command', async (c) => {
+  const auth = requireAdmin(c)
+  if (auth) return auth
+  const node = await getNodeById(c.get('services'), c.req.param('id'))
+  if (!node) return fail('NOT_FOUND', 'Node not found', 404)
+  const command = buildUninstallCommand()
+  return ok({ command })
 })
 
 nodeRoutes.post('/agent/heartbeat', async (c) => {

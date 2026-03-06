@@ -7,9 +7,16 @@ export const createNodeSchema = z.object({
   nodeType: nodeKindSchema,
   region: z.string().trim().max(120).default(''),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+  networkType: z.enum(['public', 'noPublicIp']).default('public'),
   primaryDomain: z.string().trim().max(255).default(''),
   backupDomain: z.string().trim().max(255).default(''),
   entryIp: z.string().trim().max(255).default(''),
+  githubMirrorUrl: z.string().trim().max(500).default(''),
+  warpLicenseKey: z.string().trim().max(255).default(''),
+  cfDnsToken: z.string().trim().max(500).default(''),
+  argoTunnelToken: z.string().trim().max(500).default(''),
+  argoTunnelDomain: z.string().trim().max(255).default(''),
+  argoTunnelPort: z.number().int().min(1).max(65535).default(2053),
   installWarp: z.boolean().default(false),
   installArgo: z.boolean().default(false),
 })
@@ -42,7 +49,7 @@ export const createSubscriptionSchema = z.object({
   visibleNodeIds: z.array(z.string().trim().min(1)).default([]),
 })
 
-export const subscriptionDocumentFormatSchema = z.enum(['plain', 'base64', 'json'])
+export const subscriptionDocumentFormatSchema = z.enum(['plain', 'base64', 'json', 'v2ray', 'clash', 'singbox'])
 
 export const publishNodeSchema = z.object({
   kind: z.enum(['runtime', 'bootstrap']).default('runtime'),

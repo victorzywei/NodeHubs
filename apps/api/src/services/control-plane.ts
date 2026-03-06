@@ -28,9 +28,16 @@ type NodeRow = {
   node_type: string
   region: string
   tags_json: string
+  network_type: string
   primary_domain: string
   backup_domain: string
   entry_ip: string
+  github_mirror_url: string
+  warp_license_key: string
+  cf_dns_token: string
+  argo_tunnel_token: string
+  argo_tunnel_domain: string
+  argo_tunnel_port: number
   install_warp: number
   install_argo: number
   config_revision: number
@@ -98,7 +105,7 @@ type TotalsRow = {
   bytes_out: number
 }
 
-const BOOTSTRAP_FIELDS = new Set(['nodeType', 'installWarp', 'installArgo'])
+const BOOTSTRAP_FIELDS = new Set(['nodeType', 'installWarp', 'installArgo', 'networkType', 'argoTunnelToken', 'argoTunnelDomain', 'argoTunnelPort'])
 const RUNTIME_FIELDS = new Set(['primaryDomain', 'backupDomain', 'entryIp'])
 
 function toBool(value: number | boolean | null | undefined): boolean {
@@ -112,9 +119,16 @@ function toNodeRecord(row: NodeRow): NodeRecord {
     nodeType: row.node_type as NodeRecord['nodeType'],
     region: row.region,
     tags: parseJsonObject<string[]>(row.tags_json, []),
+    networkType: (row.network_type as NodeRecord['networkType']) || 'public',
     primaryDomain: row.primary_domain,
     backupDomain: row.backup_domain,
     entryIp: row.entry_ip,
+    githubMirrorUrl: row.github_mirror_url || '',
+    warpLicenseKey: row.warp_license_key || '',
+    cfDnsToken: row.cf_dns_token || '',
+    argoTunnelToken: row.argo_tunnel_token || '',
+    argoTunnelDomain: row.argo_tunnel_domain || '',
+    argoTunnelPort: Number(row.argo_tunnel_port || 2053),
     installWarp: toBool(row.install_warp),
     installArgo: toBool(row.install_argo),
     configRevision: Number(row.config_revision || 1),
@@ -241,11 +255,12 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
   const now = nowIso()
   await services.db.run(
     `INSERT INTO nodes (
-      id, agent_token, name, node_type, region, tags_json, primary_domain, backup_domain, entry_ip,
+      id, agent_token, name, node_type, region, tags_json, network_type, primary_domain, backup_domain, entry_ip,
+      github_mirror_url, warp_license_key, cf_dns_token, argo_tunnel_token, argo_tunnel_domain, argo_tunnel_port,
       install_warp, install_argo, config_revision, bootstrap_revision, desired_release_revision,
       current_release_revision, current_release_status, bytes_in_total, bytes_out_total,
       current_connections, protocol_runtime_version, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       createToken(),
@@ -253,9 +268,16 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       input.nodeType,
       input.region,
       JSON.stringify(input.tags),
+      input.networkType,
       input.primaryDomain,
       input.backupDomain,
       input.entryIp,
+      input.githubMirrorUrl,
+      input.warpLicenseKey,
+      input.cfDnsToken,
+      input.argoTunnelToken,
+      input.argoTunnelDomain,
+      input.argoTunnelPort,
       input.installWarp ? 1 : 0,
       input.installArgo ? 1 : 0,
       1,
@@ -286,7 +308,8 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
 
   await services.db.run(
     `UPDATE nodes
-     SET name = ?, node_type = ?, region = ?, tags_json = ?, primary_domain = ?, backup_domain = ?, entry_ip = ?,
+     SET name = ?, node_type = ?, region = ?, tags_json = ?, network_type = ?, primary_domain = ?, backup_domain = ?, entry_ip = ?,
+         github_mirror_url = ?, warp_license_key = ?, cf_dns_token = ?, argo_tunnel_token = ?, argo_tunnel_domain = ?, argo_tunnel_port = ?,
          install_warp = ?, install_argo = ?, bytes_in_total = ?, bytes_out_total = ?, current_connections = ?,
          cpu_usage_percent = ?, memory_usage_percent = ?, protocol_runtime_version = ?, last_seen_at = ?,
          config_revision = ?, bootstrap_revision = ?, updated_at = ?
@@ -296,9 +319,16 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       input.nodeType ?? current.node_type,
       input.region ?? current.region,
       JSON.stringify(input.tags ?? parseJsonObject<string[]>(current.tags_json, [])),
+      input.networkType ?? current.network_type,
       input.primaryDomain ?? current.primary_domain,
       input.backupDomain ?? current.backup_domain,
       input.entryIp ?? current.entry_ip,
+      input.githubMirrorUrl ?? current.github_mirror_url,
+      input.warpLicenseKey ?? current.warp_license_key,
+      input.cfDnsToken ?? current.cf_dns_token,
+      input.argoTunnelToken ?? current.argo_tunnel_token,
+      input.argoTunnelDomain ?? current.argo_tunnel_domain,
+      input.argoTunnelPort ?? current.argo_tunnel_port,
       input.installWarp === undefined ? current.install_warp : (input.installWarp ? 1 : 0),
       input.installArgo === undefined ? current.install_argo : (input.installArgo ? 1 : 0),
       input.bytesInTotal ?? current.bytes_in_total,
@@ -664,8 +694,8 @@ export async function buildPublicSubscriptionDocument(
   const visibleNodeIds = parseJsonObject<string[]>(subscription.visible_node_ids_json, [])
   const nodes = visibleNodeIds.length > 0
     ? (await Promise.all(uniqueIds(visibleNodeIds).map((nodeId) => getNodeRow(services, nodeId)))).filter(
-        (row): row is NodeRow => Boolean(row),
-      )
+      (row): row is NodeRow => Boolean(row),
+    )
     : await services.db.all<NodeRow>('SELECT * FROM nodes ORDER BY updated_at DESC')
 
   const entries: PublicSubscriptionDocument['entries'] = []

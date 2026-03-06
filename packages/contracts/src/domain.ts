@@ -1,12 +1,14 @@
 export type NodeKind = 'vps' | 'edge'
 
+export type NetworkType = 'public' | 'noPublicIp'
+
 export type ReleaseKind = 'runtime' | 'bootstrap'
 
 export type ReleaseStatus = 'pending' | 'applying' | 'healthy' | 'failed'
 
 export type StorageMode = 'cloudflare' | 'docker'
 
-export type SubscriptionDocumentFormat = 'plain' | 'base64' | 'json'
+export type SubscriptionDocumentFormat = 'plain' | 'base64' | 'json' | 'v2ray' | 'clash' | 'singbox'
 
 export type RuntimeArchiveFormat = 'tar.gz' | 'zip'
 
@@ -16,9 +18,16 @@ export interface NodeRecord {
   nodeType: NodeKind
   region: string
   tags: string[]
+  networkType: NetworkType
   primaryDomain: string
   backupDomain: string
   entryIp: string
+  githubMirrorUrl: string
+  warpLicenseKey: string
+  cfDnsToken: string
+  argoTunnelToken: string
+  argoTunnelDomain: string
+  argoTunnelPort: number
   installWarp: boolean
   installArgo: boolean
   configRevision: number
@@ -173,9 +182,16 @@ export interface ReleaseArtifact {
     | 'nodeType'
     | 'region'
     | 'tags'
+    | 'networkType'
     | 'primaryDomain'
     | 'backupDomain'
     | 'entryIp'
+    | 'githubMirrorUrl'
+    | 'warpLicenseKey'
+    | 'cfDnsToken'
+    | 'argoTunnelToken'
+    | 'argoTunnelDomain'
+    | 'argoTunnelPort'
     | 'installWarp'
     | 'installArgo'
   >

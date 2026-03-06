@@ -119,3 +119,11 @@ export function listNodeTraffic(adminKey: string, nodeId: string): Promise<Traff
 export function getNodeInstallScript(adminKey: string, nodeId: string): Promise<string> {
   return requestText(`/api/nodes/${nodeId}/install-script`, {}, adminKey)
 }
+
+export function getNodeDeployCommand(adminKey: string, nodeId: string): Promise<{ command: string }> {
+  return request(`/api/nodes/${nodeId}/deploy-command`, {}, adminKey)
+}
+
+export function getNodeUninstallCommand(adminKey: string, nodeId: string): Promise<{ command: string }> {
+  return request(`/api/nodes/${nodeId}/uninstall-command`, {}, adminKey)
+}
