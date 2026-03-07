@@ -1,7 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import type { ReleaseArtifact } from '@contracts/index'
+import { AGENT_INSTALL_SCRIPT_TEMPLATE, RELEASE_APPLY_SCRIPT_TEMPLATE } from '../generated/script-assets'
 import { APP_VERSION } from '../lib/constants'
 
 function shellQuote(value: string): string {
@@ -219,33 +217,13 @@ function buildShellMultilineAssignment(name: string, values: string[]): string {
   const label = `${name}_EOF`
   return `${name}=$(cat <<'${label}'\n${values.join('\n')}\n${label}\n)`
 }
-
-
-const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
-const SCRIPT_ASSET_DIR_CANDIDATES = [
-  resolve(MODULE_DIR, '../../assets'),
-  resolve(MODULE_DIR, './assets'),
-  resolve(MODULE_DIR, '../assets'),
-]
-const scriptAssetCache = new Map<string, string>()
-
-function loadScriptAsset(name: string): string {
-  const cached = scriptAssetCache.get(name)
-  if (cached) return cached
-
-  for (const directory of SCRIPT_ASSET_DIR_CANDIDATES) {
-    const filePath = resolve(directory, name)
-    if (!existsSync(filePath)) continue
-    const template = readFileSync(filePath, 'utf8')
-    scriptAssetCache.set(name, template)
-    return template
-  }
-
-  throw new Error(`Script asset not found: ${name}`)
+function getScriptAsset(name: 'agent-install.sh' | 'release-apply.sh'): string {
+  if (name === 'agent-install.sh') return AGENT_INSTALL_SCRIPT_TEMPLATE
+  return RELEASE_APPLY_SCRIPT_TEMPLATE
 }
 
 function renderScriptAsset(name: string, replacements: Record<string, string>): string {
-  let output = loadScriptAsset(name)
+  let output = getScriptAsset(name as 'agent-install.sh' | 'release-apply.sh')
   for (const [placeholder, value] of Object.entries(replacements)) {
     output = output.split(placeholder).join(value)
   }
