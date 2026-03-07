@@ -88,6 +88,8 @@ describe('agent install scripts', () => {
     expect(script).toContain('curl')
     expect(script).toContain('wget')
     expect(script).toContain('AGENT_VERSION=')
+    expect(script).toContain("cat >\"$AGENT_BIN\" <<'NODESHUB_AGENT_BIN_EOF'")
+    expect(script).toContain('ensure_downloader() {')
     expect(script).toContain('self_update_if_needed')
     expect(script).not.toContain('apt-get install')
     expect(script).not.toContain('jq')
@@ -103,13 +105,13 @@ describe('agent install scripts', () => {
       applyUrl: 'https://control.example.com/apply',
       artifactUrl: 'https://control.example.com/artifact',
       status: 'pending',
-      agentVersion: '0.1.0',
+      agentVersion: '0.1.1',
       installUrl: 'https://control.example.com/install',
     })
 
     expect(body).toContain("needs_update=1")
     expect(body).toContain("apply_url='https://control.example.com/apply'")
-    expect(body).toContain("agent_version='0.1.0'")
+    expect(body).toContain("agent_version='0.1.1'")
     expect(body).toContain("install_url='https://control.example.com/install'")
   })
 
