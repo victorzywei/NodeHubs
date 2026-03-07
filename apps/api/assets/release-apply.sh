@@ -157,6 +157,67 @@ wrap_github_url() {
   printf '%s' "$url"
 }
 
+direct_url() {
+  local url="$1"
+  printf '%s' "$url"
+}
+
+normalize_version_tag() {
+  local raw="$1"
+  if [ -z "$raw" ]; then
+    return 1
+  fi
+  case "$raw" in
+    v*) printf '%s' "$raw" ;;
+    *) printf 'v%s' "$raw" ;;
+  esac
+}
+
+get_latest_github_tag() {
+  local repo="$1"
+  local fallback="${2:-}"
+  local api tag redirect_url
+
+  tag=""
+  if command -v curl >/dev/null 2>&1; then
+    api="$(direct_url "https://api.github.com/repos/${repo}/releases/latest")"
+    tag="$(curl -fsSL "$api" 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+    if [ -z "$tag" ]; then
+      tag="$(curl -fsSL "$api" 2>/dev/null | tr -d '\r\n' | sed 's/.*"tag_name":"\([^"]*\)".*/\1/')"
+    fi
+    if [[ -z "$tag" || "$tag" == *"{"* ]]; then
+      redirect_url="$(direct_url "https://github.com/${repo}/releases/latest")"
+      tag="$(curl -fsSL -I "$redirect_url" 2>/dev/null | grep -i '^location:' | sed 's/.*\/tag\/\([^[:space:]]*\).*/\1/' | tr -d '\r\n')"
+    fi
+  fi
+
+  if [[ -z "$tag" || "$tag" == *"{"* ]] && [ -n "$fallback" ]; then
+    warn "Failed to detect latest ${repo} release tag, using fallback: $fallback"
+    tag="$fallback"
+  fi
+
+  printf '%s' "$tag"
+}
+
+get_latest_gitlab_tag() {
+  local project="$1"
+  local fallback="${2:-}"
+  local api tag
+
+  tag=""
+  if command -v curl >/dev/null 2>&1; then
+    api="$(direct_url "https://gitlab.com/api/v4/projects/${project}/releases/permalink/latest")"
+    tag="$(curl -fsSL "$api" 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+  fi
+
+  if [ -z "$tag" ] && [ -n "$fallback" ]; then
+    warn "Failed to detect latest GitLab release tag, using fallback: $fallback"
+    tag="$fallback"
+  fi
+
+  printf '%s' "$tag"
+}
+
 http_get_to_file() {
   local url="$1"
   local target="$2"
@@ -431,18 +492,59 @@ extract_archive() {
 }
 
 install_runtime_binary() {
-  local arch asset_name binary_rel archive_file unpack_dir download_url source_binary
+  local arch asset_name binary_rel archive_file unpack_dir download_url fallback_url source_binary
   arch="$(resolve_runtime_arch)"
-  asset_name="$(render_template "$RUNTIME_ASSET_TEMPLATE" "$arch")"
-  binary_rel="$(render_template "$RUNTIME_BINARY_PATH_TEMPLATE" "$arch")"
+  fallback_url=""
+
+  case "$RUNTIME_ENGINE" in
+    sing-box)
+      local singbox_fallback_tag singbox_tag singbox_version
+      singbox_fallback_tag="$(normalize_version_tag "$RUNTIME_VERSION" || true)"
+      [ -n "$singbox_fallback_tag" ] || singbox_fallback_tag="v1.13.0"
+      singbox_tag="$(get_latest_github_tag "SagerNet/sing-box" "$singbox_fallback_tag")"
+      [ -n "$singbox_tag" ] || singbox_tag="$singbox_fallback_tag"
+      singbox_version="${singbox_tag#v}"
+      asset_name="sing-box-${singbox_version}-linux-${arch}.tar.gz"
+      binary_rel="sing-box-${singbox_version}-linux-${arch}/sing-box"
+      download_url="https://github.com/SagerNet/sing-box/releases/download/${singbox_tag}/${asset_name}"
+      fallback_url="https://github.com/SagerNet/sing-box/releases/latest/download/${asset_name}"
+      ;;
+    xray)
+      local xray_fallback_tag
+      asset_name="Xray-linux-${arch}.zip"
+      binary_rel="xray"
+      download_url="https://github.com/XTLS/Xray-core/releases/latest/download/${asset_name}"
+      xray_fallback_tag="$(normalize_version_tag "$RUNTIME_VERSION" || true)"
+      if [ -n "$xray_fallback_tag" ]; then
+        fallback_url="https://github.com/XTLS/Xray-core/releases/download/${xray_fallback_tag}/${asset_name}"
+      fi
+      ;;
+    *)
+      asset_name="$(render_template "$RUNTIME_ASSET_TEMPLATE" "$arch")"
+      binary_rel="$(render_template "$RUNTIME_BINARY_PATH_TEMPLATE" "$arch")"
+      if [ -n "${RUNTIME_DOWNLOAD_BASE_URL:-}" ]; then
+        download_url="$RUNTIME_DOWNLOAD_BASE_URL/$asset_name"
+      else
+        echo "Runtime download URL resolver missing for engine: $RUNTIME_ENGINE" >&2
+        return 1
+      fi
+      ;;
+  esac
+
   archive_file="$TMP_DIR/$asset_name"
   unpack_dir="$TMP_DIR/unpack"
-  download_url="$RUNTIME_DOWNLOAD_BASE_URL/$asset_name"
 
   rm -rf "$unpack_dir"
   mkdir -p "$unpack_dir"
 
-  http_download_to_file "$download_url" "$archive_file"
+  if ! http_download_to_file "$download_url" "$archive_file"; then
+    if [ -n "$fallback_url" ]; then
+      warn "Primary runtime download failed, retrying fallback URL."
+      http_download_to_file "$fallback_url" "$archive_file"
+    else
+      return 1
+    fi
+  fi
   extract_archive "$archive_file" "$unpack_dir"
 
   source_binary="$unpack_dir/$binary_rel"
@@ -503,7 +605,8 @@ guess_acme_email() {
 
 install_lego_binary() {
   local target="$RUNTIME_BIN_DIR/lego"
-  local version="v4.28.1"
+  local version
+  local fallback_version="v4.32.0"
   local arch asset archive_file unpack_dir
   if [ -x "$target" ]; then
     printf '%s' "$target"
@@ -517,7 +620,9 @@ install_lego_binary() {
     warn "tar is required to install lego."
     return 1
   }
-  asset="lego_${version#v}_linux_${arch}.tar.gz"
+  version="$(get_latest_github_tag "go-acme/lego" "$fallback_version")"
+  [ -n "$version" ] || version="$fallback_version"
+  asset="lego_${version}_linux_${arch}.tar.gz"
   archive_file="$TMP_DIR/$asset"
   unpack_dir="$TMP_DIR/lego"
   mkdir -p "$unpack_dir"
@@ -591,85 +696,41 @@ existing_certificate_is_self_signed() {
   [ -n "$issuer" ] && [ "$issuer" = "$subject" ]
 }
 
-generate_self_signed_certificate() {
-  local primary_domain="$BOOTSTRAP_PRIMARY_TLS_DOMAIN"
-  local openssl_conf="$TMP_DIR/openssl.cnf"
-  local san_lines=""
-  local index=1
-  [ -n "$primary_domain" ] || primary_domain="localhost"
-  ensure_command openssl openssl || {
-    echo "openssl is required to generate fallback certificates." >&2
-    return 1
-  }
-  while IFS= read -r domain; do
-    [ -n "$domain" ] || continue
-    san_lines="$san_lines"$'\n'"DNS.${index} = ${domain}"
-    index=$((index + 1))
-  done <<< "$BOOTSTRAP_TLS_DOMAINS"
-  if [ -z "$san_lines" ]; then
-    san_lines=$'\n'"DNS.1 = ${primary_domain}"
-  fi
-  cat >"$openssl_conf" <<EOF
-[req]
-prompt = no
-default_bits = 2048
-default_md = sha256
-distinguished_name = dn
-x509_extensions = req_ext
-
-[dn]
-CN = ${primary_domain}
-
-[req_ext]
-subjectAltName = @alt_names
-
-[alt_names]${san_lines}
-EOF
-  mkdir -p "$(dirname "$BOOTSTRAP_CERT_PATH")"
-  openssl req -x509 -nodes -newkey rsa:2048 -days 825 -keyout "$BOOTSTRAP_KEY_PATH" -out "$BOOTSTRAP_CERT_PATH" -config "$openssl_conf" >/dev/null 2>&1
-}
-
 ensure_tls_certificate() {
-  local had_existing_cert=0
-  local existing_self_signed=0
   if [ "$BOOTSTRAP_NEEDS_CERTS" != "1" ]; then
     return 0
   fi
   if [ -s "$BOOTSTRAP_CERT_PATH" ] && [ -s "$BOOTSTRAP_KEY_PATH" ]; then
-    had_existing_cert=1
     if existing_certificate_is_self_signed; then
-      existing_self_signed=1
-      warn "Existing TLS certificate is self-signed; attempting ACME replacement."
+      warn "Existing TLS certificate is self-signed; replacing via lego."
     else
       return 0
     fi
   fi
+
+  if [ -z "$BOOTSTRAP_TLS_DOMAINS" ]; then
+    warn "TLS domains are empty; skipping certificate issuance."
+    return 1
+  fi
+
+  local lego_bin
+  lego_bin="$(install_lego_binary)" || return 1
+
   if [ -n "$NODE_CF_DNS_TOKEN" ] && [ -n "$BOOTSTRAP_TLS_DOMAINS" ]; then
-    local lego_bin
-    if lego_bin="$(install_lego_binary)"; then
-      if issue_cloudflare_certificate "$lego_bin"; then
-        log "Issued TLS certificate via lego + Cloudflare DNS."
-        return 0
-      fi
-      warn "lego certificate issuance failed, falling back to self-signed."
+    if issue_cloudflare_certificate "$lego_bin"; then
+      log "Issued TLS certificate via lego + Cloudflare DNS."
+      return 0
     fi
+    warn "lego certificate issuance via Cloudflare DNS failed."
   fi
-  if [ -n "$BOOTSTRAP_TLS_DOMAINS" ]; then
-    local lego_bin
-    if lego_bin="$(install_lego_binary)"; then
-      if issue_standalone_certificate "$lego_bin"; then
-        log "Issued TLS certificate via lego standalone HTTP challenge."
-        return 0
-      fi
-      warn "lego standalone certificate issuance failed, falling back to self-signed."
-    fi
-  fi
-  if [ "$had_existing_cert" = "1" ] && [ "$existing_self_signed" = "1" ]; then
-    warn "Keeping existing self-signed TLS certificate."
+
+  if issue_standalone_certificate "$lego_bin"; then
+    log "Issued TLS certificate via lego standalone HTTP challenge."
     return 0
   fi
-  generate_self_signed_certificate
-  log "Generated fallback self-signed certificate."
+
+  warn "lego standalone certificate issuance failed."
+  return 1
 }
 
 decode_base64_flexible() {
@@ -750,7 +811,8 @@ save_warp_runtime() {
 
 install_warpgo_binary() {
   local target="$RUNTIME_BIN_DIR/warp-go"
-  local version="v1.0.8"
+  local version
+  local fallback_version="v1.0.8"
   local arch asset archive_file unpack_dir candidate
   if [ -x "$target" ]; then
     printf '%s' "$target"
@@ -764,6 +826,8 @@ install_warpgo_binary() {
     warn "tar is required to install warp-go."
     return 1
   }
+  version="$(get_latest_gitlab_tag "ProjectWARP%2Fwarp-go" "$fallback_version")"
+  [ -n "$version" ] || version="$fallback_version"
   asset="warp-go_${version#v}_linux_${arch}.tar.gz"
   archive_file="$TMP_DIR/$asset"
   unpack_dir="$TMP_DIR/warp-go"

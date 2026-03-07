@@ -12,8 +12,6 @@ export interface WorkerBindings {
   PUBLIC_BASE_URL?: string
   SINGBOX_VERSION?: string
   XRAY_VERSION?: string
-  SINGBOX_RELEASE_BASE_URL?: string
-  XRAY_RELEASE_BASE_URL?: string
 }
 
 function createD1Adapter(db: D1Database): SqlAdapter {
@@ -48,8 +46,6 @@ export function getWorkerServices(bindings: WorkerBindings, requestUrl: string):
     runtimeCatalog: buildRuntimeCatalog({
       singBoxVersion: bindings.SINGBOX_VERSION,
       xrayVersion: bindings.XRAY_VERSION,
-      singBoxReleaseBaseUrl: bindings.SINGBOX_RELEASE_BASE_URL,
-      xrayReleaseBaseUrl: bindings.XRAY_RELEASE_BASE_URL,
     }),
   }
 }

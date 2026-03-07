@@ -93,8 +93,6 @@ Environment variables for runtime pinning:
 
 - `SINGBOX_VERSION`
 - `XRAY_VERSION`
-- `SINGBOX_RELEASE_BASE_URL`
-- `XRAY_RELEASE_BASE_URL`
 
 ## Cloudflare deployment
 

@@ -2,5 +2,3 @@ ADMIN_KEY=dev-admin-key
 PUBLIC_BASE_URL=http://127.0.0.1:8787
 SINGBOX_VERSION=1.13.0
 XRAY_VERSION=26.2.6
-SINGBOX_RELEASE_BASE_URL=https://github.com/SagerNet/sing-box/releases/download
-XRAY_RELEASE_BASE_URL=https://github.com/XTLS/Xray-core/releases/download

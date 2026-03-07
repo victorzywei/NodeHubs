@@ -148,6 +148,48 @@ wrap_github_url() {
   printf '%s' "$url"
 }
 
+direct_url() {
+  local url="$1"
+  printf '%s' "$url"
+}
+
+normalize_version_tag() {
+  local raw="$1"
+  if [ -z "$raw" ]; then
+    return 1
+  fi
+  case "$raw" in
+    v*) printf '%s' "$raw" ;;
+    *) printf 'v%s' "$raw" ;;
+  esac
+}
+
+get_latest_github_tag() {
+  local repo="$1"
+  local fallback="${2:-}"
+  local api tag redirect_url
+
+  tag=""
+  if command -v curl >/dev/null 2>&1; then
+    api="$(direct_url "https://api.github.com/repos/${repo}/releases/latest")"
+    tag="$(curl -fsSL "$api" 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+    if [ -z "$tag" ]; then
+      tag="$(curl -fsSL "$api" 2>/dev/null | tr -d '\r\n' | sed 's/.*"tag_name":"\([^"]*\)".*/\1/')"
+    fi
+    if [[ -z "$tag" || "$tag" == *"{"* ]]; then
+      redirect_url="$(direct_url "https://github.com/${repo}/releases/latest")"
+      tag="$(curl -fsSL -I "$redirect_url" 2>/dev/null | grep -i '^location:' | sed 's/.*\/tag\/\([^[:space:]]*\).*/\1/' | tr -d '\r\n')"
+    fi
+  fi
+
+  if [[ -z "$tag" || "$tag" == *"{"* ]] && [ -n "$fallback" ]; then
+    warn "Failed to detect latest ${repo} release tag, using fallback: $fallback"
+    tag="$fallback"
+  fi
+
+  printf '%s' "$tag"
+}
+
 http_download_to_file() {
   local url="$1"
   local target="$2"
@@ -273,7 +315,8 @@ describe_tls_certificate() {
 
 install_lego_binary() {
   local target="$RUNTIME_BIN_DIR/lego"
-  local version="v4.28.1"
+  local version
+  local fallback_version="v4.32.0"
   local arch asset archive_file unpack_dir
   if [ -x "$target" ]; then
     log "Reusing existing lego binary: $target"
@@ -288,7 +331,9 @@ install_lego_binary() {
     warn "tar is required to install lego."
     return 1
   }
-  asset="lego_${version#v}_linux_${arch}.tar.gz"
+  version="$(get_latest_github_tag "go-acme/lego" "$fallback_version")"
+  [ -n "$version" ] || version="$fallback_version"
+  asset="lego_${version}_linux_${arch}.tar.gz"
   archive_file="$TMP_DIR/$asset"
   unpack_dir="$TMP_DIR/lego"
   mkdir -p "$unpack_dir"
@@ -377,102 +422,48 @@ existing_certificate_is_self_signed() {
   [ -n "$issuer" ] && [ "$issuer" = "$subject" ]
 }
 
-generate_self_signed_certificate() {
-  local primary_domain="$BOOTSTRAP_PRIMARY_TLS_DOMAIN"
-  local openssl_conf="$TMP_DIR/openssl.cnf"
-  local openssl_log="$STATE_DIR/lego/self-signed.log"
-  local san_lines=""
-  local index=1
-  [ -n "$primary_domain" ] || primary_domain="localhost"
-  log "Generating self-signed TLS certificate for ${primary_domain}."
-  ensure_command openssl openssl || {
-    echo "openssl is required to generate fallback certificates." >&2
-    return 1
-  }
-  while IFS= read -r domain; do
-    [ -n "$domain" ] || continue
-    san_lines="$san_lines"$'\n'"DNS.${index} = ${domain}"
-    index=$((index + 1))
-  done <<< "$BOOTSTRAP_TLS_DOMAINS"
-  if [ -z "$san_lines" ]; then
-    san_lines=$'\n'"DNS.1 = ${primary_domain}"
-  fi
-  cat >"$openssl_conf" <<EOF
-[req]
-prompt = no
-default_bits = 2048
-default_md = sha256
-distinguished_name = dn
-x509_extensions = req_ext
-
-[dn]
-CN = ${primary_domain}
-
-[req_ext]
-subjectAltName = @alt_names
-
-[alt_names]${san_lines}
-EOF
-  mkdir -p "$(dirname "$BOOTSTRAP_CERT_PATH")"
-  mkdir -p "$STATE_DIR/lego"
-  if ! openssl req -x509 -nodes -newkey rsa:2048 -days 825 -keyout "$BOOTSTRAP_KEY_PATH" -out "$BOOTSTRAP_CERT_PATH" -config "$openssl_conf" >"$openssl_log" 2>&1; then
-    warn "Self-signed certificate generation failed."
-    tail_recent_lines "$openssl_log" 20 >&2
-    return 1
-  fi
-}
-
 ensure_tls_certificate() {
-  local had_existing_cert=0
-  local existing_self_signed=0
   if [ "$BOOTSTRAP_NEEDS_CERTS" != "1" ]; then
     return 0
   fi
   log "TLS bootstrap mode: public node"
   if [ -s "$BOOTSTRAP_CERT_PATH" ] && [ -s "$BOOTSTRAP_KEY_PATH" ]; then
-    had_existing_cert=1
     if existing_certificate_is_self_signed; then
-      existing_self_signed=1
-      warn "Existing TLS certificate is self-signed; attempting ACME replacement."
+      warn "Existing TLS certificate is self-signed; replacing via lego."
     else
       log "Reusing existing TLS certificate at $BOOTSTRAP_CERT_PATH."
       describe_tls_certificate || true
       return 0
     fi
   fi
+  if [ -z "$BOOTSTRAP_TLS_DOMAINS" ]; then
+    warn "TLS domains are empty; skipping certificate issuance."
+    return 1
+  fi
+
+  local lego_bin
+  lego_bin="$(install_lego_binary)" || return 1
+
   if [ -n "$NODE_CF_DNS_TOKEN" ] && [ -n "$BOOTSTRAP_TLS_DOMAINS" ]; then
-    log "Cloudflare DNS token detected; ACME DNS challenge will be used."
-    local lego_bin
-    if lego_bin="$(install_lego_binary)"; then
-      if issue_cloudflare_certificate "$lego_bin"; then
-        log "Issued TLS certificate via lego + Cloudflare DNS."
-        describe_tls_certificate || true
-        return 0
-      fi
-      warn "lego certificate issuance failed, falling back to self-signed."
+    log "Cloudflare DNS token detected; lego DNS challenge will be used."
+    if issue_cloudflare_certificate "$lego_bin"; then
+      log "Issued TLS certificate via lego + Cloudflare DNS."
+      describe_tls_certificate || true
+      return 0
     fi
+    warn "lego certificate issuance via Cloudflare DNS failed."
   else
     log "Cloudflare DNS token missing or no TLS domains configured."
   fi
-  if [ -n "$BOOTSTRAP_TLS_DOMAINS" ]; then
-    local lego_bin
-    if lego_bin="$(install_lego_binary)"; then
-      if issue_standalone_certificate "$lego_bin"; then
-        log "Issued TLS certificate via lego standalone HTTP challenge."
-        describe_tls_certificate || true
-        return 0
-      fi
-      warn "lego standalone certificate issuance failed."
-    fi
-  fi
-  if [ "$had_existing_cert" = "1" ] && [ "$existing_self_signed" = "1" ]; then
-    warn "Keeping existing self-signed TLS certificate at $BOOTSTRAP_CERT_PATH."
+
+  if issue_standalone_certificate "$lego_bin"; then
+    log "Issued TLS certificate via lego standalone HTTP challenge."
     describe_tls_certificate || true
     return 0
   fi
-  generate_self_signed_certificate
-  log "Generated fallback self-signed certificate at $BOOTSTRAP_CERT_PATH."
-  describe_tls_certificate || true
+
+  warn "lego standalone certificate issuance failed."
+  return 1
 }
 
 resolve_cloudflared_arch() {
@@ -1196,7 +1187,7 @@ nodehubsapi agent installed.
 - Heartbeat interval: $HEARTBEAT_INTERVAL_SECONDS s
 - Version pull interval: $VERSION_PULL_INTERVAL_SECONDS s
 - Mandatory bootstrap:
-  $([ "$NODE_NETWORK_TYPE" = "public" ] && printf '%s' "TLS certificate -> $BOOTSTRAP_CERT_PATH (CF DNS token enables ACME; otherwise self-signed fallback)" || printf '%s' "Argo -> $STATE_DIR/argo/domain")
+$([ "$NODE_NETWORK_TYPE" = "public" ] && printf '%s' "TLS certificate -> $BOOTSTRAP_CERT_PATH (CF DNS token uses lego DNS challenge; otherwise lego standalone challenge)" || printf '%s' "Argo -> $STATE_DIR/argo/domain")
 - Hook directories:
   $ETC_DIR/hooks/pre-apply.d
   $ETC_DIR/hooks/post-apply.d

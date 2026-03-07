@@ -98,8 +98,6 @@ export function getNodeServices(): AppServices {
     runtimeCatalog: buildRuntimeCatalog({
       singBoxVersion: process.env.SINGBOX_VERSION,
       xrayVersion: process.env.XRAY_VERSION,
-      singBoxReleaseBaseUrl: process.env.SINGBOX_RELEASE_BASE_URL,
-      xrayReleaseBaseUrl: process.env.XRAY_RELEASE_BASE_URL,
     }),
   }
 
