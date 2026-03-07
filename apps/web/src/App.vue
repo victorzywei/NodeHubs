@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
-import type { SystemStatus, NodeRecord, TemplateRecord, SubscriptionRecord, ReleaseRecord } from '@contracts/index'
+import type { SystemStatus, NodeRecord, TemplateRecord, SubscriptionRecord, ReleaseRecord, ReleasePreviewRecord } from '@contracts/index'
 import * as api from './lib/api'
 
 // ---- State ----
@@ -20,10 +20,20 @@ const subscriptions = ref<SubscriptionRecord[]>([])
 const showCreateNode = ref(false)
 const showCreateTemplate = ref(false)
 const showCreateSub = ref(false)
+const showPublishRelease = ref(false)
 const selectedNode = ref<NodeRecord|null>(null)
 const nodeReleases = ref<ReleaseRecord[]>([])
 const deployCommand = ref('')
 const uninstallCommand = ref('')
+const publishNode = ref<NodeRecord|null>(null)
+const publishKind = ref<'runtime'|'bootstrap'>('runtime')
+const publishTemplateIds = ref<string[]>([])
+const publishMessage = ref('')
+const publishingRelease = ref(false)
+const publishPreview = ref<ReleasePreviewRecord|null>(null)
+const publishPreviewLoading = ref(false)
+const publishPreviewError = ref('')
+let publishPreviewRequestId = 0
 
 // Toast
 const toasts = ref<{id:number,type:string,msg:string}[]>([])
@@ -154,6 +164,23 @@ async function publishRelease(nodeId: string) {
     await api.publishNode(adminKey.value, nodeId, { kind:'runtime', templateIds: templates.value.map(t=>t.id) })
     toast('success', '发布成功'); await loadAll(); await refreshStatus()
     if (selectedNode.value?.id === nodeId) await selectNode(selectedNode.value)
+  } catch (e:any) { toast('error', e.message) }
+}
+
+async function deleteNodeById(nodeId: string, nodeName: string) {
+  const confirmed = window.confirm(`确认删除节点「${nodeName}」？此操作不可恢复。`)
+  if (!confirmed) return
+  try {
+    await api.deleteNode(adminKey.value, nodeId)
+    if (selectedNode.value?.id === nodeId) {
+      selectedNode.value = null
+      nodeReleases.value = []
+      deployCommand.value = ''
+      uninstallCommand.value = ''
+    }
+    toast('success', '节点已删除')
+    await loadAll()
+    await refreshStatus()
   } catch (e:any) { toast('error', e.message) }
 }
 
@@ -359,6 +386,96 @@ function getSubscriptionUrl(token: string, format: string) {
   return `${base}/sub/${token}?format=${format}`
 }
 
+function openPublishRelease(node: NodeRecord) {
+  publishNode.value = node
+  publishKind.value = 'runtime'
+  publishMessage.value = ''
+  const engines = new Set(templates.value.map((template) => template.engine))
+  publishTemplateIds.value = engines.size === 1 ? templates.value.map((template) => template.id) : []
+  publishPreview.value = null
+  publishPreviewError.value = ''
+  showPublishRelease.value = true
+}
+
+function closePublishRelease() {
+  showPublishRelease.value = false
+  publishNode.value = null
+  publishKind.value = 'runtime'
+  publishTemplateIds.value = []
+  publishMessage.value = ''
+  publishPreview.value = null
+  publishPreviewError.value = ''
+  publishPreviewLoading.value = false
+  publishPreviewRequestId += 1
+}
+
+function togglePublishTemplate(templateId: string) {
+  if (publishTemplateIds.value.includes(templateId)) {
+    publishTemplateIds.value = publishTemplateIds.value.filter((id) => id !== templateId)
+    return
+  }
+  const template = templates.value.find((item) => item.id === templateId)
+  if (!template) return
+  if (publishSelectedEngine.value && publishSelectedEngine.value !== template.engine) return
+  publishTemplateIds.value = [...publishTemplateIds.value, templateId]
+}
+
+async function loadPublishPreview() {
+  if (!publishNode.value || publishTemplateIds.value.length === 0) {
+    publishPreview.value = null
+    publishPreviewError.value = ''
+    publishPreviewLoading.value = false
+    return
+  }
+
+  const requestId = ++publishPreviewRequestId
+  publishPreviewLoading.value = true
+  publishPreviewError.value = ''
+  try {
+    const preview = await api.previewNodeRelease(adminKey.value, publishNode.value.id, {
+      kind: publishKind.value,
+      templateIds: publishTemplateIds.value,
+      message: publishMessage.value.trim(),
+    })
+    if (requestId !== publishPreviewRequestId) return
+    publishPreview.value = preview
+  } catch (e:any) {
+    if (requestId !== publishPreviewRequestId) return
+    publishPreview.value = null
+    publishPreviewError.value = e.message || 'Preview failed'
+  } finally {
+    if (requestId === publishPreviewRequestId) {
+      publishPreviewLoading.value = false
+    }
+  }
+}
+
+async function publishSelectedRelease() {
+  if (!publishNode.value) return
+  if (publishKind.value === 'runtime' && publishTemplateIds.value.length === 0) {
+    toast('error', '请选择至少一个发布模板')
+    return
+  }
+  try {
+    publishingRelease.value = true
+    await api.publishNode(adminKey.value, publishNode.value.id, {
+      kind: publishKind.value,
+      templateIds: publishTemplateIds.value,
+      message: publishMessage.value.trim(),
+    })
+    const selectedNodeId = selectedNode.value?.id
+    toast('success', '发布成功')
+    closePublishRelease()
+    await loadAll()
+    await refreshStatus()
+    if (selectedNodeId) {
+      const latestNode = nodes.value.find((node) => node.id === selectedNodeId)
+      if (latestNode) await selectNode(latestNode)
+    }
+  } catch (e:any) { toast('error', e.message) }
+  finally { publishingRelease.value = false }
+}
+
 // Helpers
 function formatBytes(b: number) {
   if (b === 0) return '0 B'
@@ -372,6 +489,74 @@ function isOnline(n: NodeRecord) {
   return Date.now() - new Date(n.lastSeenAt).getTime() < 120000
 }
 
+function getNodeDomainDisplay(n: NodeRecord) {
+  if (n.networkType === 'noPublicIp') {
+    return n.argoDomain || n.argoTunnelDomain || '-'
+  }
+  const domains = [n.primaryDomain, n.backupDomain].filter(Boolean)
+  return domains.length > 0 ? domains.join(' / ') : '-'
+}
+
+function isWarpRunning(n: NodeRecord) {
+  const warpStatus = (n.warpStatus || '').toLowerCase()
+  return warpStatus.includes('running')
+}
+
+function getWarpStatusText(n: NodeRecord) {
+  const warpStatus = (n.warpStatus || '').trim().toLowerCase()
+  if (warpStatus.includes('running')) return '运行中'
+  if (warpStatus.includes('installed')) return '已安装'
+  return '未安装'
+}
+
+function getRuntimeVersion(n: NodeRecord) {
+  return (n.protocolRuntimeVersion || '').trim() || '-'
+}
+
+const publishSelectedTemplates = computed(() =>
+  templates.value.filter((template) => publishTemplateIds.value.includes(template.id)),
+)
+
+const publishSelectedEngine = computed(() => publishSelectedTemplates.value[0]?.engine || '')
+
+const publishTemplateChoices = computed(() =>
+  templates.value.map((template) => ({
+    ...template,
+    disabled: !!publishSelectedEngine.value
+      && publishSelectedEngine.value !== template.engine
+      && !publishTemplateIds.value.includes(template.id),
+  })),
+)
+
+const publishBlocked = computed(() =>
+  publishKind.value === 'runtime' && publishTemplateIds.value.length === 0,
+)
+
+function getWarpLabel(n: NodeRecord) {
+  const warpIpv6 = (n.warpIpv6 || '').trim()
+  if (warpIpv6) return warpIpv6
+  return getWarpStatusText(n)
+}
+
+function getArgoStatusText(n: NodeRecord) {
+  const argoStatus = (n.argoStatus || '').trim().toLowerCase()
+  if (argoStatus.includes('running')) return '运行中'
+  if (argoStatus.includes('installed')) return '已安装'
+  return '未安装'
+}
+
+function isArgoRunning(n: NodeRecord) {
+  const argoStatus = (n.argoStatus || '').toLowerCase()
+  return argoStatus.includes('running')
+}
+
+function getStorageUsage(n: NodeRecord) {
+  const total = Number(n.storageTotalBytes || 0)
+  const used = Number(n.storageUsedBytes || 0)
+  if (total <= 0) return '-'
+  return `${formatBytes(used)} / ${formatBytes(total)}`
+}
+
 function timeAgo(d: string|null) {
   if (!d) return '从未'
   const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000)
@@ -380,6 +565,14 @@ function timeAgo(d: string|null) {
   if (s < 86400) return Math.floor(s/3600) + '小时前'
   return Math.floor(s/86400) + '天前'
 }
+
+watch(
+  [showPublishRelease, publishKind, () => publishNode.value?.id || '', () => publishTemplateIds.value.join(',')],
+  ([visible]) => {
+    if (!visible) return
+    void loadPublishPreview()
+  },
+)
 
 const onlineCount = computed(() => nodes.value.filter(isOnline).length)
 
@@ -548,19 +741,22 @@ onMounted(() => { if (adminKey.value) login() })
           <div class="table-wrapper">
             <table class="data-table node-table">
               <thead><tr>
-                <th>名称</th><th>类型</th><th>地区</th><th>域名</th><th>状态</th><th>连接数</th><th>流量</th><th>操作</th>
+                <th>名称</th><th>类型</th><th>地区</th><th>域名/Argo</th><th>Warp</th><th>连接数</th><th>流量</th><th>操作</th>
               </tr></thead>
               <tbody>
                 <tr v-for="n in nodes" :key="n.id" class="cursor-pointer" @click="selectNode(n)">
                   <td class="node-name" :class="isOnline(n) ? 'online' : 'offline'">{{ n.name }}</td>
                   <td><span class="tag" :class="{accent:n.nodeType==='edge'}">{{ n.nodeType }}</span></td>
                   <td>{{ n.region || '-' }}</td>
-                  <td class="text-mono truncate">{{ n.primaryDomain || n.argoTunnelDomain || '-' }}</td>
-                  <td><span class="status-badge" :class="isOnline(n)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(n)?'在线':'离线' }}</span></td>
+                  <td class="text-mono truncate">{{ getNodeDomainDisplay(n) }}</td>
+                  <td><span class="warp-badge" :class="isWarpRunning(n) ? 'online' : 'offline'">{{ getWarpLabel(n) }}</span></td>
                   <td>{{ n.currentConnections }}</td>
                   <td class="text-muted" style="font-size:12px">↑{{ formatBytes(n.bytesOutTotal) }} ↓{{ formatBytes(n.bytesInTotal) }}</td>
                   <td>
-                    <button class="btn btn-sm btn-secondary" @click.stop="publishRelease(n.id)">发布</button>
+                    <div class="table-actions">
+                      <button class="btn btn-sm btn-secondary" @click.stop="openPublishRelease(n)">发布</button>
+                      <button class="btn btn-sm btn-danger" @click.stop="deleteNodeById(n.id, n.name)">删除</button>
+                    </div>
                   </td>
                 </tr>
                 <tr v-if="nodes.length===0"><td colspan="8"><div class="empty-state"><div class="empty-state-icon">🖥️</div><div class="empty-state-title">暂无节点</div><div class="empty-state-text">添加您的第一个代理节点以开始使用</div><button class="btn btn-primary" @click="showCreateNode=true">+ 添加节点</button></div></td></tr>
@@ -651,7 +847,23 @@ onMounted(() => { if (adminKey.value) login() })
             <div class="detail-row" v-if="selectedNode.argoTunnelDomain"><span class="detail-label">Argo 域名</span><span class="detail-value text-mono">{{ selectedNode.argoTunnelDomain }}</span></div>
             <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value"><span class="status-badge" :class="isOnline(selectedNode)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(selectedNode)?'在线':'离线' }}</span></span></div>
             <div class="detail-row"><span class="detail-label">最后在线</span><span class="detail-value">{{ timeAgo(selectedNode.lastSeenAt) }}</span></div>
-            <div class="detail-row" v-if="selectedNode.installWarp"><span class="detail-label">WARP</span><span class="detail-value"><span class="tag accent">已启用</span></span></div>
+            <div class="detail-row"><span class="detail-label">Runtime</span><span class="detail-value text-mono">{{ getRuntimeVersion(selectedNode) }}</span></div>
+            <div class="detail-row">
+              <span class="detail-label">WARP</span>
+              <span class="detail-value">
+                <span class="warp-badge" :class="isWarpRunning(selectedNode) ? 'online' : 'offline'">{{ getWarpStatusText(selectedNode) }}</span>
+              </span>
+            </div>
+            <div class="detail-row"><span class="detail-label">WARP IPv6</span><span class="detail-value text-mono">{{ selectedNode.warpIpv6 || '-' }}</span></div>
+            <div class="detail-row"><span class="detail-label">WARP Endpoint</span><span class="detail-value text-mono">{{ selectedNode.warpEndpoint || '-' }}</span></div>
+            <div class="detail-row">
+              <span class="detail-label">Argo</span>
+              <span class="detail-value">
+                <span class="warp-badge" :class="isArgoRunning(selectedNode) ? 'online' : 'offline'">{{ getArgoStatusText(selectedNode) }}</span>
+              </span>
+            </div>
+            <div class="detail-row"><span class="detail-label">Argo Domain</span><span class="detail-value text-mono">{{ selectedNode.argoDomain || selectedNode.argoTunnelDomain || '-' }}</span></div>
+            <div class="detail-row"><span class="detail-label">Storage</span><span class="detail-value">{{ getStorageUsage(selectedNode) }}</span></div>
           </div>
           <div class="detail-section">
             <div class="detail-section-title">资源监控</div>
@@ -694,6 +906,91 @@ onMounted(() => { if (adminKey.value) login() })
         </div>
       </aside>
     </template>
+
+    <!-- Publish Release Modal -->
+    <div v-if="showPublishRelease" class="modal-overlay" @click.self="closePublishRelease">
+      <div class="modal-content" style="max-width:640px">
+        <div class="modal-header">
+          <h3 class="modal-title">发布节点版本</h3>
+          <button class="modal-close-btn" @click="closePublishRelease">✕</button>
+        </div>
+        <div class="modal-body" style="display:grid;gap:16px">
+          <template v-if="publishNode">
+            <div class="card" style="padding:14px">
+              <div style="font-size:15px;font-weight:700">{{ publishNode.name }}</div>
+              <div class="text-muted text-mono" style="margin-top:4px">{{ publishNode.id }}</div>
+              <div class="text-muted" style="margin-top:8px;font-size:12px">选择发布类型和模板，节点会在下一次 reconcile 时自动拉取。</div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">发布类型</label>
+              <select class="form-select" v-model="publishKind">
+                <option value="runtime">Runtime</option>
+                <option value="bootstrap">Bootstrap</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">模板选择</label>
+              <div v-if="templates.length===0" class="empty-state" style="padding:20px 12px">
+                <div class="empty-state-title">暂无模板</div>
+                <div class="empty-state-text" style="margin-bottom:0">请先创建协议模板。</div>
+              </div>
+              <div v-else class="publish-template-list">
+                <label
+                  v-for="template in publishTemplateChoices"
+                  :key="template.id"
+                  class="publish-template-row"
+                  :class="{ disabled: template.disabled }"
+                >
+                  <input
+                    type="checkbox"
+                    class="form-checkbox"
+                    :checked="publishTemplateIds.includes(template.id)"
+                    :disabled="template.disabled"
+                    @change="togglePublishTemplate(template.id)"
+                  />
+                  <div class="publish-template-copy">
+                    <div class="publish-template-name">{{ template.name }}</div>
+                    <div class="publish-template-meta">{{ template.engine }} / {{ template.protocol }} / {{ template.transport }} / {{ template.tlsMode }}</div>
+                  </div>
+                </label>
+              </div>
+              <div class="text-muted" style="margin-top:8px;font-size:12px">
+                <span v-if="publishSelectedEngine">当前模板引擎：{{ publishSelectedEngine }}</span>
+                <span v-else>同一次发布只能选择同一引擎的模板。</span>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">发布备注</label>
+              <textarea class="form-textarea" v-model="publishMessage" placeholder="可选，例如：切换到 sing-box 模板组合" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">配置预览</label>
+              <div class="publish-preview">
+                <div v-if="publishPreviewLoading" class="text-muted">预览生成中...</div>
+                <div v-else-if="publishPreviewError" class="publish-preview-error">{{ publishPreviewError }}</div>
+                <div v-else-if="publishPreview">
+                  <div class="publish-preview-meta">内核 {{ publishPreview.engine }} / 入口 {{ publishPreview.entryConfigPath }}</div>
+                  <div v-for="file in publishPreview.files" :key="file.path" class="publish-preview-file">
+                    <div class="publish-preview-file-head">{{ file.path }}</div>
+                    <pre class="code-block publish-preview-code">{{ file.content }}</pre>
+                  </div>
+                </div>
+                <div v-else class="text-muted">选择模板后自动生成预览</div>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="closePublishRelease">取消</button>
+          <button class="btn btn-primary" :disabled="publishingRelease || publishBlocked" @click="publishSelectedRelease">
+            {{ publishingRelease ? '发布中...' : '确认发布' }}
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- Create Node Modal -->
     <div v-if="showCreateNode" class="modal-overlay" @click.self="showCreateNode=false">

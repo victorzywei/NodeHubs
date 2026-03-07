@@ -570,11 +570,6 @@ a:hover {
     border-bottom: none;
 }
 
-.node-table th:nth-child(5),
-.node-table td:nth-child(5) {
-    display: none;
-}
-
 .node-name {
     font-weight: 600;
     transition: color var(--transition-fast);
@@ -586,6 +581,117 @@ a:hover {
 
 .node-name.offline {
     color: var(--color-danger);
+}
+
+.warp-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: var(--radius-full);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.warp-badge.online {
+    background: var(--color-success-bg);
+    color: var(--color-success);
+}
+
+.warp-badge.offline {
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
+}
+
+.table-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.publish-template-list {
+    display: grid;
+    gap: 10px;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.publish-template-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--glass-border);
+    background: rgba(255, 255, 255, 0.03);
+    transition: border-color var(--transition-fast), background var(--transition-fast), opacity var(--transition-fast);
+    cursor: pointer;
+}
+
+.publish-template-row:hover {
+    border-color: rgba(99, 102, 241, 0.24);
+    background: rgba(99, 102, 241, 0.08);
+}
+
+.publish-template-row.disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.publish-template-copy {
+    min-width: 0;
+}
+
+.publish-template-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.publish-template-meta {
+    margin-top: 3px;
+    font-size: 11px;
+    color: var(--color-text-tertiary);
+    word-break: break-word;
+}
+
+.publish-preview {
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.02);
+    padding: 10px;
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.publish-preview-meta {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    margin-bottom: 8px;
+}
+
+.publish-preview-file {
+    margin-top: 8px;
+}
+
+.publish-preview-file-head {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-tertiary);
+    margin-bottom: 6px;
+}
+
+.publish-preview-code {
+    margin: 0;
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.publish-preview-error {
+    color: var(--color-danger);
+    font-size: 12px;
 }
 
 /* ---- Status Badge ---- */

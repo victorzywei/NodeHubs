@@ -30,6 +30,14 @@ export interface NodeRecord {
   argoTunnelPort: number
   installWarp: boolean
   installArgo: boolean
+  warpStatus?: string
+  warpIpv6?: string
+  warpEndpoint?: string
+  argoStatus?: string
+  argoDomain?: string
+  storageTotalBytes?: number
+  storageUsedBytes?: number
+  storageUsagePercent?: number | null
   configRevision: number
   bootstrapRevision: number
   desiredReleaseRevision: number
@@ -73,6 +81,14 @@ export interface ReleaseRecord {
   message: string
   createdAt: string
   updatedAt: string
+}
+
+export interface ReleasePreviewRecord {
+  kind: ReleaseKind
+  engine: TemplateRecord['engine']
+  entryConfigPath: string
+  files: ReleaseConfigFile[]
+  templateIds: string[]
 }
 
 export interface SubscriptionRecord {

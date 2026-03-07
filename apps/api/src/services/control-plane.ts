@@ -7,6 +7,7 @@ import type {
   NodeRecord,
   PublicSubscriptionDocument,
   ReleaseKind,
+  ReleasePreviewRecord,
   ReleaseRecord,
   ReleaseStatus,
   SubscriptionRecord,
@@ -51,6 +52,14 @@ type NodeRow = {
   bytes_in_total: number
   bytes_out_total: number
   current_connections: number
+  warp_status?: string
+  warp_ipv6?: string
+  warp_endpoint?: string
+  argo_status?: string
+  argo_domain?: string
+  storage_total_bytes?: number
+  storage_used_bytes?: number
+  storage_usage_percent?: number | null
   protocol_runtime_version: string
   created_at: string
   updated_at: string
@@ -142,6 +151,16 @@ function toNodeRecord(row: NodeRow): NodeRecord {
     bytesInTotal: Number(row.bytes_in_total || 0),
     bytesOutTotal: Number(row.bytes_out_total || 0),
     currentConnections: Number(row.current_connections || 0),
+    warpStatus: row.warp_status || '',
+    warpIpv6: row.warp_ipv6 || '',
+    warpEndpoint: row.warp_endpoint || '',
+    argoStatus: row.argo_status || '',
+    argoDomain: row.argo_domain || '',
+    storageTotalBytes: Number(row.storage_total_bytes || 0),
+    storageUsedBytes: Number(row.storage_used_bytes || 0),
+    storageUsagePercent: row.storage_usage_percent === null || row.storage_usage_percent === undefined
+      ? null
+      : Number(row.storage_usage_percent),
     protocolRuntimeVersion: row.protocol_runtime_version || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -250,6 +269,31 @@ export async function getNodeById(services: AppServices, nodeId: string): Promis
   return row ? toNodeRecord(row) : null
 }
 
+export async function deleteNode(services: AppServices, nodeId: string): Promise<boolean> {
+  const current = await getNodeRow(services, nodeId)
+  if (!current) return false
+
+  await services.db.run('DELETE FROM traffic_samples WHERE node_id = ?', [nodeId])
+  await services.db.run('DELETE FROM releases WHERE node_id = ?', [nodeId])
+  await services.db.run('DELETE FROM nodes WHERE id = ?', [nodeId])
+
+  const subscriptions = await services.db.all<Pick<SubscriptionRow, 'id' | 'visible_node_ids_json'>>(
+    'SELECT id, visible_node_ids_json FROM subscriptions',
+  )
+  const updatedAt = nowIso()
+  for (const subscription of subscriptions) {
+    const visibleNodeIds = parseJsonObject<string[]>(subscription.visible_node_ids_json, [])
+    if (!visibleNodeIds.includes(nodeId)) continue
+    const nextVisibleNodeIds = visibleNodeIds.filter((visibleNodeId) => visibleNodeId !== nodeId)
+    await services.db.run(
+      'UPDATE subscriptions SET visible_node_ids_json = ?, updated_at = ? WHERE id = ?',
+      [JSON.stringify(nextVisibleNodeIds), updatedAt, subscription.id],
+    )
+  }
+
+  return true
+}
+
 export async function createNode(services: AppServices, input: CreateNodeInput): Promise<NodeRecord> {
   const id = createId('node')
   const now = nowIso()
@@ -259,8 +303,9 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       github_mirror_url, warp_license_key, cf_dns_token, argo_tunnel_token, argo_tunnel_domain, argo_tunnel_port,
       install_warp, install_argo, config_revision, bootstrap_revision, desired_release_revision,
       current_release_revision, current_release_status, bytes_in_total, bytes_out_total,
-      current_connections, protocol_runtime_version, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      current_connections, warp_status, warp_ipv6, warp_endpoint, argo_status, argo_domain,
+      storage_total_bytes, storage_used_bytes, storage_usage_percent, protocol_runtime_version, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       createToken(),
@@ -289,6 +334,14 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       0,
       0,
       '',
+      '',
+      '',
+      '',
+      '',
+      0,
+      0,
+      null,
+      '',
       now,
       now,
     ],
@@ -311,7 +364,9 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
      SET name = ?, node_type = ?, region = ?, tags_json = ?, network_type = ?, primary_domain = ?, backup_domain = ?, entry_ip = ?,
          github_mirror_url = ?, warp_license_key = ?, cf_dns_token = ?, argo_tunnel_token = ?, argo_tunnel_domain = ?, argo_tunnel_port = ?,
          install_warp = ?, install_argo = ?, bytes_in_total = ?, bytes_out_total = ?, current_connections = ?,
-         cpu_usage_percent = ?, memory_usage_percent = ?, protocol_runtime_version = ?, last_seen_at = ?,
+         cpu_usage_percent = ?, memory_usage_percent = ?, warp_status = ?, warp_ipv6 = ?, warp_endpoint = ?,
+         argo_status = ?, argo_domain = ?, storage_total_bytes = ?, storage_used_bytes = ?, storage_usage_percent = ?,
+         protocol_runtime_version = ?, last_seen_at = ?,
          config_revision = ?, bootstrap_revision = ?, updated_at = ?
      WHERE id = ?`,
     [
@@ -336,6 +391,14 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       input.currentConnections ?? current.current_connections,
       input.cpuUsagePercent ?? current.cpu_usage_percent,
       input.memoryUsagePercent ?? current.memory_usage_percent,
+      input.warpStatus ?? current.warp_status ?? '',
+      input.warpIpv6 ?? current.warp_ipv6 ?? '',
+      input.warpEndpoint ?? current.warp_endpoint ?? '',
+      input.argoStatus ?? current.argo_status ?? '',
+      input.argoDomain ?? current.argo_domain ?? '',
+      input.storageTotalBytes ?? current.storage_total_bytes ?? 0,
+      input.storageUsedBytes ?? current.storage_used_bytes ?? 0,
+      input.storageUsagePercent ?? current.storage_usage_percent ?? null,
       input.protocolRuntimeVersion ?? current.protocol_runtime_version,
       input.lastSeenAt ?? current.last_seen_at,
       nextConfigRevision,
@@ -541,6 +604,57 @@ export async function publishNodeRelease(
   return row ? toReleaseRecord(row) : null
 }
 
+export async function previewNodeRelease(
+  services: AppServices,
+  nodeId: string,
+  kind: ReleaseKind,
+  templateIds: string[],
+  message: string,
+): Promise<ReleasePreviewRecord | null> {
+  const node = await getNodeById(services, nodeId)
+  if (!node) return null
+
+  const uniqueTemplateIds = uniqueIds(templateIds)
+  const templateRows = await getTemplateRows(services, uniqueTemplateIds)
+  if (uniqueTemplateIds.length !== templateRows.length) {
+    throw new Error('One or more selected templates do not exist')
+  }
+  if (kind === 'runtime' && templateRows.length === 0) {
+    throw new Error('Runtime releases require at least one protocol template')
+  }
+
+  const previewRevision = Number(node.desiredReleaseRevision || 0) + 1
+  const createdAt = nowIso()
+  const summary = summarizeRelease(kind, uniqueTemplateIds, message)
+  const artifact = renderReleaseArtifact(
+    {
+      releaseId: createId('preview'),
+      revision: previewRevision,
+      kind,
+      configRevision: Number(node.configRevision || 0),
+      bootstrapRevision: Number(node.bootstrapRevision || 0),
+      createdAt,
+      message,
+      summary,
+      node: {
+        ...node,
+        desiredReleaseRevision: previewRevision,
+        currentReleaseStatus: 'pending',
+      },
+      templates: templateRows.map(toTemplateRecord),
+    },
+    services.runtimeCatalog,
+  )
+
+  return {
+    kind: artifact.kind,
+    engine: artifact.runtime.engine,
+    entryConfigPath: artifact.runtime.entryConfigPath,
+    files: artifact.runtime.files,
+    templateIds: uniqueTemplateIds,
+  }
+}
+
 export async function listNodeReleases(services: AppServices, nodeId: string): Promise<ReleaseRecord[]> {
   const rows = await services.db.all<ReleaseRow>('SELECT * FROM releases WHERE node_id = ? ORDER BY revision DESC', [nodeId])
   return rows.map(toReleaseRecord)
@@ -552,9 +666,21 @@ export async function getReleaseById(services: AppServices, releaseId: string): 
 
 export async function recordHeartbeat(services: AppServices, input: HeartbeatInput): Promise<NodeRecord | null> {
   const now = nowIso()
+  const nextWarpStatus = input.warpStatus === undefined ? null : input.warpStatus
+  const nextWarpIpv6 = input.warpIpv6 === undefined ? null : input.warpIpv6
+  const nextWarpEndpoint = input.warpEndpoint === undefined ? null : input.warpEndpoint
+  const nextArgoStatus = input.argoStatus === undefined ? null : input.argoStatus
+  const nextArgoDomain = input.argoDomain === undefined ? null : input.argoDomain
+  const nextStorageTotalBytes = input.storageTotalBytes === undefined ? null : input.storageTotalBytes
+  const nextStorageUsedBytes = input.storageUsedBytes === undefined ? null : input.storageUsedBytes
+  const nextStorageUsagePercent = input.storageUsagePercent === undefined ? null : input.storageUsagePercent
   await services.db.run(
     `UPDATE nodes
      SET bytes_in_total = ?, bytes_out_total = ?, current_connections = ?, cpu_usage_percent = ?, memory_usage_percent = ?,
+         warp_status = coalesce(?, warp_status), warp_ipv6 = coalesce(?, warp_ipv6), warp_endpoint = coalesce(?, warp_endpoint),
+         argo_status = coalesce(?, argo_status), argo_domain = coalesce(?, argo_domain),
+         storage_total_bytes = coalesce(?, storage_total_bytes), storage_used_bytes = coalesce(?, storage_used_bytes),
+         storage_usage_percent = coalesce(?, storage_usage_percent),
          protocol_runtime_version = ?, last_seen_at = ?, updated_at = ?
      WHERE id = ?`,
     [
@@ -563,6 +689,14 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
       input.currentConnections,
       input.cpuUsagePercent,
       input.memoryUsagePercent,
+      nextWarpStatus,
+      nextWarpIpv6,
+      nextWarpEndpoint,
+      nextArgoStatus,
+      nextArgoDomain,
+      nextStorageTotalBytes,
+      nextStorageUsedBytes,
+      nextStorageUsagePercent,
       input.protocolRuntimeVersion,
       now,
       now,

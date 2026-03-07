@@ -33,6 +33,7 @@ type NormalizedTemplate = {
   tlsMode: TemplateRecord['tlsMode']
   server: string
   port: number
+  listenPort: number
   host: string
   sni: string
   path: string
@@ -223,19 +224,27 @@ function ensureField(value: string, fieldName: string, templateName: string): st
   return value
 }
 
+function defaultTemplateServer(node: NodeRecord): string {
+  if (node.networkType === 'noPublicIp') {
+    return node.argoTunnelDomain || node.primaryDomain || node.backupDomain || node.entryIp
+  }
+  return node.primaryDomain || node.entryIp || node.backupDomain || node.argoTunnelDomain
+}
+
 function normalizeTemplate(node: NodeRecord, template: TemplateRecord): NormalizedTemplate {
   ensureProtocolSupport(template)
   const defaults = template.defaults || {}
-  const server = readString(defaults, 'server', node.primaryDomain || node.entryIp || node.backupDomain)
+  const server = readString(defaults, 'server', defaultTemplateServer(node))
   if (!server) {
-    throw new Error(`Node ${node.name} does not have a primary domain or entry IP for template ${template.name}`)
+    throw new Error(`Node ${node.name} does not have a reachable domain or entry IP for template ${template.name}`)
   }
 
   const protocol = template.protocol.toLowerCase()
   const transport = template.transport.toLowerCase()
   const tlsMode = template.tlsMode
-  const host = readString(defaults, 'host', node.primaryDomain || server)
-  const sni = readString(defaults, 'sni', node.primaryDomain || host || server)
+  const listenPort = readNumber(defaults, ['serverPort', 'port'], defaultPort(template))
+  const host = readString(defaults, 'host', node.primaryDomain || node.argoTunnelDomain || server)
+  const sni = readString(defaults, 'sni', node.primaryDomain || node.argoTunnelDomain || host || server)
   const normalized: NormalizedTemplate = {
     id: template.id,
     name: template.name,
@@ -244,7 +253,8 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
     transport,
     tlsMode,
     server,
-    port: readNumber(defaults, ['serverPort', 'port'], defaultPort(template)),
+    port: node.networkType === 'noPublicIp' ? 443 : listenPort,
+    listenPort,
     host,
     sni,
     path: normalizePath(readString(defaults, 'path', `/connect/${template.id.slice(-6)}`)),
@@ -287,7 +297,7 @@ function buildSingBoxInbound(template: NormalizedTemplate, index: number) {
     type: protocol,
     tag: `in-${index + 1}`,
     listen: '::',
-    listen_port: template.port,
+    listen_port: template.listenPort,
   }
 
   if (template.protocol === 'vless') {
@@ -379,7 +389,7 @@ function buildXrayInbound(template: NormalizedTemplate, index: number) {
 
   const inbound: Record<string, unknown> = {
     tag: `in-${index + 1}`,
-    port: template.port,
+    port: template.listenPort,
     listen: '0.0.0.0',
     protocol: template.protocol,
   }

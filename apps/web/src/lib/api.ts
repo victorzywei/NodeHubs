@@ -1,5 +1,6 @@
 import type {
   NodeRecord,
+  ReleasePreviewRecord,
   ReleaseRecord,
   SubscriptionRecord,
   SystemStatus,
@@ -75,6 +76,12 @@ export function createNode(adminKey: string, payload: Record<string, unknown>): 
   }, adminKey)
 }
 
+export function deleteNode(adminKey: string, nodeId: string): Promise<{ deleted: string }> {
+  return request(`/api/nodes/${nodeId}`, {
+    method: 'DELETE',
+  }, adminKey)
+}
+
 export function listTemplates(adminKey: string): Promise<TemplateRecord[]> {
   return request('/api/templates', {}, adminKey)
 }
@@ -107,6 +114,17 @@ export function listNodeReleases(adminKey: string, nodeId: string): Promise<Rele
 
 export function publishNode(adminKey: string, nodeId: string, payload: Record<string, unknown>): Promise<ReleaseRecord> {
   return request(`/api/nodes/${nodeId}/releases`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, adminKey)
+}
+
+export function previewNodeRelease(
+  adminKey: string,
+  nodeId: string,
+  payload: Record<string, unknown>,
+): Promise<ReleasePreviewRecord> {
+  return request(`/api/nodes/${nodeId}/releases/preview`, {
     method: 'POST',
     body: JSON.stringify(payload),
   }, adminKey)

@@ -5,6 +5,7 @@ import { fail, ok } from '../lib/response'
 import {
   acknowledgeRelease,
   createNode,
+  deleteNode,
   getDesiredRelease,
   getNodeInstallTarget,
   getNodeById,
@@ -12,6 +13,7 @@ import {
   listNodeReleases,
   listNodeTraffic,
   listNodes,
+  previewNodeRelease,
   publishNodeRelease,
   recordHeartbeat,
   resolveAgentNode,
@@ -59,10 +61,35 @@ nodeRoutes.patch('/:id', async (c) => {
   return ok(node)
 })
 
+nodeRoutes.delete('/:id', async (c) => {
+  const auth = requireAdmin(c)
+  if (auth) return auth
+  const nodeId = c.req.param('id')
+  const removed = await deleteNode(c.get('services'), nodeId)
+  if (!removed) return fail('NOT_FOUND', 'Node not found', 404)
+  return ok({ deleted: nodeId })
+})
+
 nodeRoutes.get('/:id/releases', async (c) => {
   const auth = requireAdmin(c)
   if (auth) return auth
   return ok(await listNodeReleases(c.get('services'), c.req.param('id')))
+})
+
+nodeRoutes.post('/:id/releases/preview', async (c) => {
+  const auth = requireAdmin(c)
+  if (auth) return auth
+  const body = await c.req.json().catch(() => null)
+  const parsed = publishNodeSchema.safeParse(body)
+  if (!parsed.success) return fail('VALIDATION', parsed.error.issues[0]?.message || 'invalid preview body', 400)
+  let preview = null
+  try {
+    preview = await previewNodeRelease(c.get('services'), c.req.param('id'), parsed.data.kind, parsed.data.templateIds, parsed.data.message)
+  } catch (error) {
+    return fail('PREVIEW_FAILED', error instanceof Error ? error.message : 'Failed to render release preview', 400)
+  }
+  if (!preview) return fail('NOT_FOUND', 'Node not found', 404)
+  return ok(preview)
 })
 
 nodeRoutes.post('/:id/releases', async (c) => {
@@ -88,6 +115,29 @@ nodeRoutes.get('/:id/traffic', async (c) => {
   return ok(await listNodeTraffic(c.get('services'), c.req.param('id'), Number.isFinite(limit) ? limit : 24))
 })
 
+nodeRoutes.get('/agent/install', async (c) => {
+  const nodeId = c.req.query('nodeId') || ''
+  if (!nodeId) return fail('VALIDATION', 'nodeId is required', 400)
+  const nodeRow = await resolveAgentNode(c.get('services'), nodeId, c.req.header('X-Agent-Token') || '')
+  if (!nodeRow) return fail('UNAUTHORIZED', 'Invalid node credentials', 401)
+  const auth = requireAgentToken(c, nodeRow.agent_token)
+  if (auth) return auth
+
+  const script = buildAgentInstallScript({
+    publicBaseUrl: c.get('services').publicBaseUrl,
+    nodeId: nodeRow.id,
+    agentToken: nodeRow.agent_token,
+  })
+  return new Response(script, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/x-shellscript; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Disposition': `inline; filename="${nodeRow.name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase() || 'node'}-install.sh"`,
+    },
+  })
+})
+
 nodeRoutes.get('/:id/install-script', async (c) => {
   const auth = requireAdmin(c)
   if (auth) return auth
@@ -111,11 +161,12 @@ nodeRoutes.get('/:id/install-script', async (c) => {
 nodeRoutes.get('/:id/deploy-command', async (c) => {
   const auth = requireAdmin(c)
   if (auth) return auth
-  const node = await getNodeById(c.get('services'), c.req.param('id'))
-  if (!node) return fail('NOT_FOUND', 'Node not found', 404)
+  const target = await getNodeInstallTarget(c.get('services'), c.req.param('id'))
+  if (!target) return fail('NOT_FOUND', 'Node not found', 404)
   const command = buildDeployCommand({
     publicBaseUrl: c.get('services').publicBaseUrl,
-    nodeId: node.id,
+    nodeId: target.id,
+    agentToken: target.agentToken,
   })
   return ok({ command })
 })

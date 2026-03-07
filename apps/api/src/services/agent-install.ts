@@ -7,9 +7,12 @@ function shellQuote(value: string): string {
 export function buildDeployCommand(input: {
   publicBaseUrl: string
   nodeId: string
+  agentToken: string
 }): string {
   const apiBase = input.publicBaseUrl.replace(/\/+$/, '')
-  return `URL=${shellQuote(`${apiBase}/agent/install`)}; if command -v curl >/dev/null 2>&1; then curl -fsSL $URL; else wget -q -O - $URL; fi | bash -s -- --api-base ${shellQuote(apiBase)} --node-id ${shellQuote(input.nodeId)}`
+  const installUrl = `${apiBase}/api/nodes/agent/install?nodeId=${encodeURIComponent(input.nodeId)}`
+  const tokenHeader = `X-Agent-Token: ${input.agentToken}`
+  return `URL=${shellQuote(installUrl)}; TOKEN_HEADER=${shellQuote(tokenHeader)}; if command -v curl >/dev/null 2>&1; then curl -fsSL -H "$TOKEN_HEADER" "$URL"; elif command -v wget >/dev/null 2>&1; then wget -qO- --header="$TOKEN_HEADER" "$URL"; else busybox wget -qO- --header="$TOKEN_HEADER" "$URL"; fi | bash`
 }
 
 export function buildUninstallCommand(): string {
@@ -53,11 +56,103 @@ export function buildAgentReconcileEnv(input: {
   ].join('\n')
 }
 
+type BootstrapTemplateData = {
+  protocol: string
+  transport: string
+  tlsMode: ReleaseArtifact['templates'][number]['tlsMode']
+  server: string
+  sni: string
+  certPath: string
+  keyPath: string
+  listenPort: number
+}
+
+function releaseTemplateString(source: Record<string, unknown>, key: string, fallback = ''): string {
+  const value = source[key]
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return fallback
+}
+
+function releaseTemplateNumber(source: Record<string, unknown>, keys: string[], fallback: number): number {
+  for (const key of keys) {
+    const value = source[key]
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value)
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value)
+      if (Number.isFinite(parsed)) return Math.trunc(parsed)
+    }
+  }
+  return fallback
+}
+
+function defaultReleaseTemplateServer(node: ReleaseArtifact['node']): string {
+  if (node.networkType === 'noPublicIp') {
+    return node.argoTunnelDomain || node.primaryDomain || node.backupDomain || node.entryIp
+  }
+  return node.primaryDomain || node.entryIp || node.backupDomain || node.argoTunnelDomain
+}
+
+function buildBootstrapTemplateData(artifact: ReleaseArtifact): BootstrapTemplateData[] {
+  return artifact.templates.map((template) => {
+    const defaults = template.defaults || {}
+    const server = releaseTemplateString(defaults, 'server', defaultReleaseTemplateServer(artifact.node))
+    const sni = releaseTemplateString(defaults, 'sni', artifact.node.primaryDomain || artifact.node.argoTunnelDomain || server)
+    return {
+      protocol: template.protocol.toLowerCase(),
+      transport: template.transport.toLowerCase(),
+      tlsMode: template.tlsMode,
+      server,
+      sni,
+      certPath: releaseTemplateString(defaults, 'certPath', '/etc/nodehubsapi/certs/server.crt'),
+      keyPath: releaseTemplateString(defaults, 'keyPath', '/etc/nodehubsapi/certs/server.key'),
+      listenPort: releaseTemplateNumber(defaults, ['serverPort', 'port'], template.tlsMode === 'none' ? 80 : 443),
+    }
+  })
+}
+
+function uniqueValues(values: string[]): string[] {
+  const seen = new Set<string>()
+  const output: string[] = []
+  for (const value of values) {
+    const normalized = value.trim()
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    output.push(normalized)
+  }
+  return output
+}
+
+function isIpLike(value: string): boolean {
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value)) return true
+  return value.includes(':') && /^[0-9a-f:]+$/i.test(value)
+}
+
+function buildShellMultilineAssignment(name: string, values: string[]): string {
+  if (values.length === 0) return `${name}=''`
+  const label = `${name}_EOF`
+  return `${name}=$(cat <<'${label}'\n${values.join('\n')}\n${label}\n)`
+}
+
 export function buildReleaseApplyScript(artifact: ReleaseArtifact): string {
   const runtime = artifact.runtime
   const binary = runtime.binary
   const configPath = `/etc/nodehubsapi/${runtime.entryConfigPath}`
   const runtimeFileBlocks = buildRuntimeFileBlocks(artifact)
+  const bootstrapTemplates = buildBootstrapTemplateData(artifact)
+  const tlsTemplates = bootstrapTemplates.filter((template) => template.tlsMode === 'tls' || template.protocol === 'hysteria2')
+  const tlsDomains = uniqueValues(
+    [
+      ...tlsTemplates.flatMap((template) => [template.server, template.sni]),
+      artifact.node.primaryDomain,
+      artifact.node.backupDomain,
+      artifact.node.argoTunnelDomain,
+    ].filter((value) => value && !isIpLike(value)),
+  )
+  const bootstrapTlsDomains = buildShellMultilineAssignment('BOOTSTRAP_TLS_DOMAINS', tlsDomains)
+  const bootstrapCertPath = tlsTemplates[0]?.certPath || '/etc/nodehubsapi/certs/server.crt'
+  const bootstrapKeyPath = tlsTemplates[0]?.keyPath || '/etc/nodehubsapi/certs/server.key'
+  const argoOriginPort = String(bootstrapTemplates[0]?.listenPort || artifact.node.argoTunnelPort || 443)
 
   return `#!/usr/bin/env bash
 set -euo pipefail
@@ -78,6 +173,19 @@ RUNTIME_SERVICE_NAME=${shellQuote(artifact.bootstrap.runtimeServiceName)}
 RUNTIME_SERVICE_FILE=${shellQuote(`/etc/systemd/system/${artifact.bootstrap.runtimeServiceName}.service`)}
 ETC_DIR=${shellQuote('/etc/nodehubsapi')}
 STATE_DIR=${shellQuote('/opt/nodehubsapi')}
+GITHUB_MIRROR_URL=${shellQuote(artifact.node.githubMirrorUrl || '')}
+BOOTSTRAP_INSTALL_WARP=${artifact.bootstrap.installWarp ? '1' : '0'}
+BOOTSTRAP_INSTALL_ARGO=${artifact.bootstrap.installArgo ? '1' : '0'}
+BOOTSTRAP_NEEDS_CERTS=${tlsTemplates.length > 0 ? '1' : '0'}
+BOOTSTRAP_CERT_PATH=${shellQuote(bootstrapCertPath)}
+BOOTSTRAP_KEY_PATH=${shellQuote(bootstrapKeyPath)}
+BOOTSTRAP_PRIMARY_TLS_DOMAIN=${shellQuote(tlsDomains[0] || '')}
+NODE_CF_DNS_TOKEN=${shellQuote(artifact.node.cfDnsToken || '')}
+NODE_WARP_LICENSE_KEY=${shellQuote(artifact.node.warpLicenseKey || '')}
+NODE_ARGO_TUNNEL_TOKEN=${shellQuote(artifact.node.argoTunnelToken || '')}
+NODE_ARGO_TUNNEL_DOMAIN=${shellQuote(artifact.node.argoTunnelDomain || '')}
+NODE_ARGO_ORIGIN_PORT=${shellQuote(argoOriginPort)}
+${bootstrapTlsDomains}
 
 json_escape() {
   local value="$1"
@@ -87,6 +195,23 @@ json_escape() {
   value="\${value//$'\\r'/\\r}"
   value="\${value//$'\\t'/\\t}"
   printf '"%s"' "$value"
+}
+
+log() {
+  printf '%s\n' "[nodehubsapi] $*"
+}
+
+warn() {
+  printf '%s\n' "[nodehubsapi] WARN: $*" >&2
+}
+
+wrap_github_url() {
+  local url="$1"
+  if [ -n "$GITHUB_MIRROR_URL" ] && [[ "$url" == https://github.com/* ]]; then
+    printf '%s/%s' "\${GITHUB_MIRROR_URL%/}" "$url"
+    return 0
+  fi
+  printf '%s' "$url"
 }
 
 http_get_to_file() {
@@ -102,6 +227,27 @@ http_get_to_file() {
   fi
   if command -v busybox >/dev/null 2>&1; then
     busybox wget -qO "$target" --header="X-Agent-Token: $AGENT_TOKEN" "$url"
+    return 0
+  fi
+  echo "A downloader is required: curl, wget, or busybox wget." >&2
+  return 1
+}
+
+http_download_to_file() {
+  local url="$1"
+  local target="$2"
+  local resolved_url
+  resolved_url="$(wrap_github_url "$url")"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$resolved_url" -o "$target"
+    return 0
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO "$target" "$resolved_url"
+    return 0
+  fi
+  if command -v busybox >/dev/null 2>&1; then
+    busybox wget -qO "$target" "$resolved_url"
     return 0
   fi
   echo "A downloader is required: curl, wget, or busybox wget." >&2
@@ -149,6 +295,48 @@ render_template() {
   value="\${value//\\{arch\\}/$arch}"
   value="\${value//\\{config_path\\}/$RUNTIME_CONFIG_PATH}"
   printf '%s' "$value"
+}
+
+package_install() {
+  if command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y "$@" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v yum >/dev/null 2>&1; then
+    yum install -y "$@" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v zypper >/dev/null 2>&1; then
+    zypper --non-interactive install -y "$@" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v pacman >/dev/null 2>&1; then
+    pacman -Sy --noconfirm "$@" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v apk >/dev/null 2>&1; then
+    apk add --no-cache "$@" >/dev/null 2>&1
+    return $?
+  fi
+  return 1
+}
+
+ensure_command() {
+  local cmd="$1"
+  shift || true
+  if command -v "$cmd" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$#" -gt 0 ] && package_install "$@"; then
+    command -v "$cmd" >/dev/null 2>&1
+    return $?
+  fi
+  return 1
 }
 
 resolve_runtime_arch() {
@@ -232,6 +420,10 @@ PY
     busybox unzip -qo "$archive" -d "$target_dir"
     return 0
   fi
+  if ensure_command unzip unzip; then
+    unzip -qo "$archive" -d "$target_dir"
+    return 0
+  fi
   echo "No zip extractor available. Need unzip, bsdtar, python3, or busybox unzip." >&2
   return 1
 }
@@ -242,6 +434,10 @@ extract_archive() {
   mkdir -p "$target_dir"
   case "$RUNTIME_ARCHIVE_FORMAT" in
     tar.gz)
+      ensure_command tar tar || {
+        echo "tar is required to extract runtime archives." >&2
+        return 1
+      }
       tar -xzf "$archive" -C "$target_dir"
       ;;
     zip)
@@ -266,7 +462,7 @@ install_runtime_binary() {
   rm -rf "$unpack_dir"
   mkdir -p "$unpack_dir"
 
-  http_get_to_file "$download_url" "$archive_file"
+  http_download_to_file "$download_url" "$archive_file"
   extract_archive "$archive_file" "$unpack_dir"
 
   source_binary="$unpack_dir/$binary_rel"
@@ -276,6 +472,475 @@ install_runtime_binary() {
   fi
 
   install_binary_file "$source_binary" "$RUNTIME_INSTALL_PATH"
+}
+
+resolve_lego_arch() {
+  case "$(uname -m 2>/dev/null || true)" in
+    x86_64|amd64) echo amd64 ;;
+    aarch64|arm64) echo arm64 ;;
+    armv7l|armv7) echo armv7 ;;
+    i386|i686) echo 386 ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+resolve_cloudflared_arch() {
+  case "$(uname -m 2>/dev/null || true)" in
+    x86_64|amd64) echo amd64 ;;
+    aarch64|arm64) echo arm64 ;;
+    armv7l|armv7) echo arm ;;
+    i386|i686) echo 386 ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+resolve_warpgo_arch() {
+  case "$(uname -m 2>/dev/null || true)" in
+    x86_64|amd64) echo amd64 ;;
+    aarch64|arm64) echo arm64 ;;
+    armv7l|armv7) echo armv7 ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+guess_acme_email() {
+  local domain="$1"
+  local zone="$domain"
+  if [ "$(printf '%s' "$domain" | awk -F '.' '{ print NF }')" -gt 2 ]; then
+    zone="\${domain#*.}"
+  fi
+  if [ -z "$zone" ]; then
+    zone="example.com"
+  fi
+  printf 'hostmaster@%s' "$zone"
+}
+
+install_lego_binary() {
+  local target="/usr/local/bin/lego"
+  local version="v4.28.1"
+  local arch asset archive_file unpack_dir
+  if [ -x "$target" ]; then
+    printf '%s' "$target"
+    return 0
+  fi
+  arch="$(resolve_lego_arch)" || {
+    warn "lego is not available for this architecture."
+    return 1
+  }
+  ensure_command tar tar || {
+    warn "tar is required to install lego."
+    return 1
+  }
+  asset="lego_\${version#v}_linux_\${arch}.tar.gz"
+  archive_file="$TMP_DIR/$asset"
+  unpack_dir="$TMP_DIR/lego"
+  mkdir -p "$unpack_dir"
+  http_download_to_file "https://github.com/go-acme/lego/releases/download/\${version}/\${asset}" "$archive_file"
+  tar -xzf "$archive_file" -C "$unpack_dir"
+  install_binary_file "$unpack_dir/lego" "$target"
+  printf '%s' "$target"
+}
+
+issue_cloudflare_certificate() {
+  local lego_bin="$1"
+  local primary_domain="$BOOTSTRAP_PRIMARY_TLS_DOMAIN"
+  local certs_dir="$STATE_DIR/lego"
+  local cert_source key_source email
+  if [ -z "$primary_domain" ]; then
+    primary_domain="$(printf '%s\n' "$BOOTSTRAP_TLS_DOMAINS" | awk 'NF { print; exit }')"
+  fi
+  [ -n "$primary_domain" ] || return 1
+  email="$(guess_acme_email "$primary_domain")"
+  mkdir -p "$certs_dir"
+  local args=(--accept-tos --path "$certs_dir" --email "$email" --dns cloudflare)
+  while IFS= read -r domain; do
+    [ -n "$domain" ] || continue
+    args+=(--domains "$domain")
+  done <<< "$BOOTSTRAP_TLS_DOMAINS"
+  CLOUDFLARE_DNS_API_TOKEN="$NODE_CF_DNS_TOKEN" "$lego_bin" "\${args[@]}" run >/dev/null
+  cert_source="$certs_dir/certificates/\${primary_domain}.crt"
+  key_source="$certs_dir/certificates/\${primary_domain}.key"
+  [ -s "$cert_source" ] && [ -s "$key_source" ] || return 1
+  mkdir -p "$(dirname "$BOOTSTRAP_CERT_PATH")"
+  cp "$cert_source" "$BOOTSTRAP_CERT_PATH"
+  cp "$key_source" "$BOOTSTRAP_KEY_PATH"
+}
+
+generate_self_signed_certificate() {
+  local primary_domain="$BOOTSTRAP_PRIMARY_TLS_DOMAIN"
+  local openssl_conf="$TMP_DIR/openssl.cnf"
+  local san_lines=""
+  local index=1
+  [ -n "$primary_domain" ] || primary_domain="localhost"
+  ensure_command openssl openssl || {
+    echo "openssl is required to generate fallback certificates." >&2
+    return 1
+  }
+  while IFS= read -r domain; do
+    [ -n "$domain" ] || continue
+    san_lines="$san_lines"$'\n'"DNS.\${index} = \${domain}"
+    index=$((index + 1))
+  done <<< "$BOOTSTRAP_TLS_DOMAINS"
+  if [ -z "$san_lines" ]; then
+    san_lines=$'\n'"DNS.1 = \${primary_domain}"
+  fi
+  cat >"$openssl_conf" <<EOF
+[req]
+prompt = no
+default_bits = 2048
+default_md = sha256
+distinguished_name = dn
+x509_extensions = req_ext
+
+[dn]
+CN = \${primary_domain}
+
+[req_ext]
+subjectAltName = @alt_names
+
+[alt_names]\${san_lines}
+EOF
+  mkdir -p "$(dirname "$BOOTSTRAP_CERT_PATH")"
+  openssl req -x509 -nodes -newkey rsa:2048 -days 825 -keyout "$BOOTSTRAP_KEY_PATH" -out "$BOOTSTRAP_CERT_PATH" -config "$openssl_conf" >/dev/null 2>&1
+}
+
+ensure_tls_certificate() {
+  if [ "$BOOTSTRAP_NEEDS_CERTS" != "1" ]; then
+    return 0
+  fi
+  if [ -s "$BOOTSTRAP_CERT_PATH" ] && [ -s "$BOOTSTRAP_KEY_PATH" ]; then
+    return 0
+  fi
+  if [ -n "$NODE_CF_DNS_TOKEN" ] && [ -n "$BOOTSTRAP_TLS_DOMAINS" ]; then
+    local lego_bin
+    if lego_bin="$(install_lego_binary)"; then
+      if issue_cloudflare_certificate "$lego_bin"; then
+        log "Issued TLS certificate via lego + Cloudflare DNS."
+        return 0
+      fi
+      warn "lego certificate issuance failed, falling back to self-signed."
+    fi
+  fi
+  generate_self_signed_certificate
+  log "Generated fallback self-signed certificate."
+}
+
+decode_base64_flexible() {
+  local input="$1"
+  local normalized mod
+  normalized="$(printf '%s' "$input" | tr '_-' '/+')"
+  mod=$((\${#normalized} % 4))
+  if [ "$mod" -eq 2 ]; then
+    normalized="\${normalized}=="
+  elif [ "$mod" -eq 3 ]; then
+    normalized="\${normalized}="
+  elif [ "$mod" -eq 1 ]; then
+    return 1
+  fi
+  printf '%s' "$normalized" | base64 -d 2>/dev/null
+}
+
+json_get_string() {
+  local json="$1"
+  local key="$2"
+  printf '%s' "$json" | tr -d '\r\n' | grep -o "\"$key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -n1 | sed 's/.*:[[:space:]]*"//; s/"$//'
+}
+
+json_get_number() {
+  local json="$1"
+  local key="$2"
+  printf '%s' "$json" | tr -d '\r\n' | grep -o "\"$key\"[[:space:]]*:[[:space:]]*[0-9][0-9]*" | head -n1 | sed 's/.*:[[:space:]]*//'
+}
+
+normalize_warp_v6() {
+  local raw="$1"
+  local value
+  value="$(printf '%s' "$raw" | tr -d '[:space:]')"
+  value="\${value%%/*}"
+  if [[ "$value" =~ ^\\[([0-9A-Fa-f:]+)\\](:[0-9]+)?$ ]]; then
+    printf '%s' "\${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "$value" == \\[*\\]:* ]]; then
+    value="\${value#\\[}"
+    value="\${value%%\\]:*}"
+  fi
+  printf '%s' "$value"
+}
+
+normalize_warp_endpoint() {
+  local host_raw="$1"
+  local port_raw="$2"
+  local host port
+  host="$(printf '%s' "$host_raw" | tr -d '[:space:]')"
+  port="$(printf '%s' "$port_raw" | tr -d '[:space:]')"
+  if [[ "$host" =~ ^\\[(.+)\\]:([0-9]+)$ ]]; then
+    host="\${BASH_REMATCH[1]}"
+    [ -z "$port" ] && port="\${BASH_REMATCH[2]}"
+  elif [[ "$host" =~ ^(.+):([0-9]+)$ ]] && [[ "$host" != *:*:* ]]; then
+    host="\${BASH_REMATCH[1]}"
+    [ -z "$port" ] && port="\${BASH_REMATCH[2]}"
+  fi
+  [ -n "$host" ] || host="engage.cloudflareclient.com"
+  if [[ -z "$port" || ! "$port" =~ ^[0-9]+$ || "$port" -lt 1 || "$port" -gt 65535 ]]; then
+    port="2408"
+  fi
+  printf '%s:%s' "$host" "$port"
+}
+
+save_warp_runtime() {
+  local warp_dir="$1"
+  local private_key="$2"
+  local ipv6="$3"
+  local reserved="$4"
+  local endpoint="$5"
+  mkdir -p "$warp_dir"
+  printf '%s\n' "$private_key" > "$warp_dir/private_key"
+  printf '%s\n' "$ipv6" > "$warp_dir/v6"
+  printf '%s\n' "$reserved" > "$warp_dir/reserved"
+  printf '%s\n' "$endpoint" > "$warp_dir/endpoint"
+}
+
+install_warpgo_binary() {
+  local target="/usr/local/bin/warp-go"
+  local version="v1.0.8"
+  local arch asset archive_file unpack_dir candidate
+  if [ -x "$target" ]; then
+    printf '%s' "$target"
+    return 0
+  fi
+  arch="$(resolve_warpgo_arch)" || {
+    warn "warp-go is not available for this architecture."
+    return 1
+  }
+  ensure_command tar tar || {
+    warn "tar is required to install warp-go."
+    return 1
+  }
+  asset="warp-go_\${version#v}_linux_\${arch}.tar.gz"
+  archive_file="$TMP_DIR/$asset"
+  unpack_dir="$TMP_DIR/warp-go"
+  mkdir -p "$unpack_dir"
+  http_download_to_file "https://gitlab.com/ProjectWARP/warp-go/-/releases/\${version}/downloads/\${asset}" "$archive_file"
+  tar -xzf "$archive_file" -C "$unpack_dir"
+  candidate="$(find "$unpack_dir" -maxdepth 3 -type f -name 'warp-go' | head -n1 || true)"
+  [ -n "$candidate" ] || return 1
+  install_binary_file "$candidate" "$target"
+  printf '%s' "$target"
+}
+
+ensure_warp_allowed_ips() {
+  local config_file="$1"
+  if grep -q '^AllowedIPs[[:space:]]*=' "$config_file" 2>/dev/null; then
+    return 0
+  fi
+  printf '%s\n' 'AllowedIPs = 0.0.0.0/0, ::/0' >> "$config_file"
+}
+
+register_warp_via_api() {
+  local warp_dir="$STATE_DIR/warp"
+  local config_file="$warp_dir/warp.conf"
+  local wg_bin reg_api reg_payload response private_key public_key tos serial
+  local device_id access_token ipv6 host port client_id_b64 reserved endpoint bytes b1 b2 b3
+  mkdir -p "$warp_dir"
+  if [ -s "$config_file" ] && [ -s "$warp_dir/private_key" ] && [ -s "$warp_dir/v6" ]; then
+    return 0
+  fi
+  ensure_command curl curl ca-certificates || return 1
+  ensure_command wg wireguard-tools || return 1
+  wg_bin="$(command -v wg)"
+  reg_api="https://api.cloudflareclient.com/v0a4005/reg"
+  private_key="$("$wg_bin" genkey 2>/dev/null || true)"
+  [ -n "$private_key" ] || return 1
+  public_key="$(printf '%s' "$private_key" | "$wg_bin" pubkey 2>/dev/null || true)"
+  [ -n "$public_key" ] || return 1
+  tos="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+  serial="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)"
+  [ -n "$serial" ] || serial="$(date +%s)-$RANDOM"
+  reg_payload="$(printf '{"key":"%s","install_id":"","fcm_token":"","tos":"%s","model":"PC","serial_number":"%s","locale":"en_US","warp_enabled":true}' "$public_key" "$tos" "$serial")"
+  response="$(curl -fsS "$reg_api" -X POST -H "Content-Type: application/json; charset=UTF-8" -H "Accept: application/json" -H "User-Agent: okhttp/3.12.1" -H "CF-Client-Version: a-6.30-3596" --data "$reg_payload" 2>/dev/null || true)"
+  [ -n "$response" ] || return 1
+  device_id="$(json_get_string "$response" "id")"
+  access_token="$(json_get_string "$response" "token")"
+  ipv6="$(normalize_warp_v6 "$(json_get_string "$response" "v6")")"
+  host="$(json_get_string "$response" "host")"
+  port="$(json_get_number "$response" "port")"
+  client_id_b64="$(json_get_string "$response" "client_id")"
+  [ -n "$device_id" ] && [ -n "$access_token" ] || return 1
+  if [ -n "$NODE_WARP_LICENSE_KEY" ]; then
+    curl -fsS "\${reg_api}/\${device_id}/account" -X PUT -H "Content-Type: application/json; charset=UTF-8" -H "Accept: application/json" -H "Authorization: Bearer \${access_token}" --data "$(printf '{"license":"%s"}' "$NODE_WARP_LICENSE_KEY")" >/dev/null 2>&1 || true
+  fi
+  endpoint="$(normalize_warp_endpoint "$host" "$port")"
+  reserved="0,0,0"
+  if [ -n "$client_id_b64" ] && command -v od >/dev/null 2>&1 && command -v base64 >/dev/null 2>&1; then
+    bytes="$(decode_base64_flexible "$client_id_b64" | od -An -t u1 2>/dev/null | tr -s ' ' | sed 's/^ //')"
+    b1="$(echo "$bytes" | awk '{print $1}')"
+    b2="$(echo "$bytes" | awk '{print $2}')"
+    b3="$(echo "$bytes" | awk '{print $3}')"
+    if [ -n "$b1" ] && [ -n "$b2" ] && [ -n "$b3" ]; then
+      reserved="\${b1},\${b2},\${b3}"
+    fi
+  fi
+  cat >"$config_file" <<EOF
+PrivateKey = \${private_key}
+Address6 = \${ipv6}/128
+Endpoint = \${endpoint}
+Reserved = \${reserved}
+DeviceID = \${device_id}
+Token = \${access_token}
+AllowedIPs = 0.0.0.0/0, ::/0
+EOF
+  save_warp_runtime "$warp_dir" "$private_key" "$ipv6" "$reserved" "$endpoint"
+}
+
+register_warp_with_warpgo() {
+  local warp_bin="$1"
+  local warp_dir="$STATE_DIR/warp"
+  local config_file="$warp_dir/warp.conf"
+  local private_key ipv6 endpoint reserved
+  mkdir -p "$warp_dir"
+  "$warp_bin" --register --config "$config_file" >/dev/null 2>&1
+  if [ -n "$NODE_WARP_LICENSE_KEY" ]; then
+    if grep -q '^LicenseKey[[:space:]]*=' "$config_file" 2>/dev/null; then
+      sed -i "s/^LicenseKey[[:space:]]*=.*/LicenseKey = $NODE_WARP_LICENSE_KEY/" "$config_file"
+    else
+      printf 'LicenseKey = %s\n' "$NODE_WARP_LICENSE_KEY" >> "$config_file"
+    fi
+    "$warp_bin" --update --config "$config_file" >/dev/null 2>&1 || true
+  fi
+  ensure_warp_allowed_ips "$config_file"
+  private_key="$(sed -n 's/^PrivateKey[[:space:]]*=[[:space:]]*//p' "$config_file" | head -n1)"
+  ipv6="$(sed -n 's/^Address6[[:space:]]*=[[:space:]]*//p' "$config_file" | head -n1 | sed 's#/.*##')"
+  endpoint="$(sed -n 's/^Endpoint[[:space:]]*=[[:space:]]*//p' "$config_file" | head -n1)"
+  reserved="$(sed -n 's/^Reserved[[:space:]]*=[[:space:]]*//p' "$config_file" | head -n1)"
+  save_warp_runtime "$warp_dir" "$private_key" "$ipv6" "$reserved" "$endpoint"
+}
+
+write_warp_service() {
+  local warp_bin="$1"
+  local config_file="$STATE_DIR/warp/warp.conf"
+  local service_file="/etc/systemd/system/nodehubsapi-warp.service"
+  cat >"$service_file" <<EOF
+[Unit]
+Description=nodehubsapi warp-go
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=\${warp_bin} --foreground --config \${config_file}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now nodehubsapi-warp.service >/dev/null
+  systemctl restart nodehubsapi-warp.service
+}
+
+ensure_warp_bootstrap() {
+  local warp_bin
+  warp_bin="$(install_warpgo_binary)" || return 1
+  register_warp_via_api || register_warp_with_warpgo "$warp_bin"
+  write_warp_service "$warp_bin"
+  log "WARP bootstrap completed."
+}
+
+install_cloudflared_binary() {
+  local target="/usr/local/bin/cloudflared"
+  local arch
+  if [ -x "$target" ]; then
+    printf '%s' "$target"
+    return 0
+  fi
+  arch="$(resolve_cloudflared_arch)" || {
+    warn "cloudflared is not available for this architecture."
+    return 1
+  }
+  http_download_to_file "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-\${arch}" "$TMP_DIR/cloudflared"
+  install_binary_file "$TMP_DIR/cloudflared" "$target"
+  printf '%s' "$target"
+}
+
+sync_argo_domain_state() {
+  local log_file="$STATE_DIR/argo/cloudflared.log"
+  local domain_file="$STATE_DIR/argo/domain"
+  if [ -n "$NODE_ARGO_TUNNEL_DOMAIN" ]; then
+    printf '%s\n' "$NODE_ARGO_TUNNEL_DOMAIN" > "$domain_file"
+    return 0
+  fi
+  if [ -f "$log_file" ]; then
+    grep -ao 'https://[a-z0-9-]*\\.trycloudflare\\.com' "$log_file" 2>/dev/null | tail -n1 | sed 's|https://||' > "$domain_file" || true
+  fi
+}
+
+write_argo_service() {
+  local cloudflared_bin="$1"
+  local service_file="/etc/systemd/system/nodehubsapi-cloudflared.service"
+  local env_file="$ETC_DIR/cloudflared.env"
+  local log_file="$STATE_DIR/argo/cloudflared.log"
+  mkdir -p "$STATE_DIR/argo"
+  : > "$log_file"
+  cat >"$env_file" <<EOF
+ARGO_TUNNEL_TOKEN=\${NODE_ARGO_TUNNEL_TOKEN}
+ARGO_ORIGIN_URL=http://127.0.0.1:\${NODE_ARGO_ORIGIN_PORT}
+ARGO_LOG_FILE=\${log_file}
+EOF
+  if [ -n "$NODE_ARGO_TUNNEL_TOKEN" ]; then
+    cat >"$service_file" <<EOF
+[Unit]
+Description=nodehubsapi cloudflared
+After=network-online.target \${RUNTIME_SERVICE_NAME}.service
+Wants=network-online.target \${RUNTIME_SERVICE_NAME}.service
+
+[Service]
+Type=simple
+EnvironmentFile=\${env_file}
+ExecStart=/bin/sh -lc 'exec \${cloudflared_bin} tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token "$ARGO_TUNNEL_TOKEN" >>"$ARGO_LOG_FILE" 2>&1'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  else
+    cat >"$service_file" <<EOF
+[Unit]
+Description=nodehubsapi cloudflared
+After=network-online.target \${RUNTIME_SERVICE_NAME}.service
+Wants=network-online.target \${RUNTIME_SERVICE_NAME}.service
+
+[Service]
+Type=simple
+EnvironmentFile=\${env_file}
+ExecStart=/bin/sh -lc 'exec \${cloudflared_bin} tunnel --url "$ARGO_ORIGIN_URL" --edge-ip-version auto --no-autoupdate --protocol http2 >>"$ARGO_LOG_FILE" 2>&1'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  fi
+}
+
+ensure_argo_bootstrap() {
+  local cloudflared_bin
+  cloudflared_bin="$(install_cloudflared_binary)" || return 1
+  write_argo_service "$cloudflared_bin"
+  systemctl daemon-reload
+  systemctl enable --now nodehubsapi-cloudflared.service >/dev/null
+  systemctl restart nodehubsapi-cloudflared.service
+  sleep 5
+  sync_argo_domain_state
+  log "Argo bootstrap completed."
 }
 
 write_runtime_files() {
@@ -350,7 +1015,7 @@ main() {
   TMP_DIR="$(mktemp -d)"
   trap fail_apply ERR
 
-  mkdir -p "$ETC_DIR/runtime" "$STATE_DIR/releases" "$ETC_DIR/hooks/pre-apply.d" "$ETC_DIR/hooks/post-apply.d" "$ETC_DIR/hooks/bootstrap.d"
+  mkdir -p "$ETC_DIR/runtime" "$ETC_DIR/certs" "$STATE_DIR/releases" "$STATE_DIR/warp" "$STATE_DIR/argo" "$STATE_DIR/lego" "$ETC_DIR/hooks/pre-apply.d" "$ETC_DIR/hooks/post-apply.d" "$ETC_DIR/hooks/bootstrap.d"
 
   ack_release "applying" "release apply started"
   run_hooks "$ETC_DIR/hooks/pre-apply.d"
@@ -359,9 +1024,16 @@ main() {
   fi
   install_runtime_binary
   write_runtime_files
+  ensure_tls_certificate
   write_runtime_service
   cp "$ETC_DIR/runtime/release.json" "$STATE_DIR/releases/current.json"
   restart_runtime_service
+  if [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then
+    ensure_warp_bootstrap || warn "WARP bootstrap failed."
+  fi
+  if [ "$BOOTSTRAP_INSTALL_ARGO" = "1" ]; then
+    ensure_argo_bootstrap || warn "Argo bootstrap failed."
+  fi
   run_hooks "$ETC_DIR/hooks/post-apply.d"
   ack_release "healthy" "release applied"
   trap - ERR
@@ -564,8 +1236,80 @@ runtime_version() {
   printf ''
 }
 
+warp_ipv6() {
+  local value
+  value="$(cat "$STATE_DIR/warp/v6" 2>/dev/null || true)"
+  if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
+    value="$(grep -E '^Address6[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' | tr -d ' ' || true)"
+  fi
+  value="\${value%%/*}"
+  printf '%s' "$value"
+}
+
+warp_endpoint() {
+  local value
+  value="$(cat "$STATE_DIR/warp/endpoint" 2>/dev/null || true)"
+  if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
+    value="$(grep -E '^Endpoint[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' | tr -d ' ' || true)"
+  fi
+  printf '%s' "$value"
+}
+
+warp_status() {
+  if command -v pgrep >/dev/null 2>&1 && pgrep -f 'warp-go|wireguard|wg-quick' >/dev/null 2>&1; then
+    printf 'running'
+    return 0
+  fi
+  if [ -f "$STATE_DIR/warp/v6" ] || [ -f "$STATE_DIR/warp/warp.conf" ] || [ -x /usr/local/bin/warp-go ]; then
+    printf 'installed'
+    return 0
+  fi
+  printf 'not_installed'
+}
+
+argo_domain() {
+  local value
+  value="$(cat "$STATE_DIR/argo/domain" 2>/dev/null | head -n 1 | tr -d '\r' || true)"
+  if [ -z "$value" ] && [ -f "$STATE_DIR/argo/cloudflared.log" ]; then
+    value="$(grep -ao 'https://[a-z0-9-]*\\.trycloudflare\\.com' "$STATE_DIR/argo/cloudflared.log" 2>/dev/null | tail -n 1 | sed 's|https://||' || true)"
+  fi
+  printf '%s' "$value"
+}
+
+argo_status() {
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nodehubsapi-cloudflared.service 2>/dev/null; then
+    printf 'running'
+    return 0
+  fi
+  if [ -f /etc/systemd/system/nodehubsapi-cloudflared.service ] || [ -x /usr/local/bin/cloudflared ]; then
+    printf 'installed'
+    return 0
+  fi
+  printf 'not_installed'
+}
+
+storage_usage() {
+  if command -v df >/dev/null 2>&1; then
+    df -kP / 2>/dev/null | awk 'NR==2 {
+      total = $2 * 1024
+      used = $3 * 1024
+      if (total <= 0) {
+        print "0 0 null"
+      } else {
+        printf "%.0f %.0f %.2f", total, used, (used / total) * 100
+      }
+    }'
+    return 0
+  fi
+  printf '0 0 null'
+}
+
 heartbeat() {
-  local bytes_in bytes_out memory cpu connections version payload
+  local bytes_in bytes_out memory cpu connections version
+  local warp_ipv6_value warp_status_value warp_endpoint_value
+  local argo_status_value argo_domain_value
+  local storage_total storage_used storage_percent
+  local payload
   read -r bytes_in bytes_out <<EOF_NET
 $(sum_network_bytes)
 EOF_NET
@@ -573,6 +1317,14 @@ EOF_NET
   cpu="$(cpu_usage_percent)"
   connections="$(connection_count)"
   version="$(runtime_version)"
+  warp_ipv6_value="$(warp_ipv6)"
+  warp_status_value="$(warp_status)"
+  warp_endpoint_value="$(warp_endpoint)"
+  argo_status_value="$(argo_status)"
+  argo_domain_value="$(argo_domain)"
+  read -r storage_total storage_used storage_percent <<EOF_STORAGE
+$(storage_usage)
+EOF_STORAGE
   payload=$(cat <<EOF_JSON
 {
   "nodeId": $(json_escape "$NODE_ID"),
@@ -581,6 +1333,14 @@ EOF_NET
   "currentConnections": \${connections:-0},
   "cpuUsagePercent": \${cpu:-null},
   "memoryUsagePercent": \${memory:-null},
+  "warpStatus": $(json_escape "$warp_status_value"),
+  "warpIpv6": $(json_escape "$warp_ipv6_value"),
+  "warpEndpoint": $(json_escape "$warp_endpoint_value"),
+  "argoStatus": $(json_escape "$argo_status_value"),
+  "argoDomain": $(json_escape "$argo_domain_value"),
+  "storageTotalBytes": \${storage_total:-0},
+  "storageUsedBytes": \${storage_used:-0},
+  "storageUsagePercent": \${storage_percent:-null},
   "protocolRuntimeVersion": $(json_escape "$version")
 }
 EOF_JSON

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { APP_VERSION } from './lib/constants'
@@ -13,10 +13,38 @@ function resolveDbPath(): string {
   return process.env.SQLITE_FILE || resolve(process.cwd(), 'apps/api/storage/dev.db')
 }
 
+function shouldIgnoreMigrationError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const message = error.message.toLowerCase()
+  return message.includes('duplicate column name')
+}
+
+function splitSqlStatements(sqlText: string): string[] {
+  return sqlText
+    .split(';')
+    .map((statement) => statement.trim())
+    .filter(Boolean)
+}
+
 function applyMigrations(db: DatabaseSync): void {
-  const migrationPath = resolve(process.cwd(), 'apps/api/migrations/0001_init.sql')
-  const sqlText = readFileSync(migrationPath, 'utf8')
-  db.exec(sqlText)
+  const migrationDir = resolve(process.cwd(), 'apps/api/migrations')
+  const migrationFiles = readdirSync(migrationDir)
+    .filter((name) => name.endsWith('.sql'))
+    .sort((a, b) => a.localeCompare(b))
+
+  for (const migrationFile of migrationFiles) {
+    const migrationPath = resolve(migrationDir, migrationFile)
+    const sqlText = readFileSync(migrationPath, 'utf8')
+    const statements = splitSqlStatements(sqlText)
+    for (const statement of statements) {
+      try {
+        db.exec(`${statement};`)
+      } catch (error) {
+        if (shouldIgnoreMigrationError(error)) continue
+        throw error
+      }
+    }
+  }
 }
 
 function normalizeParams(params: SqlValue[] = []): Array<string | number | null> {
