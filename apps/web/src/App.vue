@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import type { SystemStatus, NodeRecord, TemplateRecord, SubscriptionRecord, ReleaseRecord, ReleasePreviewRecord } from '@contracts/index'
 import * as api from './lib/api'
@@ -1201,35 +1201,6 @@ onMounted(() => { if (adminKey.value) login() })
               </select>
             </div>
           </div>
-          <div class="form-section-divider">WARP 出口</div>
-          <div class="form-checkbox-group mb-md">
-            <input type="checkbox" class="form-checkbox" v-model="newTemplate.warpExit" id="template-warp-exit">
-            <label for="template-warp-exit" class="form-label" style="margin:0">启用模板 WARP 出口</label>
-          </div>
-          <div v-if="newTemplate.warpExit" class="form-row">
-            <div class="form-group">
-              <label class="form-label">WARP 路由模式</label>
-              <select class="form-select" v-model="newTemplate.warpRouteMode">
-                <option value="all">All (IPv4 + IPv6)</option>
-                <option value="ipv4">IPv4 only</option>
-                <option value="ipv6">IPv6 only</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">参数来源节点</label>
-              <select class="form-select" v-model="warpSourceNodeId">
-                <option value="">Auto select</option>
-                <option v-for="n in warpSourceNodes" :key="n.id" :value="n.id">{{ n.name }}</option>
-              </select>
-            </div>
-          </div>
-          <div v-if="newTemplate.warpExit" class="form-group">
-            <button type="button" class="btn btn-secondary btn-sm" @click="fillWarpDefaultsFromNode">获取上报 WARP 参数</button>
-            <div class="text-muted" style="margin-top:8px;font-size:12px">
-              按节点上报数据填入 private key / endpoint / IPv6 / reserved 到 defaults。
-            </div>
-          </div>
-
           <!-- Dynamic default fields -->
           <div class="form-section-divider">协议参数</div>
           <datalist id="reality-sni-list">
@@ -1258,6 +1229,35 @@ onMounted(() => { if (adminKey.value) login() })
           </div>
 
           <div class="form-group"><label class="form-label">备注</label><textarea class="form-textarea" v-model="newTemplate.notes" placeholder="可选备注信息..."></textarea></div>
+
+          <div class="form-section-divider">WARP 出口</div>
+          <div class="form-checkbox-group mb-md">
+            <input type="checkbox" class="form-checkbox" v-model="newTemplate.warpExit" id="template-warp-exit">
+            <label for="template-warp-exit" class="form-label" style="margin:0">启用模板 WARP 出口</label>
+          </div>
+          <div v-if="newTemplate.warpExit" class="form-row">
+            <div class="form-group">
+              <label class="form-label">WARP 路由模式</label>
+              <select class="form-select" v-model="newTemplate.warpRouteMode">
+                <option value="all">All (IPv4 + IPv6)</option>
+                <option value="ipv4">IPv4 only</option>
+                <option value="ipv6">IPv6 only</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">参数来源节点</label>
+              <select class="form-select" v-model="warpSourceNodeId">
+                <option value="">Auto select</option>
+                <option v-for="n in warpSourceNodes" :key="n.id" :value="n.id">{{ n.name }}</option>
+              </select>
+            </div>
+          </div>
+          <div v-if="newTemplate.warpExit" class="form-group">
+            <button type="button" class="btn btn-secondary btn-sm" @click="fillWarpDefaultsFromNode">获取上报 WARP 参数</button>
+            <div class="text-muted" style="margin-top:8px;font-size:12px">
+              按节点上报数据填入 private key / endpoint / IPv6 / reserved 到 defaults。
+            </div>
+          </div>
         </div>
         <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateTemplate=false">取消</button><button class="btn btn-primary" @click="createTemplate">创建</button></div>
       </div>

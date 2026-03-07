@@ -13,7 +13,7 @@ export function buildDeployCommand(input: {
   const apiBase = input.publicBaseUrl.replace(/\/+$/, '')
   const installUrl = `${apiBase}/api/nodes/agent/install?nodeId=${encodeURIComponent(input.nodeId)}`
   const tokenHeader = `X-Agent-Token: ${input.agentToken}`
-  const command = [
+  return [
     'set -euo pipefail',
     `URL=${shellQuote(installUrl)}`,
     `TOKEN_HEADER=${shellQuote(tokenHeader)}`,
@@ -31,8 +31,7 @@ export function buildDeployCommand(input: {
     '  exit 1',
     'fi',
     'bash "$TMP_FILE"',
-  ].join('; ')
-  return `bash -lc ${shellQuote(command)}`
+  ].join('\n')
 }
 
 export function buildUninstallCommand(): string {
@@ -63,10 +62,10 @@ function buildRuntimeFileBlocks(artifact: ReleaseArtifact): string {
   return deduplicated
     .map((file, index) => {
       const label = `NODESHUB_FILE_${index + 1}`
-      const targetPath = `/etc/nodehubsapi/${file.path}`
+      const targetPath = `\${ETC_DIR}/${file.path}`
       return [
-        `mkdir -p "$(dirname ${shellQuote(targetPath)})"`,
-        `cat >${shellQuote(targetPath)} <<'${label}'`,
+        `mkdir -p "$(dirname "${targetPath}")"`,
+        `cat >"${targetPath}" <<'${label}'`,
         file.content,
         label,
       ].join('\n')
@@ -77,22 +76,23 @@ function buildRuntimeFileBlocks(artifact: ReleaseArtifact): string {
 function buildRuntimeApplyBlocks(artifact: ReleaseArtifact): string {
   return artifact.runtimes
     .map((runtime) => {
-      const configPath = `/etc/nodehubsapi/${runtime.entryConfigPath}`
+      const configPath = `\${ETC_DIR}/${runtime.entryConfigPath}`
       const serviceName = `nodehubsapi-runtime-${runtime.engine}`
-      const serviceFile = `/etc/systemd/system/${serviceName}.service`
+      const serviceFile = `\${SYSTEMD_DIR}/${serviceName}.service`
       return [
         `  RUNTIME_ENGINE=${shellQuote(runtime.engine)}`,
         `  RUNTIME_VERSION=${shellQuote(runtime.binary.version)}`,
         `  RUNTIME_BINARY_NAME=${shellQuote(runtime.binary.binaryName)}`,
-        `  RUNTIME_INSTALL_PATH=${shellQuote(runtime.binary.installPath)}`,
+        `  RUNTIME_INSTALL_PATH_DEFAULT=${shellQuote(runtime.binary.installPath)}`,
         `  RUNTIME_DOWNLOAD_BASE_URL=${shellQuote(runtime.binary.downloadBaseUrl)}`,
         `  RUNTIME_ASSET_TEMPLATE=${shellQuote(runtime.binary.assetNameTemplate)}`,
         `  RUNTIME_BINARY_PATH_TEMPLATE=${shellQuote(runtime.binary.binaryPathTemplate)}`,
         `  RUNTIME_RUN_ARGS_TEMPLATE=${shellQuote(runtime.binary.runArgsTemplate)}`,
         `  RUNTIME_ARCHIVE_FORMAT=${shellQuote(runtime.binary.archiveFormat)}`,
-        `  RUNTIME_CONFIG_PATH=${shellQuote(configPath)}`,
+        `  RUNTIME_CONFIG_PATH="${configPath}"`,
         `  RUNTIME_SERVICE_NAME=${shellQuote(serviceName)}`,
-        `  RUNTIME_SERVICE_FILE=${shellQuote(serviceFile)}`,
+        `  RUNTIME_SERVICE_FILE="${serviceFile}"`,
+        '  resolve_runtime_install_path',
         '  install_runtime_binary',
         '  write_runtime_service',
         '  restart_runtime_service',
@@ -232,8 +232,14 @@ RELEASE_ID=${shellQuote(artifact.releaseId)}
 RELEASE_KIND=${shellQuote(artifact.kind)}
 RUNTIME_PRIMARY_SERVICE_NAME=${shellQuote(primaryRuntimeServiceName)}
 RUNTIME_PLAN_COUNT=${runtimePlanCount}
-ETC_DIR=${shellQuote('/etc/nodehubsapi')}
-STATE_DIR=${shellQuote('/opt/nodehubsapi')}
+ETC_DIR="\${ETC_DIR:-/etc/nodehubsapi}"
+STATE_DIR="\${STATE_DIR:-/opt/nodehubsapi}"
+RUNTIME_BIN_DIR="\${RUNTIME_BIN_DIR:-/usr/local/bin}"
+INSTALL_MODE="\${INSTALL_MODE:-}"
+USE_SYSTEMD="\${USE_SYSTEMD:-0}"
+SYSTEMCTL_USER_FLAG="\${SYSTEMCTL_USER_FLAG:-}"
+SYSTEMD_DIR="\${SYSTEMD_DIR:-/etc/systemd/system}"
+SYSTEMD_WANTED_BY="\${SYSTEMD_WANTED_BY:-multi-user.target}"
 GITHUB_MIRROR_URL=${shellQuote(artifact.node.githubMirrorUrl || '')}
 BOOTSTRAP_INSTALL_WARP=${artifact.bootstrap.installWarp ? '1' : '0'}
 BOOTSTRAP_INSTALL_ARGO=${artifact.bootstrap.installArgo ? '1' : '0'}
@@ -266,6 +272,90 @@ log() {
 
 warn() {
   printf '%s\n' "[nodehubsapi] WARN: $*" >&2
+}
+
+is_root() {
+  [ "\${EUID:-$(id -u)}" -eq 0 ]
+}
+
+run_systemctl() {
+  if [ "$USE_SYSTEMD" != "1" ]; then
+    return 1
+  fi
+  systemctl $SYSTEMCTL_USER_FLAG "$@"
+}
+
+detect_execution_mode() {
+  if [ -z "$INSTALL_MODE" ]; then
+    if is_root; then
+      INSTALL_MODE="system"
+    else
+      INSTALL_MODE="user"
+    fi
+  fi
+
+  if [ "$INSTALL_MODE" = "user" ]; then
+    case "$ETC_DIR" in
+      ''|/etc/nodehubsapi) ETC_DIR="$HOME/.config/nodehubsapi" ;;
+    esac
+    case "$STATE_DIR" in
+      ''|/opt/nodehubsapi) STATE_DIR="$HOME/.local/share/nodehubsapi" ;;
+    esac
+    case "$RUNTIME_BIN_DIR" in
+      ''|/usr/local/bin) RUNTIME_BIN_DIR="$HOME/.local/bin" ;;
+    esac
+    SYSTEMCTL_USER_FLAG="--user"
+    SYSTEMD_DIR="$HOME/.config/systemd/user"
+    SYSTEMD_WANTED_BY="default.target"
+  fi
+
+  if ! mkdir -p "$ETC_DIR" "$STATE_DIR" "$RUNTIME_BIN_DIR" >/dev/null 2>&1; then
+    if [ "$INSTALL_MODE" = "system" ]; then
+      warn "No permission for system directories; switching release apply to user mode."
+      INSTALL_MODE="user"
+      ETC_DIR="$HOME/.config/nodehubsapi"
+      STATE_DIR="$HOME/.local/share/nodehubsapi"
+      RUNTIME_BIN_DIR="$HOME/.local/bin"
+      SYSTEMCTL_USER_FLAG="--user"
+      SYSTEMD_DIR="$HOME/.config/systemd/user"
+      SYSTEMD_WANTED_BY="default.target"
+      mkdir -p "$ETC_DIR" "$STATE_DIR" "$RUNTIME_BIN_DIR"
+    else
+      echo "Cannot create directories for release apply." >&2
+      exit 1
+    fi
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    if [ "$INSTALL_MODE" = "user" ]; then
+      if systemctl --user show-environment >/dev/null 2>&1; then
+        USE_SYSTEMD=1
+      else
+        USE_SYSTEMD=0
+        warn "systemd --user unavailable; runtime processes will run in background mode."
+      fi
+    elif [ -d /run/systemd/system ]; then
+      USE_SYSTEMD=1
+      SYSTEMCTL_USER_FLAG=""
+      SYSTEMD_DIR="/etc/systemd/system"
+      SYSTEMD_WANTED_BY="multi-user.target"
+    else
+      USE_SYSTEMD=0
+      warn "systemd unavailable; runtime processes will run in background mode."
+    fi
+  else
+    USE_SYSTEMD=0
+    warn "systemctl command not found; runtime processes will run in background mode."
+  fi
+}
+
+resolve_runtime_install_path() {
+  if [ "$INSTALL_MODE" = "user" ]; then
+    mkdir -p "$RUNTIME_BIN_DIR"
+    RUNTIME_INSTALL_PATH="$RUNTIME_BIN_DIR/$RUNTIME_BINARY_NAME"
+    return 0
+  fi
+  RUNTIME_INSTALL_PATH="$RUNTIME_INSTALL_PATH_DEFAULT"
 }
 
 wrap_github_url() {
@@ -362,10 +452,10 @@ schedule_agent_restart_if_needed() {
   if [ "$AGENT_UPGRADED" != "1" ]; then
     return 0
   fi
-  if command -v systemd-run >/dev/null 2>&1; then
-    systemd-run --unit "nodehubsapi-agent-refresh-$(date +%s)" --on-active=2 /bin/sh -lc 'systemctl restart nodehubsapi-agent.service' >/dev/null 2>&1 && return 0
+  if [ "$USE_SYSTEMD" = "1" ]; then
+    /bin/sh -lc 'sleep 2; true' >/dev/null 2>&1
+    run_systemctl restart nodehubsapi-agent.service >/dev/null 2>&1 || true
   fi
-  /bin/sh -lc 'sleep 2; systemctl restart nodehubsapi-agent.service' >/dev/null 2>&1 &
 }
 
 ack_release() {
@@ -617,7 +707,7 @@ guess_acme_email() {
 }
 
 install_lego_binary() {
-  local target="/usr/local/bin/lego"
+  local target="$RUNTIME_BIN_DIR/lego"
   local version="v4.28.1"
   local arch asset archive_file unpack_dir
   if [ -x "$target" ]; then
@@ -803,7 +893,7 @@ save_warp_runtime() {
 }
 
 install_warpgo_binary() {
-  local target="/usr/local/bin/warp-go"
+  local target="$RUNTIME_BIN_DIR/warp-go"
   local version="v1.0.8"
   local arch asset archive_file unpack_dir candidate
   if [ -x "$target" ]; then
@@ -920,7 +1010,9 @@ register_warp_with_warpgo() {
 write_warp_service() {
   local warp_bin="$1"
   local config_file="$STATE_DIR/warp/warp.conf"
-  local service_file="/etc/systemd/system/nodehubsapi-warp.service"
+  local service_file="$SYSTEMD_DIR/nodehubsapi-warp.service"
+  [ "$USE_SYSTEMD" = "1" ] || return 0
+  mkdir -p "$SYSTEMD_DIR"
   cat >"$service_file" <<EOF
 [Unit]
 Description=nodehubsapi warp-go
@@ -934,23 +1026,45 @@ Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=$SYSTEMD_WANTED_BY
 EOF
-  systemctl daemon-reload
-  systemctl enable --now nodehubsapi-warp.service >/dev/null
-  systemctl restart nodehubsapi-warp.service
+  run_systemctl daemon-reload
+  run_systemctl enable --now nodehubsapi-warp.service >/dev/null
+  run_systemctl restart nodehubsapi-warp.service
+}
+
+start_warp_background() {
+  local warp_bin="$1"
+  local config_file="$STATE_DIR/warp/warp.conf"
+  local pid_file="$STATE_DIR/warp/warp.pid"
+  local log_file="$STATE_DIR/warp/warp.log"
+  local old_pid=""
+  mkdir -p "$STATE_DIR/warp"
+  if [ -f "$pid_file" ]; then
+    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+      kill "$old_pid" >/dev/null 2>&1 || true
+      sleep 1
+    fi
+  fi
+  nohup "$warp_bin" --foreground --config "$config_file" >>"$log_file" 2>&1 &
+  echo "$!" > "$pid_file"
 }
 
 ensure_warp_bootstrap() {
   local warp_bin
   warp_bin="$(install_warpgo_binary)" || return 1
   register_warp_via_api || register_warp_with_warpgo "$warp_bin"
-  write_warp_service "$warp_bin"
+  if [ "$USE_SYSTEMD" = "1" ]; then
+    write_warp_service "$warp_bin"
+  else
+    start_warp_background "$warp_bin"
+  fi
   log "WARP bootstrap completed."
 }
 
 install_cloudflared_binary() {
-  local target="/usr/local/bin/cloudflared"
+  local target="$RUNTIME_BIN_DIR/cloudflared"
   local arch
   if [ -x "$target" ]; then
     printf '%s' "$target"
@@ -979,9 +1093,11 @@ sync_argo_domain_state() {
 
 write_argo_service() {
   local cloudflared_bin="$1"
-  local service_file="/etc/systemd/system/nodehubsapi-cloudflared.service"
+  local service_file="$SYSTEMD_DIR/nodehubsapi-cloudflared.service"
   local env_file="$ETC_DIR/cloudflared.env"
   local log_file="$STATE_DIR/argo/cloudflared.log"
+  [ "$USE_SYSTEMD" = "1" ] || return 0
+  mkdir -p "$SYSTEMD_DIR"
   mkdir -p "$STATE_DIR/argo"
   : > "$log_file"
   cat >"$env_file" <<EOF
@@ -1004,7 +1120,7 @@ Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=$SYSTEMD_WANTED_BY
 EOF
   else
     cat >"$service_file" <<EOF
@@ -1021,18 +1137,45 @@ Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=$SYSTEMD_WANTED_BY
 EOF
   fi
+}
+
+start_argo_background() {
+  local cloudflared_bin="$1"
+  local log_file="$STATE_DIR/argo/cloudflared.log"
+  local pid_file="$STATE_DIR/argo/cloudflared.pid"
+  local origin_url="http://127.0.0.1:$NODE_ARGO_ORIGIN_PORT"
+  local old_pid=""
+  mkdir -p "$STATE_DIR/argo"
+  : > "$log_file"
+  if [ -f "$pid_file" ]; then
+    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+      kill "$old_pid" >/dev/null 2>&1 || true
+      sleep 1
+    fi
+  fi
+  if [ -n "$NODE_ARGO_TUNNEL_TOKEN" ]; then
+    nohup /bin/sh -lc "exec \"$cloudflared_bin\" tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token \"$NODE_ARGO_TUNNEL_TOKEN\" >>\"$log_file\" 2>&1" >/dev/null 2>&1 &
+  else
+    nohup /bin/sh -lc "exec \"$cloudflared_bin\" tunnel --url \"$origin_url\" --edge-ip-version auto --no-autoupdate --protocol http2 >>\"$log_file\" 2>&1" >/dev/null 2>&1 &
+  fi
+  echo "$!" > "$pid_file"
 }
 
 ensure_argo_bootstrap() {
   local cloudflared_bin
   cloudflared_bin="$(install_cloudflared_binary)" || return 1
-  write_argo_service "$cloudflared_bin"
-  systemctl daemon-reload
-  systemctl enable --now nodehubsapi-cloudflared.service >/dev/null
-  systemctl restart nodehubsapi-cloudflared.service
+  if [ "$USE_SYSTEMD" = "1" ]; then
+    write_argo_service "$cloudflared_bin"
+    run_systemctl daemon-reload
+    run_systemctl enable --now nodehubsapi-cloudflared.service >/dev/null
+    run_systemctl restart nodehubsapi-cloudflared.service
+  else
+    start_argo_background "$cloudflared_bin"
+  fi
   sleep 5
   sync_argo_domain_state
   log "Argo bootstrap completed."
@@ -1046,8 +1189,12 @@ ${runtimeFileBlocks
 }
 
 write_runtime_service() {
+  if [ "$USE_SYSTEMD" != "1" ]; then
+    return 0
+  fi
   local exec_args
   exec_args="$(render_template "$RUNTIME_RUN_ARGS_TEMPLATE" "")"
+  mkdir -p "$SYSTEMD_DIR"
   cat >"$RUNTIME_SERVICE_FILE" <<EOF
 [Unit]
 Description=nodehubsapi runtime ($RUNTIME_ENGINE)
@@ -1063,19 +1210,57 @@ RestartSec=3
 LimitNOFILE=1048576
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=$SYSTEMD_WANTED_BY
 EOF
 }
 
+stop_runtime_process_by_engine() {
+  local engine="$1"
+  local pid_file="$STATE_DIR/runtime/\${engine}.pid"
+  local pid=""
+  if [ -f "$pid_file" ]; then
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" >/dev/null 2>&1 || true
+      sleep 1
+      if kill -0 "$pid" 2>/dev/null; then
+        kill -9 "$pid" >/dev/null 2>&1 || true
+      fi
+    fi
+    rm -f "$pid_file"
+  fi
+}
+
+restart_runtime_process() {
+  local exec_args log_file pid_file
+  exec_args="$(render_template "$RUNTIME_RUN_ARGS_TEMPLATE" "")"
+  mkdir -p "$STATE_DIR/runtime"
+  log_file="$STATE_DIR/runtime/\${RUNTIME_ENGINE}.log"
+  pid_file="$STATE_DIR/runtime/\${RUNTIME_ENGINE}.pid"
+  stop_runtime_process_by_engine "$RUNTIME_ENGINE"
+  nohup /bin/sh -lc "cd \"$ETC_DIR\" && exec \"$RUNTIME_INSTALL_PATH\" $exec_args" >>"$log_file" 2>&1 &
+  echo "$!" > "$pid_file"
+  sleep 1
+  kill -0 "$(cat "$pid_file" 2>/dev/null || true)" 2>/dev/null
+}
+
 restart_runtime_service() {
-  systemctl daemon-reload
-  systemctl enable --now "$RUNTIME_SERVICE_NAME.service" >/dev/null
-  systemctl restart "$RUNTIME_SERVICE_NAME.service"
-  systemctl is-active --quiet "$RUNTIME_SERVICE_NAME.service"
+  if [ "$USE_SYSTEMD" = "1" ]; then
+    run_systemctl daemon-reload
+    run_systemctl enable --now "$RUNTIME_SERVICE_NAME.service" >/dev/null
+    run_systemctl restart "$RUNTIME_SERVICE_NAME.service"
+    run_systemctl is-active --quiet "$RUNTIME_SERVICE_NAME.service"
+    return 0
+  fi
+  restart_runtime_process
 }
 
 stop_runtime_kernels() {
-  systemctl stop nodehubsapi-runtime-sing-box.service nodehubsapi-runtime-xray.service nodehubsapi-runtime.service >/dev/null 2>&1 || true
+  if [ "$USE_SYSTEMD" = "1" ]; then
+    run_systemctl stop nodehubsapi-runtime-sing-box.service nodehubsapi-runtime-xray.service nodehubsapi-runtime.service >/dev/null 2>&1 || true
+  fi
+  stop_runtime_process_by_engine "sing-box"
+  stop_runtime_process_by_engine "xray"
   pkill -x sing-box >/dev/null 2>&1 || true
   pkill -x xray >/dev/null 2>&1 || true
 }
@@ -1112,14 +1297,7 @@ fail_apply() {
 }
 
 main() {
-  if [ "\${EUID:-$(id -u)}" -ne 0 ]; then
-    echo "Release apply script must run as root." >&2
-    exit 1
-  fi
-  if ! command -v systemctl >/dev/null 2>&1; then
-    echo "systemd is required for runtime management." >&2
-    exit 1
-  fi
+  detect_execution_mode
 
   TMP_DIR="$(mktemp -d)"
   trap fail_apply ERR
@@ -1169,10 +1347,18 @@ NODE_ID=${shellQuote(input.nodeId)}
 AGENT_TOKEN=${shellQuote(input.agentToken)}
 AGENT_VERSION=${shellQuote(APP_VERSION)}
 AGENT_INSTALL_URL=${shellQuote(installUrl)}
-STATE_DIR=${shellQuote('/opt/nodehubsapi')}
-ETC_DIR=${shellQuote('/etc/nodehubsapi')}
-AGENT_BIN=${shellQuote('/usr/local/bin/nodehubsapi-agent')}
-SERVICE_FILE=${shellQuote('/etc/systemd/system/nodehubsapi-agent.service')}
+STATE_DIR=""
+ETC_DIR=""
+AGENT_BIN=""
+SERVICE_FILE=""
+AGENT_ENV_FILE=""
+RUNTIME_BIN_DIR=""
+WARP_BIN_PATH=""
+CLOUDFLARED_BIN_PATH=""
+SYSTEMCTL_USER_FLAG=""
+SYSTEMD_WANTED_BY="multi-user.target"
+USE_SYSTEMD=0
+INSTALL_MODE=""
 POLL_INTERVAL=15
 
 json_escape() {
@@ -1185,17 +1371,58 @@ json_escape() {
   printf '"%s"' "$value"
 }
 
-require_root() {
-  if [ "\${EUID:-$(id -u)}" -ne 0 ]; then
-    echo "Run this installer as root." >&2
-    exit 1
-  fi
+is_root() {
+  [ "\${EUID:-$(id -u)}" -eq 0 ]
 }
 
-ensure_systemd() {
-  if ! command -v systemctl >/dev/null 2>&1; then
-    echo "systemd is required for the managed agent service." >&2
-    exit 1
+detect_install_context() {
+  if is_root; then
+    INSTALL_MODE="system"
+    STATE_DIR="/opt/nodehubsapi"
+    ETC_DIR="/etc/nodehubsapi"
+    AGENT_BIN="/usr/local/bin/nodehubsapi-agent"
+    SERVICE_FILE="/etc/systemd/system/nodehubsapi-agent.service"
+    RUNTIME_BIN_DIR="/usr/local/bin"
+  else
+    INSTALL_MODE="user"
+    STATE_DIR="$HOME/.local/share/nodehubsapi"
+    ETC_DIR="$HOME/.config/nodehubsapi"
+    AGENT_BIN="$HOME/.local/bin/nodehubsapi-agent"
+    SERVICE_FILE="$HOME/.config/systemd/user/nodehubsapi-agent.service"
+    SYSTEMCTL_USER_FLAG="--user"
+    SYSTEMD_WANTED_BY="default.target"
+    RUNTIME_BIN_DIR="$HOME/.local/bin"
+  fi
+
+  if ! mkdir -p "$STATE_DIR" "$ETC_DIR" "$(dirname "$AGENT_BIN")" >/dev/null 2>&1; then
+    if [ "$INSTALL_MODE" = "system" ]; then
+      INSTALL_MODE="user"
+      STATE_DIR="$HOME/.local/share/nodehubsapi"
+      ETC_DIR="$HOME/.config/nodehubsapi"
+      AGENT_BIN="$HOME/.local/bin/nodehubsapi-agent"
+      SERVICE_FILE="$HOME/.config/systemd/user/nodehubsapi-agent.service"
+      SYSTEMCTL_USER_FLAG="--user"
+      SYSTEMD_WANTED_BY="default.target"
+      RUNTIME_BIN_DIR="$HOME/.local/bin"
+      mkdir -p "$STATE_DIR" "$ETC_DIR" "$(dirname "$AGENT_BIN")"
+    else
+      echo "Failed to create user-mode directories." >&2
+      exit 1
+    fi
+  fi
+
+  AGENT_ENV_FILE="$ETC_DIR/agent.env"
+  WARP_BIN_PATH="$RUNTIME_BIN_DIR/warp-go"
+  CLOUDFLARED_BIN_PATH="$RUNTIME_BIN_DIR/cloudflared"
+
+  if command -v systemctl >/dev/null 2>&1; then
+    if [ "$INSTALL_MODE" = "user" ]; then
+      if systemctl --user show-environment >/dev/null 2>&1; then
+        USE_SYSTEMD=1
+      fi
+    elif [ -d /run/systemd/system ]; then
+      USE_SYSTEMD=1
+    fi
   fi
 }
 
@@ -1209,7 +1436,7 @@ ensure_downloader() {
 
 write_agent_env() {
   mkdir -p "$STATE_DIR/releases" "$STATE_DIR/runtime" "$ETC_DIR/hooks/pre-apply.d" "$ETC_DIR/hooks/post-apply.d" "$ETC_DIR/hooks/bootstrap.d"
-  cat >"$ETC_DIR/agent.env" <<EOF
+  cat >"$AGENT_ENV_FILE" <<EOF
 API_BASE=$API_BASE
 NODE_ID=$NODE_ID
 AGENT_TOKEN=$AGENT_TOKEN
@@ -1217,6 +1444,13 @@ AGENT_VERSION=$AGENT_VERSION
 AGENT_INSTALL_URL=$AGENT_INSTALL_URL
 STATE_DIR=$STATE_DIR
 ETC_DIR=$ETC_DIR
+RUNTIME_BIN_DIR=$RUNTIME_BIN_DIR
+INSTALL_MODE=$INSTALL_MODE
+USE_SYSTEMD=$USE_SYSTEMD
+SYSTEMCTL_USER_FLAG=$SYSTEMCTL_USER_FLAG
+WARP_BIN_PATH=$WARP_BIN_PATH
+CLOUDFLARED_BIN_PATH=$CLOUDFLARED_BIN_PATH
+NODESHUB_AGENT_ENV_FILE=$AGENT_ENV_FILE
 POLL_INTERVAL=$POLL_INTERVAL
 EOF
 }
@@ -1226,7 +1460,20 @@ write_agent_binary() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-. /etc/nodehubsapi/agent.env
+if [ -n "\${NODESHUB_AGENT_ENV_FILE:-}" ] && [ -f "$NODESHUB_AGENT_ENV_FILE" ]; then
+  . "$NODESHUB_AGENT_ENV_FILE"
+elif [ -f /etc/nodehubsapi/agent.env ]; then
+  . /etc/nodehubsapi/agent.env
+elif [ -f "$HOME/.config/nodehubsapi/agent.env" ]; then
+  . "$HOME/.config/nodehubsapi/agent.env"
+else
+  echo "agent.env not found." >&2
+  exit 1
+fi
+
+RUNTIME_BIN_DIR="\${RUNTIME_BIN_DIR:-/usr/local/bin}"
+WARP_BIN_PATH="\${WARP_BIN_PATH:-$RUNTIME_BIN_DIR/warp-go}"
+CLOUDFLARED_BIN_PATH="\${CLOUDFLARED_BIN_PATH:-$RUNTIME_BIN_DIR/cloudflared}"
 
 json_escape() {
   local value="$1"
@@ -1370,12 +1617,12 @@ connection_count() {
 }
 
 runtime_version() {
-  if [ -x /usr/local/bin/sing-box ]; then
-    /usr/local/bin/sing-box version 2>/dev/null | head -n 1 | tr -d '\r'
+  if [ -x "$RUNTIME_BIN_DIR/sing-box" ]; then
+    "$RUNTIME_BIN_DIR/sing-box" version 2>/dev/null | head -n 1 | tr -d '\r'
     return 0
   fi
-  if [ -x /usr/local/bin/xray ]; then
-    /usr/local/bin/xray version 2>/dev/null | head -n 1 | tr -d '\r'
+  if [ -x "$RUNTIME_BIN_DIR/xray" ]; then
+    "$RUNTIME_BIN_DIR/xray" version 2>/dev/null | head -n 1 | tr -d '\r'
     return 0
   fi
   printf ''
@@ -1401,11 +1648,15 @@ warp_endpoint() {
 }
 
 warp_status() {
+  if [ -f "$STATE_DIR/warp/warp.pid" ] && kill -0 "$(cat "$STATE_DIR/warp/warp.pid" 2>/dev/null || true)" 2>/dev/null; then
+    printf 'running'
+    return 0
+  fi
   if command -v pgrep >/dev/null 2>&1 && pgrep -f 'warp-go|wireguard|wg-quick' >/dev/null 2>&1; then
     printf 'running'
     return 0
   fi
-  if [ -f "$STATE_DIR/warp/v6" ] || [ -f "$STATE_DIR/warp/warp.conf" ] || [ -x /usr/local/bin/warp-go ]; then
+  if [ -f "$STATE_DIR/warp/v6" ] || [ -f "$STATE_DIR/warp/warp.conf" ] || [ -x "$WARP_BIN_PATH" ]; then
     printf 'installed'
     return 0
   fi
@@ -1422,11 +1673,15 @@ argo_domain() {
 }
 
 argo_status() {
-  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nodehubsapi-cloudflared.service 2>/dev/null; then
+  if [ -f "$STATE_DIR/argo/cloudflared.pid" ] && kill -0 "$(cat "$STATE_DIR/argo/cloudflared.pid" 2>/dev/null || true)" 2>/dev/null; then
     printf 'running'
     return 0
   fi
-  if [ -f /etc/systemd/system/nodehubsapi-cloudflared.service ] || [ -x /usr/local/bin/cloudflared ]; then
+  if [ "\${USE_SYSTEMD:-0}" = "1" ] && command -v systemctl >/dev/null 2>&1 && systemctl \${SYSTEMCTL_USER_FLAG:-} is-active --quiet nodehubsapi-cloudflared.service 2>/dev/null; then
+    printf 'running'
+    return 0
+  fi
+  if [ -f "$ETC_DIR/cloudflared.env" ] || [ -x "$CLOUDFLARED_BIN_PATH" ]; then
     printf 'installed'
     return 0
   fi
@@ -1502,7 +1757,7 @@ apply_release() {
     return 1
   fi
   chmod +x "$script_file"
-  export API_BASE NODE_ID AGENT_TOKEN AGENT_VERSION AGENT_INSTALL_URL ETC_DIR STATE_DIR
+  export API_BASE NODE_ID AGENT_TOKEN AGENT_VERSION AGENT_INSTALL_URL ETC_DIR STATE_DIR RUNTIME_BIN_DIR INSTALL_MODE USE_SYSTEMD SYSTEMCTL_USER_FLAG
   if ! bash "$script_file"; then
     rm -f "$script_file"
     return 1
@@ -1543,6 +1798,8 @@ EOF
 }
 
 write_service() {
+  [ "$USE_SYSTEMD" = "1" ] || return 1
+  mkdir -p "$(dirname "$SERVICE_FILE")"
   cat >"$SERVICE_FILE" <<EOF
 [Unit]
 Description=nodehubsapi agent
@@ -1557,20 +1814,36 @@ Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=$SYSTEMD_WANTED_BY
 EOF
 
-  systemctl daemon-reload
-  systemctl enable --now nodehubsapi-agent.service
+  systemctl $SYSTEMCTL_USER_FLAG daemon-reload
+  systemctl $SYSTEMCTL_USER_FLAG enable --now nodehubsapi-agent.service
+}
+
+start_agent_background() {
+  local pid_file="$STATE_DIR/agent.pid"
+  local log_file="$STATE_DIR/agent.log"
+  local old_pid=""
+  if [ -f "$pid_file" ]; then
+    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+      kill "$old_pid" >/dev/null 2>&1 || true
+      sleep 1
+    fi
+  fi
+  nohup "$AGENT_BIN" >>"$log_file" 2>&1 &
+  echo "$!" > "$pid_file"
 }
 
 print_summary() {
   cat <<EOF
 nodehubsapi agent installed.
 
+- Install mode: $INSTALL_MODE
 - API base: $API_BASE
 - Node ID: $NODE_ID
-- Agent env: $ETC_DIR/agent.env
+- Agent env: $AGENT_ENV_FILE
 - Runtime config root: $ETC_DIR/runtime
 - Hook directories:
   $ETC_DIR/hooks/pre-apply.d
@@ -1579,12 +1852,13 @@ nodehubsapi agent installed.
 EOF
 }
 
-require_root
-ensure_systemd
 ensure_downloader
+detect_install_context
 write_agent_env
 write_agent_binary
-write_service
+if ! write_service; then
+  start_agent_background
+fi
 print_summary
 `
 }

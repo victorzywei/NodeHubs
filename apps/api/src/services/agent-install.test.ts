@@ -71,8 +71,10 @@ describe('agent install scripts', () => {
       agentToken: 'token_123',
     })
 
-    expect(command).toContain('bash -lc')
+    expect(command).toContain('set -euo pipefail')
+    expect(command).toContain("URL='https://control.example.com/api/nodes/agent/install?nodeId=node_1'")
     expect(command).toContain('TMP_FILE="$(mktemp)"')
+    expect(command).not.toContain('then;')
     expect(command).not.toContain('| bash')
   })
 
@@ -133,7 +135,7 @@ describe('agent install scripts', () => {
     expect(script).toContain('stop_runtime_kernels')
     expect(script).toContain('apply_runtime_plans')
     expect(script).toContain('systemctl stop nodehubsapi-runtime-sing-box.service nodehubsapi-runtime-xray.service')
-    expect(script).toContain('/etc/nodehubsapi/runtime/sing-box.json')
+    expect(script).toContain('RUNTIME_CONFIG_PATH="${ETC_DIR}/runtime/sing-box.json"')
     expect(script).toContain('refresh_agent_installation_if_needed')
     expect(script).toContain('schedule_agent_restart_if_needed')
     expect(script).toContain('if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then')
