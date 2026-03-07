@@ -2247,13 +2247,13 @@ memory_usage_percent() {
 
 cpu_usage_percent() {
   if [ -r /proc/loadavg ] && command -v nproc >/dev/null 2>&1; then
-    load=$(awk '{print $1}' /proc/loadavg)
+    load_avg=$(awk '{print $1}' /proc/loadavg)
     cores=$(nproc)
-    awk -v load="$load" -v cores="$cores" 'BEGIN {
+    awk -v load_avg="$load_avg" -v cores="$cores" 'BEGIN {
       if (cores <= 0) {
         print "null"
       } else {
-        value = (load / cores) * 100
+        value = (load_avg / cores) * 100
         if (value > 100) value = 100
         printf "%.2f", value
       }
