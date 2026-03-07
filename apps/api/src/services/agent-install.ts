@@ -1446,7 +1446,7 @@ EOF
 }
 
 write_agent_binary() {
-  cat >"$AGENT_BIN" <<'EOF'
+  cat >"$AGENT_BIN" <<'NODESHUB_AGENT_BIN_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -1782,7 +1782,7 @@ loop() {
 }
 
 loop
-EOF
+NODESHUB_AGENT_BIN_EOF
 
   chmod +x "$AGENT_BIN"
 }
