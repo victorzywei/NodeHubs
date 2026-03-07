@@ -247,13 +247,7 @@ AGENT_UPGRADED=0
 ${bootstrapTlsDomains}
 
 json_escape() {
-  local value="$1"
-  value="\${value//\\/\\\\}"
-  value="\${value//\"/\\\"}"
-  value="\${value//$'\\n'/\\n}"
-  value="\${value//$'\\r'/\\r}"
-  value="\${value//$'\\t'/\\t}"
-  printf '"%s"' "$value"
+  printf '"%s"' "$1"
 }
 
 log() {
@@ -1352,13 +1346,7 @@ INSTALL_MODE=""
 POLL_INTERVAL=15
 
 json_escape() {
-  local value="$1"
-  value="\${value//\\/\\\\}"
-  value="\${value//\"/\\\"}"
-  value="\${value//$'\\n'/\\n}"
-  value="\${value//$'\\r'/\\r}"
-  value="\${value//$'\\t'/\\t}"
-  printf '"%s"' "$value"
+  printf '"%s"' "$1"
 }
 
 is_root() {
@@ -1466,13 +1454,7 @@ WARP_BIN_PATH="\${WARP_BIN_PATH:-$RUNTIME_BIN_DIR/warp-go}"
 CLOUDFLARED_BIN_PATH="\${CLOUDFLARED_BIN_PATH:-$RUNTIME_BIN_DIR/cloudflared}"
 
 json_escape() {
-  local value="$1"
-  value="\${value//\\/\\\\}"
-  value="\${value//\"/\\\"}"
-  value="\${value//$'\\n'/\\n}"
-  value="\${value//$'\\r'/\\r}"
-  value="\${value//$'\\t'/\\t}"
-  printf '"%s"' "$value"
+  printf '"%s"' "$1"
 }
 
 http_get() {
