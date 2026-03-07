@@ -203,11 +203,14 @@ nodeRoutes.get('/agent/reconcile', async (c) => {
 
   const desired = await getDesiredRelease(c.get('services'), nodeId)
   const format = c.req.query('format') || 'json'
+  const installUrl = `${c.get('services').publicBaseUrl}/api/nodes/agent/install?nodeId=${encodeURIComponent(nodeId)}`
   if (!desired || !desired.release) {
     const payload = {
       nodeId,
       needsUpdate: false,
       currentReleaseRevision: nodeRow.current_release_revision,
+      agentVersion: c.get('services').appVersion,
+      installUrl,
     }
     if (format === 'env') {
       return new Response(
@@ -215,6 +218,8 @@ nodeRoutes.get('/agent/reconcile', async (c) => {
           nodeId,
           needsUpdate: false,
           currentReleaseRevision: Number(nodeRow.current_release_revision || 0),
+          agentVersion: c.get('services').appVersion,
+          installUrl,
         }),
         {
           status: 200,
@@ -241,6 +246,8 @@ nodeRoutes.get('/agent/reconcile', async (c) => {
         applyUrl,
         artifactUrl,
         status: desired.release.status,
+        agentVersion: c.get('services').appVersion,
+        installUrl,
       }),
       {
         status: 200,
@@ -261,6 +268,8 @@ nodeRoutes.get('/agent/reconcile', async (c) => {
     applyUrl,
     artifactUrl,
     status: desired.release.status,
+    agentVersion: c.get('services').appVersion,
+    installUrl,
   })
 })
 

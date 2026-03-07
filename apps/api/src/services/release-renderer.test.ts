@@ -127,4 +127,32 @@ describe('release renderer', () => {
   it('exposes a small template catalog', () => {
     expect(listTemplatePresets().length).toBeGreaterThan(0)
   })
+
+  it('rejects incompatible engine and protocol combinations', () => {
+    const runtimeCatalog = buildRuntimeCatalog()
+    const invalidTemplate: TemplateRecord = {
+      ...createTemplate(),
+      engine: 'xray',
+      protocol: 'hysteria2',
+      transport: 'hysteria2',
+      tlsMode: 'tls',
+      defaults: {
+        ...createTemplate().defaults,
+        password: 'replace-me',
+      },
+    }
+
+    expect(() => renderReleaseArtifact({
+      releaseId: 'rel_invalid',
+      revision: 4,
+      kind: 'runtime',
+      configRevision: 4,
+      bootstrapRevision: 1,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: 'invalid',
+      summary: 'runtime update',
+      node: createNode(),
+      templates: [invalidTemplate],
+    }, runtimeCatalog)).toThrow(/requires sing-box/i)
+  })
 })

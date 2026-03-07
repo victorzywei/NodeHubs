@@ -212,6 +212,45 @@ function ensureProtocolSupport(template: TemplateRecord): void {
   }
 }
 
+function ensureTemplateCompatibility(template: TemplateRecord): void {
+  const protocol = template.protocol.toLowerCase()
+  const transport = template.transport.toLowerCase()
+
+  if (protocol === 'hysteria2') {
+    if (template.engine !== 'sing-box') {
+      throw new Error(`Template ${template.name} requires sing-box for the hysteria2 protocol`)
+    }
+    if (transport !== 'hysteria2') {
+      throw new Error(`Template ${template.name} must use the hysteria2 transport`)
+    }
+    if (template.tlsMode !== 'tls') {
+      throw new Error(`Template ${template.name} must use TLS mode for hysteria2`)
+    }
+  }
+
+  if (transport === 'hysteria2' && protocol !== 'hysteria2') {
+    throw new Error(`Template ${template.name} can only use the hysteria2 transport with the hysteria2 protocol`)
+  }
+
+  if (protocol === 'shadowsocks') {
+    if (template.tlsMode !== 'none') {
+      throw new Error(`Template ${template.name} must disable TLS for shadowsocks`)
+    }
+    if (transport !== 'tcp') {
+      throw new Error(`Template ${template.name} must use the tcp transport for shadowsocks`)
+    }
+  }
+
+  if (template.tlsMode === 'reality') {
+    if (protocol !== 'vless') {
+      throw new Error(`Template ${template.name} can only use reality with the vless protocol`)
+    }
+    if (transport !== 'tcp') {
+      throw new Error(`Template ${template.name} must use the tcp transport for reality`)
+    }
+  }
+}
+
 function defaultPort(template: TemplateRecord): number {
   if (template.tlsMode === 'none') return 80
   return 443
@@ -233,6 +272,7 @@ function defaultTemplateServer(node: NodeRecord): string {
 
 function normalizeTemplate(node: NodeRecord, template: TemplateRecord): NormalizedTemplate {
   ensureProtocolSupport(template)
+  ensureTemplateCompatibility(template)
   const defaults = template.defaults || {}
   const server = readString(defaults, 'server', defaultTemplateServer(node))
   if (!server) {
@@ -382,9 +422,8 @@ function buildSingBoxInbound(template: NormalizedTemplate, index: number) {
 }
 
 function buildXrayInbound(template: NormalizedTemplate, index: number) {
-  // Hysteria2 is not supported by Xray, skip
   if (template.protocol === 'hysteria2') {
-    return buildSingBoxInbound(template, index)
+    throw new Error(`Template ${template.name} cannot be rendered with the xray engine`)
   }
 
   const inbound: Record<string, unknown> = {

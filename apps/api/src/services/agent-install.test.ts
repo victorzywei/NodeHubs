@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAgentInstallScript, buildAgentReconcileEnv, buildReleaseApplyScript } from './agent-install'
+import { buildAgentInstallScript, buildAgentReconcileEnv, buildDeployCommand, buildReleaseApplyScript } from './agent-install'
 import { renderReleaseArtifact } from './release-renderer'
 import { buildRuntimeCatalog } from './runtime-catalog'
 import type { NodeRecord, TemplateRecord } from '@contracts/index'
@@ -62,6 +62,18 @@ function createTemplate(): TemplateRecord {
 }
 
 describe('agent install scripts', () => {
+  it('builds a deploy command that fails closed on download errors', () => {
+    const command = buildDeployCommand({
+      publicBaseUrl: 'https://control.example.com/',
+      nodeId: 'node_1',
+      agentToken: 'token_123',
+    })
+
+    expect(command).toContain('bash -lc')
+    expect(command).toContain('TMP_FILE="$(mktemp)"')
+    expect(command).not.toContain('| bash')
+  })
+
   it('builds a generic installer without package manager dependencies', () => {
     const script = buildAgentInstallScript({
       publicBaseUrl: 'https://control.example.com/',
@@ -72,6 +84,8 @@ describe('agent install scripts', () => {
     expect(script).toContain('/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env')
     expect(script).toContain('curl')
     expect(script).toContain('wget')
+    expect(script).toContain('AGENT_VERSION=')
+    expect(script).toContain('self_update_if_needed')
     expect(script).not.toContain('apt-get install')
     expect(script).not.toContain('jq')
   })
@@ -86,10 +100,14 @@ describe('agent install scripts', () => {
       applyUrl: 'https://control.example.com/apply',
       artifactUrl: 'https://control.example.com/artifact',
       status: 'pending',
+      agentVersion: '0.1.0',
+      installUrl: 'https://control.example.com/install',
     })
 
     expect(body).toContain("needs_update=1")
     expect(body).toContain("apply_url='https://control.example.com/apply'")
+    expect(body).toContain("agent_version='0.1.0'")
+    expect(body).toContain("install_url='https://control.example.com/install'")
   })
 
   it('builds release apply scripts that install runtime binaries and write config files', () => {
@@ -112,5 +130,8 @@ describe('agent install scripts', () => {
     expect(script).toContain('resolve_runtime_arch')
     expect(script).toContain('systemctl restart "$RUNTIME_SERVICE_NAME.service"')
     expect(script).toContain('/etc/nodehubsapi/runtime/sing-box.json')
+    expect(script).toContain('refresh_agent_installation_if_needed')
+    expect(script).toContain('schedule_agent_restart_if_needed')
+    expect(script).toContain('if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then')
   })
 })

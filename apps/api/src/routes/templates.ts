@@ -28,7 +28,11 @@ templateRoutes.post('/', async (c) => {
   const body = await c.req.json().catch(() => null)
   const parsed = createTemplateSchema.safeParse(body)
   if (!parsed.success) return fail('VALIDATION', parsed.error.issues[0]?.message || 'invalid template body', 400)
-  return ok(await createTemplate(c.get('services'), parsed.data), 201)
+  try {
+    return ok(await createTemplate(c.get('services'), parsed.data), 201)
+  } catch (error) {
+    return fail('VALIDATION', error instanceof Error ? error.message : 'invalid template body', 400)
+  }
 })
 
 templateRoutes.patch('/:id', async (c) => {
@@ -37,7 +41,12 @@ templateRoutes.patch('/:id', async (c) => {
   const body = await c.req.json().catch(() => null)
   const parsed = updateTemplateSchema.safeParse(body)
   if (!parsed.success) return fail('VALIDATION', parsed.error.issues[0]?.message || 'invalid template body', 400)
-  const template = await updateTemplate(c.get('services'), c.req.param('id'), parsed.data)
+  let template = null
+  try {
+    template = await updateTemplate(c.get('services'), c.req.param('id'), parsed.data)
+  } catch (error) {
+    return fail('VALIDATION', error instanceof Error ? error.message : 'invalid template body', 400)
+  }
   if (!template) return fail('NOT_FOUND', 'Template not found', 404)
   return ok(template)
 })

@@ -1,4 +1,5 @@
 import type { ReleaseArtifact } from '@contracts/index'
+import { APP_VERSION } from '../lib/constants'
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`
@@ -12,7 +13,26 @@ export function buildDeployCommand(input: {
   const apiBase = input.publicBaseUrl.replace(/\/+$/, '')
   const installUrl = `${apiBase}/api/nodes/agent/install?nodeId=${encodeURIComponent(input.nodeId)}`
   const tokenHeader = `X-Agent-Token: ${input.agentToken}`
-  return `URL=${shellQuote(installUrl)}; TOKEN_HEADER=${shellQuote(tokenHeader)}; if command -v curl >/dev/null 2>&1; then curl -fsSL -H "$TOKEN_HEADER" "$URL"; elif command -v wget >/dev/null 2>&1; then wget -qO- --header="$TOKEN_HEADER" "$URL"; else busybox wget -qO- --header="$TOKEN_HEADER" "$URL"; fi | bash`
+  const command = [
+    'set -euo pipefail',
+    `URL=${shellQuote(installUrl)}`,
+    `TOKEN_HEADER=${shellQuote(tokenHeader)}`,
+    'TMP_FILE="$(mktemp)"',
+    'cleanup() { rm -f "$TMP_FILE"; }',
+    'trap cleanup EXIT',
+    'if command -v curl >/dev/null 2>&1; then',
+    '  curl -fsSL -H "$TOKEN_HEADER" "$URL" -o "$TMP_FILE"',
+    'elif command -v wget >/dev/null 2>&1; then',
+    '  wget -qO "$TMP_FILE" --header="$TOKEN_HEADER" "$URL"',
+    'elif command -v busybox >/dev/null 2>&1; then',
+    '  busybox wget -qO "$TMP_FILE" --header="$TOKEN_HEADER" "$URL"',
+    'else',
+    "  echo 'A downloader is required: curl, wget, or busybox wget.' >&2",
+    '  exit 1',
+    'fi',
+    'bash "$TMP_FILE"',
+  ].join('; ')
+  return `bash -lc ${shellQuote(command)}`
 }
 
 export function buildUninstallCommand(): string {
@@ -43,6 +63,8 @@ export function buildAgentReconcileEnv(input: {
   applyUrl?: string
   artifactUrl?: string
   status?: string
+  agentVersion?: string
+  installUrl?: string
 }): string {
   return [
     `node_id=${shellQuote(input.nodeId)}`,
@@ -53,6 +75,8 @@ export function buildAgentReconcileEnv(input: {
     `apply_url=${shellQuote(input.applyUrl || '')}`,
     `artifact_url=${shellQuote(input.artifactUrl || '')}`,
     `release_status=${shellQuote(input.status || '')}`,
+    `agent_version=${shellQuote(input.agentVersion || '')}`,
+    `install_url=${shellQuote(input.installUrl || '')}`,
   ].join('\n')
 }
 
@@ -185,6 +209,8 @@ NODE_WARP_LICENSE_KEY=${shellQuote(artifact.node.warpLicenseKey || '')}
 NODE_ARGO_TUNNEL_TOKEN=${shellQuote(artifact.node.argoTunnelToken || '')}
 NODE_ARGO_TUNNEL_DOMAIN=${shellQuote(artifact.node.argoTunnelDomain || '')}
 NODE_ARGO_ORIGIN_PORT=${shellQuote(argoOriginPort)}
+CONTROL_PLANE_AGENT_VERSION=${shellQuote(APP_VERSION)}
+AGENT_UPGRADED=0
 ${bootstrapTlsDomains}
 
 json_escape() {
@@ -271,6 +297,38 @@ post_json() {
   fi
   echo "A POST-capable downloader is required." >&2
   return 1
+}
+
+refresh_agent_installation_if_needed() {
+  if [ "\${AGENT_VERSION:-}" = "$CONTROL_PLANE_AGENT_VERSION" ]; then
+    return 0
+  fi
+  local install_url script_file
+  install_url="$API_BASE/api/nodes/agent/install?nodeId=$NODE_ID"
+  script_file="$(mktemp)"
+  if ! http_get_to_file "$install_url" "$script_file"; then
+    rm -f "$script_file"
+    echo "Failed to download the nodehubsapi agent installer." >&2
+    return 1
+  fi
+  chmod +x "$script_file"
+  if ! bash "$script_file"; then
+    rm -f "$script_file"
+    echo "Failed to refresh the nodehubsapi agent." >&2
+    return 1
+  fi
+  rm -f "$script_file"
+  AGENT_UPGRADED=1
+}
+
+schedule_agent_restart_if_needed() {
+  if [ "$AGENT_UPGRADED" != "1" ]; then
+    return 0
+  fi
+  if command -v systemd-run >/dev/null 2>&1; then
+    systemd-run --unit "nodehubsapi-agent-refresh-$(date +%s)" --on-active=2 /bin/sh -lc 'systemctl restart nodehubsapi-agent.service' >/dev/null 2>&1 && return 0
+  fi
+  /bin/sh -lc 'sleep 2; systemctl restart nodehubsapi-agent.service' >/dev/null 2>&1 &
 }
 
 ack_release() {
@@ -1017,6 +1075,7 @@ main() {
 
   mkdir -p "$ETC_DIR/runtime" "$ETC_DIR/certs" "$STATE_DIR/releases" "$STATE_DIR/warp" "$STATE_DIR/argo" "$STATE_DIR/lego" "$ETC_DIR/hooks/pre-apply.d" "$ETC_DIR/hooks/post-apply.d" "$ETC_DIR/hooks/bootstrap.d"
 
+  refresh_agent_installation_if_needed
   ack_release "applying" "release apply started"
   run_hooks "$ETC_DIR/hooks/pre-apply.d"
   if [ "$RELEASE_KIND" = "bootstrap" ]; then
@@ -1028,14 +1087,15 @@ main() {
   write_runtime_service
   cp "$ETC_DIR/runtime/release.json" "$STATE_DIR/releases/current.json"
   restart_runtime_service
-  if [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then
-    ensure_warp_bootstrap || warn "WARP bootstrap failed."
+  if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then
+    ensure_warp_bootstrap
   fi
-  if [ "$BOOTSTRAP_INSTALL_ARGO" = "1" ]; then
-    ensure_argo_bootstrap || warn "Argo bootstrap failed."
+  if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_ARGO" = "1" ]; then
+    ensure_argo_bootstrap
   fi
   run_hooks "$ETC_DIR/hooks/post-apply.d"
   ack_release "healthy" "release applied"
+  schedule_agent_restart_if_needed
   trap - ERR
   cleanup
 }
@@ -1050,12 +1110,15 @@ export function buildAgentInstallScript(input: {
   agentToken: string
 }): string {
   const apiBase = input.publicBaseUrl.replace(/\/+$/, '')
+  const installUrl = `${apiBase}/api/nodes/agent/install?nodeId=${encodeURIComponent(input.nodeId)}`
   return `#!/usr/bin/env bash
 set -euo pipefail
 
 API_BASE=${shellQuote(apiBase)}
 NODE_ID=${shellQuote(input.nodeId)}
 AGENT_TOKEN=${shellQuote(input.agentToken)}
+AGENT_VERSION=${shellQuote(APP_VERSION)}
+AGENT_INSTALL_URL=${shellQuote(installUrl)}
 STATE_DIR=${shellQuote('/opt/nodehubsapi')}
 ETC_DIR=${shellQuote('/etc/nodehubsapi')}
 AGENT_BIN=${shellQuote('/usr/local/bin/nodehubsapi-agent')}
@@ -1100,6 +1163,8 @@ write_agent_env() {
 API_BASE=$API_BASE
 NODE_ID=$NODE_ID
 AGENT_TOKEN=$AGENT_TOKEN
+AGENT_VERSION=$AGENT_VERSION
+AGENT_INSTALL_URL=$AGENT_INSTALL_URL
 STATE_DIR=$STATE_DIR
 ETC_DIR=$ETC_DIR
 POLL_INTERVAL=$POLL_INTERVAL
@@ -1177,6 +1242,36 @@ post_json() {
   fi
   echo "No POST-capable downloader available." >&2
   return 1
+}
+
+run_install_script() {
+  local install_url="$1"
+  local script_file
+  if [ -z "$install_url" ]; then
+    install_url="$API_BASE/api/nodes/agent/install?nodeId=$NODE_ID"
+  fi
+  script_file="$(mktemp)"
+  if ! http_get_to_file "$install_url" "$script_file"; then
+    rm -f "$script_file"
+    return 1
+  fi
+  chmod +x "$script_file"
+  if ! bash "$script_file"; then
+    rm -f "$script_file"
+    return 1
+  fi
+  rm -f "$script_file"
+  return 0
+}
+
+self_update_if_needed() {
+  local desired_version="$1"
+  local install_url="$2"
+  if [ -z "$desired_version" ] || [ "$desired_version" = "\${AGENT_VERSION:-}" ]; then
+    return 0
+  fi
+  run_install_script "$install_url" || return 1
+  exit 0
 }
 
 sum_network_bytes() {
@@ -1357,7 +1452,7 @@ apply_release() {
     return 1
   fi
   chmod +x "$script_file"
-  export API_BASE NODE_ID AGENT_TOKEN ETC_DIR STATE_DIR
+  export API_BASE NODE_ID AGENT_TOKEN AGENT_VERSION AGENT_INSTALL_URL ETC_DIR STATE_DIR
   if ! bash "$script_file"; then
     rm -f "$script_file"
     return 1
@@ -1376,7 +1471,9 @@ reconcile() {
   . "$env_file"
   rm -f "$env_file"
 
-  if [ "\${needs_update:-0}" = "1" ] && [ -n "\${release_id:-}" ] && [ -n "\${apply_url:-}" ]; then
+  self_update_if_needed "\${agent_version:-}" "\${install_url:-}" || return 1
+
+  if [ "\${needs_update:-0}" = "1" ] && [ -n "\${release_id:-}" ] && [ -n "\${apply_url:-}" ] && { [ "\${release_status:-}" = "pending" ] || [ "\${release_status:-}" = "applying" ]; }; then
     apply_release "$release_id" "$apply_url" || true
   fi
 }

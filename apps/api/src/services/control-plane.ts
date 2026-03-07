@@ -1,3 +1,6 @@
+import {
+  createTemplateSchema,
+} from '@contracts/index'
 import type {
   CreateNodeInput,
   CreateSubscriptionInput,
@@ -180,6 +183,14 @@ function toTemplateRecord(row: TemplateRow): TemplateRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+function parseTemplateInput(input: CreateTemplateInput): CreateTemplateInput {
+  const parsed = createTemplateSchema.safeParse(input)
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message || 'invalid template body')
+  }
+  return parsed.data
 }
 
 function toReleaseRecord(row: ReleaseRow): ReleaseRecord {
@@ -418,6 +429,7 @@ export async function listTemplates(services: AppServices): Promise<TemplateReco
 }
 
 export async function createTemplate(services: AppServices, input: CreateTemplateInput): Promise<TemplateRecord> {
+  const nextTemplate = parseTemplateInput(input)
   const id = createId('tpl')
   const now = nowIso()
   await services.db.run(
@@ -425,13 +437,13 @@ export async function createTemplate(services: AppServices, input: CreateTemplat
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
-      input.name,
-      input.engine,
-      input.protocol,
-      input.transport,
-      input.tlsMode,
-      JSON.stringify(input.defaults),
-      input.notes,
+      nextTemplate.name,
+      nextTemplate.engine,
+      nextTemplate.protocol,
+      nextTemplate.transport,
+      nextTemplate.tlsMode,
+      JSON.stringify(nextTemplate.defaults),
+      nextTemplate.notes,
       now,
       now,
     ],
@@ -444,19 +456,28 @@ export async function createTemplate(services: AppServices, input: CreateTemplat
 export async function updateTemplate(services: AppServices, templateId: string, input: UpdateTemplateInput): Promise<TemplateRecord | null> {
   const current = await getTemplateRow(services, templateId)
   if (!current) return null
+  const nextTemplate = parseTemplateInput({
+    name: input.name ?? current.name,
+    engine: input.engine ?? (current.engine as CreateTemplateInput['engine']),
+    protocol: input.protocol ?? current.protocol,
+    transport: input.transport ?? current.transport,
+    tlsMode: input.tlsMode ?? (current.tls_mode as CreateTemplateInput['tlsMode']),
+    defaults: input.defaults ?? parseJsonObject<Record<string, unknown>>(current.defaults_json, {}),
+    notes: input.notes ?? current.notes,
+  })
 
   await services.db.run(
     `UPDATE templates
      SET name = ?, engine = ?, protocol = ?, transport = ?, tls_mode = ?, defaults_json = ?, notes = ?, updated_at = ?
      WHERE id = ?`,
     [
-      input.name ?? current.name,
-      input.engine ?? current.engine,
-      input.protocol ?? current.protocol,
-      input.transport ?? current.transport,
-      input.tlsMode ?? current.tls_mode,
-      JSON.stringify(input.defaults ?? parseJsonObject<Record<string, unknown>>(current.defaults_json, {})),
-      input.notes ?? current.notes,
+      nextTemplate.name,
+      nextTemplate.engine,
+      nextTemplate.protocol,
+      nextTemplate.transport,
+      nextTemplate.tlsMode,
+      JSON.stringify(nextTemplate.defaults),
+      nextTemplate.notes,
       nowIso(),
       templateId,
     ],
@@ -780,9 +801,15 @@ export async function getDesiredRelease(services: AppServices, nodeId: string) {
     'SELECT * FROM releases WHERE node_id = ? AND revision = ?',
     [nodeId, Number(node.desired_release_revision || 0)],
   )
+  if (!release || (release.status !== 'pending' && release.status !== 'applying')) {
+    return {
+      node: toNodeRecord(node),
+      release: null,
+    }
+  }
   return {
     node: toNodeRecord(node),
-    release: release ? toReleaseRecord(release) : null,
+    release: toReleaseRecord(release),
   }
 }
 
@@ -806,6 +833,18 @@ export async function acknowledgeRelease(
     await services.db.run(
       'UPDATE nodes SET current_release_revision = ?, current_release_status = ?, updated_at = ? WHERE id = ?',
       [release.revision, status, updatedAt, nodeId],
+    )
+  } else if (status === 'failed') {
+    await services.db.run(
+      `UPDATE nodes
+       SET desired_release_revision = CASE
+         WHEN desired_release_revision = ? THEN current_release_revision
+         ELSE desired_release_revision
+       END,
+       current_release_status = ?,
+       updated_at = ?
+       WHERE id = ?`,
+      [Number(release.revision || 0), status, updatedAt, nodeId],
     )
   } else {
     await services.db.run(

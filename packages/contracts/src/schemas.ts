@@ -1,5 +1,87 @@
 import { z } from 'zod'
 
+function validateTemplateCombination(
+  input: {
+    engine?: 'sing-box' | 'xray'
+    protocol?: string
+    transport?: string
+    tlsMode?: 'none' | 'tls' | 'reality'
+  },
+  ctx: z.RefinementCtx,
+) {
+  if (!input.engine || !input.protocol || !input.transport || !input.tlsMode) {
+    return
+  }
+  const protocol = input.protocol.trim().toLowerCase()
+  const transport = input.transport.trim().toLowerCase()
+
+  if (protocol === 'hysteria2') {
+    if (input.engine !== 'sing-box') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['engine'],
+        message: 'Hysteria2 templates require the sing-box engine',
+      })
+    }
+    if (transport !== 'hysteria2') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['transport'],
+        message: 'Hysteria2 templates must use the hysteria2 transport',
+      })
+    }
+    if (input.tlsMode !== 'tls') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tlsMode'],
+        message: 'Hysteria2 templates must use TLS mode',
+      })
+    }
+  }
+
+  if (transport === 'hysteria2' && protocol !== 'hysteria2') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['transport'],
+      message: 'The hysteria2 transport can only be used with the hysteria2 protocol',
+    })
+  }
+
+  if (protocol === 'shadowsocks') {
+    if (input.tlsMode !== 'none') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tlsMode'],
+        message: 'Shadowsocks templates must use no TLS mode',
+      })
+    }
+    if (transport !== 'tcp') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['transport'],
+        message: 'Shadowsocks templates must use the tcp transport',
+      })
+    }
+  }
+
+  if (input.tlsMode === 'reality') {
+    if (protocol !== 'vless') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['protocol'],
+        message: 'Reality mode is only supported for VLESS templates',
+      })
+    }
+    if (transport !== 'tcp') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['transport'],
+        message: 'Reality mode requires the tcp transport',
+      })
+    }
+  }
+}
+
 export const nodeKindSchema = z.enum(['vps', 'edge'])
 
 export const createNodeSchema = z.object({
@@ -47,9 +129,9 @@ export const createTemplateSchema = z.object({
   tlsMode: z.enum(['none', 'tls', 'reality']),
   defaults: z.record(z.string(), z.unknown()).default({}),
   notes: z.string().trim().max(1000).default(''),
-})
+}).superRefine(validateTemplateCombination)
 
-export const updateTemplateSchema = createTemplateSchema.partial()
+export const updateTemplateSchema = createTemplateSchema.partial().superRefine(validateTemplateCombination)
 
 export const createSubscriptionSchema = z.object({
   name: z.string().trim().min(1).max(120),
