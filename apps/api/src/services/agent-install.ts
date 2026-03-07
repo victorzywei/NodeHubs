@@ -16,17 +16,12 @@ export function buildDeployCommand(input: {
   return [
     `URL=${shellQuote(installUrl)}`,
     `TOKEN_HEADER=${shellQuote(tokenHeader)}`,
-    'if command -v curl >/dev/null 2>&1; then',
-    '  curl -fsSL -H "$TOKEN_HEADER" "$URL"',
-    'elif command -v wget >/dev/null 2>&1; then',
-    '  wget -qO- --header="$TOKEN_HEADER" "$URL"',
-    'elif command -v busybox >/dev/null 2>&1; then',
-    '  busybox wget -qO- --header="$TOKEN_HEADER" "$URL"',
-    'else',
-    "  echo 'A downloader is required: curl, wget, or busybox wget.' >&2",
-    '  exit 1',
+    'if command -v curl >/dev/null 2>&1; then curl -fsSL -H "$TOKEN_HEADER" "$URL"',
+    'elif command -v wget >/dev/null 2>&1; then wget -qO- --header="$TOKEN_HEADER" "$URL"',
+    'elif command -v busybox >/dev/null 2>&1; then busybox wget -qO- --header="$TOKEN_HEADER" "$URL"',
+    "else echo 'A downloader is required: curl, wget, or busybox wget.' >&2; exit 1",
     'fi | bash',
-  ].join(' ')
+  ].join('; ')
 }
 
 export function buildUninstallCommand(): string {
