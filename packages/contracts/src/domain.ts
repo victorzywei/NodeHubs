@@ -85,9 +85,7 @@ export interface ReleaseRecord {
 
 export interface ReleasePreviewRecord {
   kind: ReleaseKind
-  engine: TemplateRecord['engine']
-  entryConfigPath: string
-  files: ReleaseConfigFile[]
+  runtimePlans: Array<Pick<ReleaseRuntimePlan, 'engine' | 'entryConfigPath' | 'files'>>
   templateIds: string[]
 }
 
@@ -212,7 +210,7 @@ export interface ReleaseArtifact {
     | 'installArgo'
   >
   templates: Array<Pick<TemplateRecord, 'id' | 'name' | 'engine' | 'protocol' | 'transport' | 'tlsMode' | 'defaults'>>
-  runtime: ReleaseRuntimePlan
+  runtimes: ReleaseRuntimePlan[]
   bootstrap: BootstrapPlan
   subscriptionEndpoints: SubscriptionEndpoint[]
 }

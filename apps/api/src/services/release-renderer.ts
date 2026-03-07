@@ -190,17 +190,6 @@ function normalizePath(value: string): string {
   return value.startsWith('/') ? value : `/${value}`
 }
 
-function ensureSingleEngine(templates: TemplateRecord[]): TemplateRecord['engine'] {
-  if (templates.length === 0) return 'sing-box'
-  const engine = templates[0].engine
-  for (const template of templates) {
-    if (template.engine !== engine) {
-      throw new Error('A release can only include templates from a single runtime engine')
-    }
-  }
-  return engine
-}
-
 function ensureProtocolSupport(template: TemplateRecord): void {
   const protocol = template.protocol.toLowerCase()
   const transport = template.transport.toLowerCase()
@@ -627,7 +616,7 @@ function buildRuntimeConfig(engine: TemplateRecord['engine'], templates: Normali
 function buildBootstrapNotes(node: NodeRecord, kind: ReleaseKind): string[] {
   const notes = [
     'The agent always applies files under /etc/nodehubsapi/runtime.',
-    'Create a local systemd unit named nodehubsapi-runtime.service if you want automatic process restarts.',
+    'Runtime services use engine-scoped systemd units: nodehubsapi-runtime-sing-box.service and nodehubsapi-runtime-xray.service.',
   ]
   if (node.installWarp) {
     notes.push('This node requests WARP-enabled bootstrap steps.')
@@ -654,12 +643,41 @@ function cloneBinaryPlan(plan: RuntimeBinaryPlan): RuntimeBinaryPlan {
   }
 }
 
+function groupTemplatesByEngine(templates: NormalizedTemplate[]): Record<TemplateRecord['engine'], NormalizedTemplate[]> {
+  return templates.reduce<Record<TemplateRecord['engine'], NormalizedTemplate[]>>(
+    (groups, template) => {
+      if (!groups[template.engine]) groups[template.engine] = []
+      groups[template.engine].push(template)
+      return groups
+    },
+    {
+      'sing-box': [],
+      xray: [],
+    },
+  )
+}
+
 export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: RuntimeCatalog): ReleaseArtifact {
-  const engine = ensureSingleEngine(context.templates)
   const normalizedTemplates = context.templates.map((template) => normalizeTemplate(context.node, template))
-  const runtimeConfig = buildRuntimeConfig(engine, normalizedTemplates)
-  const entryConfigPath = `runtime/${engine}.json`
-  const binaryPlan = cloneBinaryPlan(runtimeCatalog[engine])
+  const groupedTemplates = groupTemplatesByEngine(normalizedTemplates)
+  const runtimes = (Object.keys(groupedTemplates) as Array<TemplateRecord['engine']>)
+    .filter((engine) => groupedTemplates[engine].length > 0)
+    .map((engine) => {
+      const runtimeConfig = buildRuntimeConfig(engine, groupedTemplates[engine])
+      const entryConfigPath = `runtime/${engine}.json`
+      return {
+        engine,
+        binary: cloneBinaryPlan(runtimeCatalog[engine]),
+        entryConfigPath,
+        files: [
+          {
+            path: entryConfigPath,
+            contentType: 'application/json' as const,
+            content: JSON.stringify(runtimeConfig, null, 2),
+          },
+        ],
+      }
+    })
 
   return {
     schema: 'nodehubsapi-release-v2',
@@ -700,36 +718,7 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
       tlsMode: template.tlsMode,
       defaults: { ...template.defaults },
     })),
-    runtime: {
-      engine,
-      binary: binaryPlan,
-      entryConfigPath,
-      files: [
-        {
-          path: entryConfigPath,
-          contentType: 'application/json',
-          content: JSON.stringify(runtimeConfig, null, 2),
-        },
-        {
-          path: 'runtime/release.json',
-          contentType: 'application/json',
-          content: JSON.stringify(
-            {
-              releaseId: context.releaseId,
-              revision: context.revision,
-              kind: context.kind,
-              configRevision: context.configRevision,
-              bootstrapRevision: context.bootstrapRevision,
-              message: context.message,
-              summary: context.summary,
-              createdAt: context.createdAt,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    },
+    runtimes,
     bootstrap: {
       serviceName: 'nodehubsapi-agent',
       runtimeServiceName: 'nodehubsapi-runtime',
@@ -746,7 +735,10 @@ export function parseReleaseArtifact(payload: string): ReleaseArtifact | null {
   try {
     const parsed = JSON.parse(payload) as Partial<ReleaseArtifact> | null
     if (!parsed || parsed.schema !== 'nodehubsapi-release-v2') return null
-    if (!Array.isArray(parsed.subscriptionEndpoints) || !parsed.runtime || !Array.isArray(parsed.runtime.files)) {
+    if (!Array.isArray(parsed.subscriptionEndpoints) || !Array.isArray(parsed.runtimes)) {
+      return null
+    }
+    if (parsed.runtimes.some((runtime) => !runtime || !Array.isArray(runtime.files))) {
       return null
     }
     return parsed as ReleaseArtifact

@@ -669,9 +669,11 @@ export async function previewNodeRelease(
 
   return {
     kind: artifact.kind,
-    engine: artifact.runtime.engine,
-    entryConfigPath: artifact.runtime.entryConfigPath,
-    files: artifact.runtime.files,
+    runtimePlans: artifact.runtimes.map((runtime) => ({
+      engine: runtime.engine,
+      entryConfigPath: runtime.entryConfigPath,
+      files: runtime.files,
+    })),
     templateIds: uniqueTemplateIds,
   }
 }

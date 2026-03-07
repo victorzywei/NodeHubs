@@ -126,9 +126,11 @@ describe('agent install scripts', () => {
 
     const script = buildReleaseApplyScript(artifact)
 
-    expect(script).toContain('RUNTIME_DOWNLOAD_BASE_URL=')
+    expect(script).toContain('RUNTIME_PLAN_COUNT=')
     expect(script).toContain('resolve_runtime_arch')
-    expect(script).toContain('systemctl restart "$RUNTIME_SERVICE_NAME.service"')
+    expect(script).toContain('stop_runtime_kernels')
+    expect(script).toContain('apply_runtime_plans')
+    expect(script).toContain('systemctl stop nodehubsapi-runtime-sing-box.service nodehubsapi-runtime-xray.service')
     expect(script).toContain('/etc/nodehubsapi/runtime/sing-box.json')
     expect(script).toContain('refresh_agent_installation_if_needed')
     expect(script).toContain('schedule_agent_restart_if_needed')

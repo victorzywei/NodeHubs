@@ -36,11 +36,31 @@ export function buildDeployCommand(input: {
 }
 
 export function buildUninstallCommand(): string {
-  return `systemctl stop nodehubsapi-agent.service nodehubsapi-runtime.service 2>/dev/null; systemctl disable nodehubsapi-agent.service nodehubsapi-runtime.service 2>/dev/null; rm -f /etc/systemd/system/nodehubsapi-agent.service /etc/systemd/system/nodehubsapi-runtime.service; systemctl daemon-reload; rm -f /usr/local/bin/nodehubsapi-agent /usr/local/bin/xray /usr/local/bin/sing-box; rm -rf /etc/nodehubsapi /opt/nodehubsapi; echo 'âœ… NodeHub agent uninstalled.'`
+  return `systemctl stop nodehubsapi-agent.service nodehubsapi-runtime.service nodehubsapi-runtime-sing-box.service nodehubsapi-runtime-xray.service 2>/dev/null; systemctl disable nodehubsapi-agent.service nodehubsapi-runtime.service nodehubsapi-runtime-sing-box.service nodehubsapi-runtime-xray.service 2>/dev/null; rm -f /etc/systemd/system/nodehubsapi-agent.service /etc/systemd/system/nodehubsapi-runtime.service /etc/systemd/system/nodehubsapi-runtime-sing-box.service /etc/systemd/system/nodehubsapi-runtime-xray.service; systemctl daemon-reload; rm -f /usr/local/bin/nodehubsapi-agent /usr/local/bin/xray /usr/local/bin/sing-box; rm -rf /etc/nodehubsapi /opt/nodehubsapi; echo 'âœ?NodeHub agent uninstalled.'`
 }
 
 function buildRuntimeFileBlocks(artifact: ReleaseArtifact): string {
-  return artifact.runtime.files
+  const releaseMetadata = {
+    releaseId: artifact.releaseId,
+    revision: artifact.revision,
+    kind: artifact.kind,
+    configRevision: artifact.configRevision,
+    bootstrapRevision: artifact.bootstrapRevision,
+    message: artifact.message,
+    summary: artifact.summary,
+    createdAt: artifact.createdAt,
+  }
+  const files = [
+    ...artifact.runtimes.flatMap((runtime) => runtime.files),
+    {
+      path: 'runtime/release.json',
+      contentType: 'application/json' as const,
+      content: JSON.stringify(releaseMetadata, null, 2),
+    },
+  ]
+  const deduplicated = Array.from(new Map(files.map((file) => [file.path, file])).values())
+
+  return deduplicated
     .map((file, index) => {
       const label = `NODESHUB_FILE_${index + 1}`
       const targetPath = `/etc/nodehubsapi/${file.path}`
@@ -52,6 +72,33 @@ function buildRuntimeFileBlocks(artifact: ReleaseArtifact): string {
       ].join('\n')
     })
     .join('\n\n')
+}
+
+function buildRuntimeApplyBlocks(artifact: ReleaseArtifact): string {
+  return artifact.runtimes
+    .map((runtime) => {
+      const configPath = `/etc/nodehubsapi/${runtime.entryConfigPath}`
+      const serviceName = `nodehubsapi-runtime-${runtime.engine}`
+      const serviceFile = `/etc/systemd/system/${serviceName}.service`
+      return [
+        `  RUNTIME_ENGINE=${shellQuote(runtime.engine)}`,
+        `  RUNTIME_VERSION=${shellQuote(runtime.binary.version)}`,
+        `  RUNTIME_BINARY_NAME=${shellQuote(runtime.binary.binaryName)}`,
+        `  RUNTIME_INSTALL_PATH=${shellQuote(runtime.binary.installPath)}`,
+        `  RUNTIME_DOWNLOAD_BASE_URL=${shellQuote(runtime.binary.downloadBaseUrl)}`,
+        `  RUNTIME_ASSET_TEMPLATE=${shellQuote(runtime.binary.assetNameTemplate)}`,
+        `  RUNTIME_BINARY_PATH_TEMPLATE=${shellQuote(runtime.binary.binaryPathTemplate)}`,
+        `  RUNTIME_RUN_ARGS_TEMPLATE=${shellQuote(runtime.binary.runArgsTemplate)}`,
+        `  RUNTIME_ARCHIVE_FORMAT=${shellQuote(runtime.binary.archiveFormat)}`,
+        `  RUNTIME_CONFIG_PATH=${shellQuote(configPath)}`,
+        `  RUNTIME_SERVICE_NAME=${shellQuote(serviceName)}`,
+        `  RUNTIME_SERVICE_FILE=${shellQuote(serviceFile)}`,
+        '  install_runtime_binary',
+        '  write_runtime_service',
+        '  restart_runtime_service',
+      ].join('\n')
+    })
+    .join('\n')
 }
 
 export function buildAgentReconcileEnv(input: {
@@ -159,10 +206,10 @@ function buildShellMultilineAssignment(name: string, values: string[]): string {
 }
 
 export function buildReleaseApplyScript(artifact: ReleaseArtifact): string {
-  const runtime = artifact.runtime
-  const binary = runtime.binary
-  const configPath = `/etc/nodehubsapi/${runtime.entryConfigPath}`
   const runtimeFileBlocks = buildRuntimeFileBlocks(artifact)
+  const runtimeApplyBlocks = buildRuntimeApplyBlocks(artifact)
+  const primaryRuntimeServiceName = `nodehubsapi-runtime-${artifact.runtimes[0]?.engine || 'sing-box'}`
+  const runtimePlanCount = artifact.runtimes.length
   const bootstrapTemplates = buildBootstrapTemplateData(artifact)
   const tlsTemplates = bootstrapTemplates.filter((template) => template.tlsMode === 'tls' || template.protocol === 'hysteria2')
   const tlsDomains = uniqueValues(
@@ -183,18 +230,8 @@ set -euo pipefail
 
 RELEASE_ID=${shellQuote(artifact.releaseId)}
 RELEASE_KIND=${shellQuote(artifact.kind)}
-RUNTIME_ENGINE=${shellQuote(runtime.engine)}
-RUNTIME_VERSION=${shellQuote(binary.version)}
-RUNTIME_BINARY_NAME=${shellQuote(binary.binaryName)}
-RUNTIME_INSTALL_PATH=${shellQuote(binary.installPath)}
-RUNTIME_DOWNLOAD_BASE_URL=${shellQuote(binary.downloadBaseUrl)}
-RUNTIME_ASSET_TEMPLATE=${shellQuote(binary.assetNameTemplate)}
-RUNTIME_BINARY_PATH_TEMPLATE=${shellQuote(binary.binaryPathTemplate)}
-RUNTIME_RUN_ARGS_TEMPLATE=${shellQuote(binary.runArgsTemplate)}
-RUNTIME_ARCHIVE_FORMAT=${shellQuote(binary.archiveFormat)}
-RUNTIME_CONFIG_PATH=${shellQuote(configPath)}
-RUNTIME_SERVICE_NAME=${shellQuote(artifact.bootstrap.runtimeServiceName)}
-RUNTIME_SERVICE_FILE=${shellQuote(`/etc/systemd/system/${artifact.bootstrap.runtimeServiceName}.service`)}
+RUNTIME_PRIMARY_SERVICE_NAME=${shellQuote(primaryRuntimeServiceName)}
+RUNTIME_PLAN_COUNT=${runtimePlanCount}
 ETC_DIR=${shellQuote('/etc/nodehubsapi')}
 STATE_DIR=${shellQuote('/opt/nodehubsapi')}
 GITHUB_MIRROR_URL=${shellQuote(artifact.node.githubMirrorUrl || '')}
@@ -956,8 +993,8 @@ EOF
     cat >"$service_file" <<EOF
 [Unit]
 Description=nodehubsapi cloudflared
-After=network-online.target \${RUNTIME_SERVICE_NAME}.service
-Wants=network-online.target \${RUNTIME_SERVICE_NAME}.service
+After=network-online.target \${RUNTIME_PRIMARY_SERVICE_NAME}.service
+Wants=network-online.target \${RUNTIME_PRIMARY_SERVICE_NAME}.service
 
 [Service]
 Type=simple
@@ -973,8 +1010,8 @@ EOF
     cat >"$service_file" <<EOF
 [Unit]
 Description=nodehubsapi cloudflared
-After=network-online.target \${RUNTIME_SERVICE_NAME}.service
-Wants=network-online.target \${RUNTIME_SERVICE_NAME}.service
+After=network-online.target \${RUNTIME_PRIMARY_SERVICE_NAME}.service
+Wants=network-online.target \${RUNTIME_PRIMARY_SERVICE_NAME}.service
 
 [Service]
 Type=simple
@@ -1037,6 +1074,20 @@ restart_runtime_service() {
   systemctl is-active --quiet "$RUNTIME_SERVICE_NAME.service"
 }
 
+stop_runtime_kernels() {
+  systemctl stop nodehubsapi-runtime-sing-box.service nodehubsapi-runtime-xray.service nodehubsapi-runtime.service >/dev/null 2>&1 || true
+  pkill -x sing-box >/dev/null 2>&1 || true
+  pkill -x xray >/dev/null 2>&1 || true
+}
+
+apply_runtime_plans() {
+  if [ "$RUNTIME_PLAN_COUNT" -le 0 ]; then
+    warn "No runtime plans in release artifact."
+    return 0
+  fi
+${runtimeApplyBlocks}
+}
+
 run_hooks() {
   local directory="$1"
   if [ ! -d "$directory" ]; then
@@ -1081,12 +1132,11 @@ main() {
   if [ "$RELEASE_KIND" = "bootstrap" ]; then
     run_hooks "$ETC_DIR/hooks/bootstrap.d"
   fi
-  install_runtime_binary
+  stop_runtime_kernels
   write_runtime_files
   ensure_tls_certificate
-  write_runtime_service
+  apply_runtime_plans
   cp "$ETC_DIR/runtime/release.json" "$STATE_DIR/releases/current.json"
-  restart_runtime_service
   if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then
     ensure_warp_bootstrap
   fi
@@ -1538,3 +1588,4 @@ write_service
 print_summary
 `
 }
+
