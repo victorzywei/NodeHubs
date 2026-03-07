@@ -1,11 +1,11 @@
 {
   "name": "@nodehubsapi/api",
   "private": true,
-  "version": "0.1.11",
+  "version": "0.1.12",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/node.ts",
-    "build": "tsup src/node.ts --format esm --out-dir dist/node --clean && tsup src/worker.ts --format esm --out-dir dist/worker",
+    "build": "tsup src/node.ts --format esm --out-dir dist/node --clean && tsup src/worker.ts --format esm --out-dir dist/worker && node scripts/copy-assets.mjs",
     "start": "node dist/node/node.js",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
