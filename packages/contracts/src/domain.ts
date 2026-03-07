@@ -168,6 +168,19 @@ export interface SubscriptionEndpoint {
   label: string
   server: string
   port: number
+  host?: string
+  sni?: string
+  path?: string
+  serviceName?: string
+  uuid?: string
+  password?: string
+  method?: string
+  flow?: string
+  alterId?: number
+  realityPublicKey?: string
+  realityShortId?: string
+  upMbps?: number
+  downMbps?: number
   uri: string
 }
 

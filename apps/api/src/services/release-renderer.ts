@@ -47,6 +47,9 @@ type NormalizedTemplate = {
   password: string
   method: string
   flow: string
+  alterId: number
+  upMbps: number
+  downMbps: number
   realityPrivateKey: string
   realityPublicKey: string
   realityShortId: string
@@ -192,7 +195,10 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
 
 function readString(source: Record<string, unknown>, key: string, fallback = ''): string {
   const value = source[key]
-  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'string') {
+    const normalized = value.trim()
+    return normalized || fallback
+  }
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   return fallback
 }
@@ -482,21 +488,21 @@ function ensureField(value: string, fieldName: string, templateName: string): st
 
 function defaultTemplateServer(node: NodeRecord): string {
   if (node.networkType === 'noPublicIp') {
-    return node.argoTunnelDomain || node.primaryDomain || node.backupDomain || node.entryIp
+    return node.argoDomain || node.argoTunnelDomain || node.primaryDomain || node.backupDomain || node.entryIp
   }
   return node.primaryDomain || node.entryIp || node.backupDomain || node.argoTunnelDomain
 }
 
 function defaultTemplateHost(node: NodeRecord, server: string): string {
   if (node.networkType === 'noPublicIp') {
-    return node.argoTunnelDomain || node.primaryDomain || server
+    return node.argoDomain || node.argoTunnelDomain || node.primaryDomain || server
   }
   return node.primaryDomain || node.backupDomain || server
 }
 
 function defaultTemplateSni(node: NodeRecord, server: string): string {
   if (node.networkType === 'noPublicIp') {
-    return node.argoTunnelDomain || node.primaryDomain || server
+    return node.argoDomain || node.argoTunnelDomain || node.primaryDomain || server
   }
   return node.primaryDomain || node.backupDomain || server
 }
@@ -540,6 +546,9 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
     password: readString(defaults, 'password'),
     method: readString(defaults, 'method', 'aes-128-gcm'),
     flow: readString(defaults, 'flow'),
+    alterId: readNumber(defaults, ['alterId'], 0),
+    upMbps: readNumber(defaults, ['upMbps'], 100),
+    downMbps: readNumber(defaults, ['downMbps'], 100),
     realityPrivateKey: readString(defaults, 'realityPrivateKey'),
     realityPublicKey: readString(defaults, 'realityPublicKey'),
     realityShortId: readString(defaults, 'realityShortId'),
@@ -588,7 +597,7 @@ function buildSingBoxInbound(template: NormalizedTemplate, index: number) {
     inbound.users = [
       {
         uuid: template.uuid,
-        alterId: readNumber(template.defaults, ['alterId'], 0),
+        alterId: template.alterId,
       },
     ]
   } else if (template.protocol === 'trojan') {
@@ -603,8 +612,8 @@ function buildSingBoxInbound(template: NormalizedTemplate, index: number) {
         password: template.password,
       },
     ]
-    inbound.up_mbps = readNumber(template.defaults, ['upMbps'], 100)
-    inbound.down_mbps = readNumber(template.defaults, ['downMbps'], 100)
+    inbound.up_mbps = template.upMbps
+    inbound.down_mbps = template.downMbps
   } else if (template.protocol === 'shadowsocks') {
     inbound.method = template.method
     inbound.password = template.password
@@ -685,7 +694,7 @@ function buildXrayInbound(template: NormalizedTemplate, index: number) {
       clients: [
         {
           id: template.uuid,
-          alterId: readNumber(template.defaults, ['alterId'], 0),
+          alterId: template.alterId,
         },
       ],
     }
@@ -828,8 +837,25 @@ function buildSubscriptionEntry(node: NodeRecord, template: NormalizedTemplate):
     label: `${node.name} ${template.name}`,
     server: template.server,
     port: template.port,
+    host: template.host || undefined,
+    sni: template.sni || undefined,
+    path: template.path || undefined,
+    serviceName: template.serviceName || undefined,
+    uuid: template.uuid || undefined,
+    password: template.password || undefined,
+    method: template.method || undefined,
+    flow: template.flow || undefined,
+    alterId: template.alterId,
+    realityPublicKey: template.realityPublicKey || undefined,
+    realityShortId: template.realityShortId || undefined,
+    upMbps: template.protocol === 'hysteria2' ? template.upMbps : undefined,
+    downMbps: template.protocol === 'hysteria2' ? template.downMbps : undefined,
     uri: buildSubscriptionUri(node, template),
   }
+}
+
+export function buildSubscriptionEntries(node: NodeRecord, templates: TemplateRecord[]): SubscriptionEndpoint[] {
+  return templates.map((template) => buildSubscriptionEntry(node, normalizeTemplate(node, template)))
 }
 
 function buildRuntimeConfig(
@@ -1156,14 +1182,330 @@ function encodeBase64(value: string): string {
   return btoa(binary)
 }
 
+type ResolvedSubscriptionEntry = SubscriptionEndpoint & {
+  host: string
+  sni: string
+  path: string
+  serviceName: string
+  uuid: string
+  password: string
+  method: string
+  flow: string
+  alterId: number
+  realityPublicKey: string
+  realityShortId: string
+  upMbps: number
+  downMbps: number
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function safeAtob(value: string): string {
+  try {
+    return atob(value)
+  } catch {
+    return ''
+  }
+}
+
+function parseUrlPort(value: string, fallback: number): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  const port = Math.trunc(parsed)
+  if (port < 1 || port > 65535) return fallback
+  return port
+}
+
+function parseVmessUri(uri: string): Partial<ResolvedSubscriptionEntry> {
+  const encoded = uri.replace(/^vmess:\/\//i, '').trim()
+  const decoded = safeAtob(encoded)
+  if (!decoded) return {}
+
+  try {
+    const payload = JSON.parse(decoded) as Record<string, unknown>
+    const tlsEnabled = String(payload.tls || '').trim().toLowerCase() === 'tls'
+    return {
+      server: readString(payload, 'add'),
+      port: readNumber(payload, ['port'], 443),
+      uuid: readString(payload, 'id'),
+      alterId: readNumber(payload, ['aid', 'alterId'], 0),
+      transport: readString(payload, 'net', 'tcp') || 'tcp',
+      host: readString(payload, 'host'),
+      path: readString(payload, 'path'),
+      sni: readString(payload, 'sni'),
+      tlsMode: tlsEnabled ? 'tls' : 'none',
+    }
+  } catch {
+    return {}
+  }
+}
+
+function parseSsUri(uri: string): Partial<ResolvedSubscriptionEntry> {
+  const raw = uri.replace(/^ss:\/\//i, '').split('#')[0] || ''
+  const [main] = raw.split('?')
+  if (!main) return {}
+
+  const atIndex = main.lastIndexOf('@')
+  let credentials = ''
+  let hostPort = ''
+  if (atIndex >= 0) {
+    credentials = main.slice(0, atIndex)
+    hostPort = main.slice(atIndex + 1)
+  } else {
+    const decoded = safeAtob(main)
+    const decodedAtIndex = decoded.lastIndexOf('@')
+    if (decodedAtIndex >= 0) {
+      credentials = decoded.slice(0, decodedAtIndex)
+      hostPort = decoded.slice(decodedAtIndex + 1)
+    }
+  }
+  if (!credentials || !hostPort) return {}
+
+  const decodedCredentials = safeAtob(credentials) || credentials
+  const separator = decodedCredentials.indexOf(':')
+  const method = separator >= 0 ? decodedCredentials.slice(0, separator) : ''
+  const password = separator >= 0 ? decodedCredentials.slice(separator + 1) : ''
+  const portSeparator = hostPort.lastIndexOf(':')
+  const server = portSeparator >= 0 ? hostPort.slice(0, portSeparator) : hostPort
+  const port = portSeparator >= 0 ? parseUrlPort(hostPort.slice(portSeparator + 1), 0) : 0
+
+  return {
+    server,
+    port,
+    method,
+    password,
+  }
+}
+
+function parseStandardShareUri(uri: string): Partial<ResolvedSubscriptionEntry> {
+  try {
+    const url = new URL(uri)
+    const security = (url.searchParams.get('security') || '').trim().toLowerCase()
+    const host = safeDecodeURIComponent(url.searchParams.get('host') || '')
+    const path = safeDecodeURIComponent(url.searchParams.get('path') || '')
+    const serviceName = safeDecodeURIComponent(url.searchParams.get('serviceName') || '')
+    return {
+      protocol: url.protocol.replace(':', ''),
+      server: url.hostname,
+      port: parseUrlPort(url.port, 0),
+      transport: url.searchParams.get('type') || '',
+      host,
+      path,
+      serviceName,
+      sni: safeDecodeURIComponent(url.searchParams.get('sni') || ''),
+      realityPublicKey: safeDecodeURIComponent(url.searchParams.get('pbk') || ''),
+      realityShortId: safeDecodeURIComponent(url.searchParams.get('sid') || ''),
+      uuid: safeDecodeURIComponent(url.username || ''),
+      password: safeDecodeURIComponent(url.username || ''),
+      tlsMode: security === 'reality' ? 'reality' : security === 'tls' ? 'tls' : 'none',
+    }
+  } catch {
+    return {}
+  }
+}
+
+function resolveSubscriptionEntry(entry: SubscriptionEndpoint): ResolvedSubscriptionEntry {
+  const uri = String(entry.uri || '').trim()
+  let parsed: Partial<ResolvedSubscriptionEntry> = {}
+  if (uri.startsWith('vmess://')) {
+    parsed = parseVmessUri(uri)
+  } else if (uri.startsWith('ss://')) {
+    parsed = parseSsUri(uri)
+  } else {
+    parsed = parseStandardShareUri(uri)
+  }
+
+  const protocol = String(entry.protocol || parsed.protocol || '').trim().toLowerCase()
+  const transport = String(entry.transport || parsed.transport || 'tcp').trim().toLowerCase() || 'tcp'
+  const server = String(entry.server || parsed.server || '').trim()
+  const host = String(entry.host || parsed.host || '').trim()
+  const path = String(entry.path || parsed.path || '').trim()
+  const resolvedHost = host || ((transport === 'ws' || transport === 'xhttp') ? server : '')
+  const tlsMode = (entry.tlsMode || parsed.tlsMode || 'none') as ResolvedSubscriptionEntry['tlsMode']
+  const sni = String(entry.sni || parsed.sni || '').trim() || ((tlsMode !== 'none' || protocol === 'hysteria2') ? (resolvedHost || server) : '')
+  const serviceName = String(entry.serviceName || parsed.serviceName || '').trim() || (transport === 'grpc' ? 'grpc' : '')
+
+  return {
+    ...entry,
+    protocol,
+    transport,
+    tlsMode,
+    server,
+    port: Number(entry.port || parsed.port || 0),
+    host: resolvedHost,
+    sni,
+    path: path || ((transport === 'ws' || transport === 'xhttp') ? '/' : ''),
+    serviceName,
+    uuid: String(entry.uuid || parsed.uuid || '').trim(),
+    password: String(entry.password || parsed.password || '').trim(),
+    method: String(entry.method || parsed.method || '').trim(),
+    flow: String(entry.flow || parsed.flow || '').trim(),
+    alterId: Number(entry.alterId ?? parsed.alterId ?? 0),
+    realityPublicKey: String(entry.realityPublicKey || parsed.realityPublicKey || '').trim(),
+    realityShortId: String(entry.realityShortId || parsed.realityShortId || '').trim(),
+    upMbps: Number(entry.upMbps || parsed.upMbps || 0),
+    downMbps: Number(entry.downMbps || parsed.downMbps || 0),
+  }
+}
+
+function buildClashProxy(entry: ResolvedSubscriptionEntry): Record<string, unknown> {
+  const proxy: Record<string, unknown> = {
+    name: entry.label,
+    server: entry.server,
+    port: entry.port,
+  }
+
+  if (entry.protocol === 'vless') {
+    proxy.type = 'vless'
+    proxy.uuid = entry.uuid
+    proxy.cipher = 'none'
+    proxy.network = entry.transport
+    if (entry.flow) proxy.flow = entry.flow
+  } else if (entry.protocol === 'vmess') {
+    proxy.type = 'vmess'
+    proxy.uuid = entry.uuid
+    proxy.alterId = entry.alterId
+    proxy.cipher = 'auto'
+    proxy.network = entry.transport
+  } else if (entry.protocol === 'trojan') {
+    proxy.type = 'trojan'
+    proxy.password = entry.password
+    proxy.network = entry.transport
+  } else if (entry.protocol === 'shadowsocks') {
+    proxy.type = 'ss'
+    proxy.cipher = entry.method
+    proxy.password = entry.password
+    proxy.udp = true
+  } else if (entry.protocol === 'hysteria2') {
+    proxy.type = 'hysteria2'
+    proxy.password = entry.password
+  }
+
+  if (entry.protocol === 'hysteria2' || entry.tlsMode !== 'none') {
+    proxy.tls = true
+    proxy.servername = entry.sni || entry.server
+    proxy['skip-cert-verify'] = false
+  }
+
+  if (entry.transport === 'ws') {
+    proxy.network = 'ws'
+    proxy['ws-opts'] = {
+      path: entry.path || '/',
+      headers: entry.host ? { Host: entry.host } : undefined,
+    }
+  } else if (entry.transport === 'xhttp') {
+    proxy.network = 'http'
+    proxy['http-opts'] = {
+      path: [entry.path || '/'],
+      headers: entry.host ? { Host: [entry.host] } : undefined,
+    }
+  } else if (entry.transport === 'grpc') {
+    proxy.network = 'grpc'
+    proxy['grpc-opts'] = {
+      'grpc-service-name': entry.serviceName || 'grpc',
+    }
+  }
+
+  if (entry.tlsMode === 'reality') {
+    proxy['client-fingerprint'] = 'chrome'
+    proxy['reality-opts'] = {
+      'public-key': entry.realityPublicKey,
+      'short-id': entry.realityShortId,
+    }
+  }
+
+  if (entry.protocol === 'hysteria2') {
+    if (entry.upMbps > 0) proxy['up-mbps'] = entry.upMbps
+    if (entry.downMbps > 0) proxy['down-mbps'] = entry.downMbps
+  }
+
+  return proxy
+}
+
+function buildSingboxOutbound(entry: ResolvedSubscriptionEntry): Record<string, unknown> {
+  const outbound: Record<string, unknown> = {
+    tag: entry.label,
+    type: entry.protocol,
+    server: entry.server,
+    server_port: entry.port,
+  }
+
+  if (entry.protocol === 'vless') {
+    outbound.uuid = entry.uuid
+    if (entry.flow) outbound.flow = entry.flow
+  } else if (entry.protocol === 'vmess') {
+    outbound.uuid = entry.uuid
+    outbound.alter_id = entry.alterId
+  } else if (entry.protocol === 'trojan' || entry.protocol === 'hysteria2') {
+    outbound.password = entry.password
+  } else if (entry.protocol === 'shadowsocks') {
+    outbound.method = entry.method
+    outbound.password = entry.password
+  }
+
+  if (entry.protocol === 'hysteria2') {
+    if (entry.upMbps > 0) outbound.up_mbps = entry.upMbps
+    if (entry.downMbps > 0) outbound.down_mbps = entry.downMbps
+  }
+
+  if (entry.transport === 'ws') {
+    outbound.transport = {
+      type: 'ws',
+      path: entry.path || '/',
+      headers: entry.host ? { Host: entry.host } : undefined,
+    }
+  } else if (entry.transport === 'grpc') {
+    outbound.transport = {
+      type: 'grpc',
+      service_name: entry.serviceName || 'grpc',
+    }
+  } else if (entry.transport === 'xhttp') {
+    outbound.transport = {
+      type: 'http',
+      path: entry.path || '/',
+      headers: entry.host ? { Host: entry.host } : undefined,
+    }
+  }
+
+  if (entry.protocol === 'hysteria2' || entry.tlsMode !== 'none') {
+    outbound.tls = {
+      enabled: true,
+      server_name: entry.sni || entry.server,
+      insecure: false,
+    }
+  }
+
+  if (entry.tlsMode === 'reality') {
+    outbound.tls = {
+      enabled: true,
+      server_name: entry.sni || entry.server,
+      insecure: false,
+      reality: {
+        enabled: true,
+        public_key: entry.realityPublicKey,
+        short_id: entry.realityShortId,
+      },
+    }
+  }
+
+  return outbound
+}
+
 export function renderSubscriptionDocument(
   payload: Omit<PublicSubscriptionDocument, 'format'>,
   format: SubscriptionDocumentFormat,
 ): { body: string; contentType: string } {
   const plain = payload.entries.map((item) => item.uri).join('\n')
+  const resolvedEntries = payload.entries.map(resolveSubscriptionEntry)
   if (format === 'json') {
     return {
-      body: JSON.stringify({ ...payload, format }, null, 2),
+      body: JSON.stringify({ ...payload, format, entries: resolvedEntries }, null, 2),
       contentType: 'application/json; charset=utf-8',
     }
   }
@@ -1182,55 +1524,26 @@ export function renderSubscriptionDocument(
   }
   // clash format: YAML proxy config
   if (format === 'clash') {
-    const proxies = payload.entries.map((entry) => {
-      const proxy: Record<string, unknown> = {
-        name: entry.label,
-        server: entry.server,
-        port: entry.port,
-      }
-      if (entry.protocol === 'vless') {
-        proxy.type = 'vless'
-        proxy.uuid = '' // requires parsing from URI
-        proxy.network = entry.transport
-        proxy.tls = entry.tlsMode !== 'none'
-      } else if (entry.protocol === 'vmess') {
-        proxy.type = 'vmess'
-        proxy.uuid = ''
-        proxy.alterId = 0
-        proxy.cipher = 'auto'
-        proxy.network = entry.transport
-        proxy.tls = entry.tlsMode !== 'none'
-      } else if (entry.protocol === 'trojan') {
-        proxy.type = 'trojan'
-        proxy.password = ''
-        proxy.network = entry.transport
-      } else if (entry.protocol === 'shadowsocks') {
-        proxy.type = 'ss'
-        proxy.cipher = 'aes-128-gcm'
-        proxy.password = ''
-      } else if (entry.protocol === 'hysteria2') {
-        proxy.type = 'hysteria2'
-        proxy.password = ''
-      }
-      return proxy
-    })
+    const proxies = resolvedEntries.map(buildClashProxy)
     const clashConfig = {
       proxies,
       'proxy-groups': [
         {
           name: 'NodeHub',
           type: 'select',
-          proxies: payload.entries.map((e) => e.label),
+          proxies: resolvedEntries.map((entry) => entry.label),
         },
       ],
+      rules: ['MATCH,NodeHub'],
     }
-    // Simple YAML serialization
     let yaml = 'proxies:\n'
     for (const p of proxies) {
       yaml += `  - ${JSON.stringify(p)}\n`
     }
     yaml += 'proxy-groups:\n'
     yaml += `  - ${JSON.stringify(clashConfig['proxy-groups'][0])}\n`
+    yaml += 'rules:\n'
+    yaml += '  - MATCH,NodeHub\n'
     return {
       body: yaml,
       contentType: 'text/yaml; charset=utf-8',
@@ -1238,12 +1551,7 @@ export function renderSubscriptionDocument(
   }
   // singbox format: JSON outbound config
   if (format === 'singbox') {
-    const outbounds = payload.entries.map((entry) => ({
-      tag: entry.label,
-      type: entry.protocol,
-      server: entry.server,
-      server_port: entry.port,
-    }))
+    const outbounds = resolvedEntries.map(buildSingboxOutbound)
     const singboxConfig = {
       outbounds: [
         ...outbounds,

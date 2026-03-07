@@ -1,7 +1,7 @@
 {
   "name": "@nodehubsapi/web",
   "private": true,
-  "version": "0.1.15",
+  "version": "0.1.16",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,13 +10,13 @@
   },
   "dependencies": {
     "@vitejs/plugin-vue": "^6.0.4",
+    "qrcode": "^1.5.4",
     "vite": "^7.3.1",
     "vue": "^3.5.29",
     "vue-tsc": "^3.2.5",
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.6"
   }
 }
-
-
-
-

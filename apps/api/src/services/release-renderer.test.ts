@@ -90,6 +90,8 @@ describe('release renderer', () => {
     expect(artifact.runtimes[0]?.engine).toBe('sing-box')
     expect(artifact.runtimes[0]?.binary.version).toBe(runtimeCatalog['sing-box'].version)
     expect(artifact.runtimes[0]?.files[0]?.path).toBe('runtime/sing-box.json')
+    expect(artifact.subscriptionEndpoints[0]?.host).toBe('cdn.example.com')
+    expect(artifact.subscriptionEndpoints[0]?.sni).toBe('edge.example.com')
     expect(artifact.subscriptionEndpoints[0]?.uri).toContain('vless://11111111-1111-4111-8111-111111111111@edge.example.com:443')
     expect(parseReleaseArtifact(JSON.stringify(artifact)))?.toMatchObject({
       schema: 'nodehubsapi-release-v2',
@@ -141,6 +143,56 @@ describe('release renderer', () => {
 
     expect(plain.body).toContain('vless://')
     expect(base64.body).not.toContain('vless://')
+  })
+
+  it('renders structured subscription documents with tls host and sni fields', () => {
+    const runtimeCatalog = buildRuntimeCatalog()
+    const entry = renderReleaseArtifact({
+      releaseId: 'rel_3',
+      revision: 4,
+      kind: 'runtime',
+      configRevision: 4,
+      bootstrapRevision: 1,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: '',
+      summary: 'runtime update',
+      node: createNode(),
+      templates: [createTemplate()],
+      bootstrapOptions: {
+        installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
+        installSingBox: false,
+        installXray: false,
+      },
+    }, runtimeCatalog).subscriptionEndpoints
+
+    const clash = renderSubscriptionDocument(
+      {
+        subscriptionId: 'sub_1',
+        name: 'Default',
+        generatedAt: '2026-03-06T00:00:00.000Z',
+        entries: entry,
+      },
+      'clash',
+    )
+    const singbox = renderSubscriptionDocument(
+      {
+        subscriptionId: 'sub_1',
+        name: 'Default',
+        generatedAt: '2026-03-06T00:00:00.000Z',
+        entries: entry,
+      },
+      'singbox',
+    )
+
+    expect(clash.body).toContain('"servername":"edge.example.com"')
+    expect(clash.body).toContain('"Host":"cdn.example.com"')
+    expect(clash.body).toContain('MATCH,NodeHub')
+    expect(singbox.body).toContain('"server_name": "edge.example.com"')
+    expect(singbox.body).toContain('"Host": "cdn.example.com"')
+    expect(singbox.body).toContain('"path": "/ws"')
   })
 
   it('exposes a small template catalog', () => {

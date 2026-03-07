@@ -122,6 +122,19 @@ export function createSubscription(adminKey: string, payload: Record<string, unk
   }, adminKey)
 }
 
+export function updateSubscription(adminKey: string, subscriptionId: string, payload: Record<string, unknown>): Promise<SubscriptionRecord> {
+  return request(`/api/subscriptions/${subscriptionId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }, adminKey)
+}
+
+export function deleteSubscription(adminKey: string, subscriptionId: string): Promise<{ deleted: string }> {
+  return request(`/api/subscriptions/${subscriptionId}`, {
+    method: 'DELETE',
+  }, adminKey)
+}
+
 export function listNodeReleases(adminKey: string, nodeId: string): Promise<ReleaseRecord[]> {
   return request(`/api/nodes/${nodeId}/releases`, {}, adminKey)
 }

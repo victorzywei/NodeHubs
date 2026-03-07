@@ -152,6 +152,8 @@ export const createSubscriptionSchema = z.object({
   visibleNodeIds: z.array(z.string().trim().min(1)).default([]),
 })
 
+export const updateSubscriptionSchema = createSubscriptionSchema.partial()
+
 export const subscriptionDocumentFormatSchema = z.enum(['plain', 'base64', 'json', 'v2ray', 'clash', 'singbox'])
 
 export const bootstrapOptionsSchema = z.object({
@@ -212,6 +214,7 @@ export type UpdateNodeInput = z.infer<typeof updateNodeSchema>
 export type CreateTemplateInput = z.infer<typeof createTemplateSchema>
 export type UpdateTemplateInput = z.infer<typeof updateTemplateSchema>
 export type CreateSubscriptionInput = z.infer<typeof createSubscriptionSchema>
+export type UpdateSubscriptionInput = z.infer<typeof updateSubscriptionSchema>
 export type PublishNodeInput = z.infer<typeof publishNodeSchema>
 export type HeartbeatInput = z.infer<typeof heartbeatSchema>
 export type SubscriptionDocumentFormatInput = z.infer<typeof subscriptionDocumentFormatSchema>

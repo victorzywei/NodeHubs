@@ -7,7 +7,20 @@ import type { CreateTemplateInput } from '@contracts/index'
 import type { AppServices } from '../lib/app-types'
 import type { SqlAdapter, SqlValue } from '../lib/db'
 import type { ArtifactStore, StoredArtifact } from '../storage/types'
-import { acknowledgeRelease, createNode, createTemplate, getDesiredRelease, getNodeById, getNodeReleaseLog, publishNodeRelease, updateTemplate } from './control-plane'
+import {
+  acknowledgeRelease,
+  buildPublicSubscriptionDocument,
+  createNode,
+  createSubscription,
+  createTemplate,
+  deleteSubscription,
+  getDesiredRelease,
+  getNodeById,
+  getNodeReleaseLog,
+  publishNodeRelease,
+  updateSubscription,
+  updateTemplate,
+} from './control-plane'
 import { buildRuntimeCatalog } from './runtime-catalog'
 
 function createSqliteAdapter(db: DatabaseSync): SqlAdapter {
@@ -327,5 +340,120 @@ describe('control-plane template validation', () => {
 
     expect(String(template.defaults.password || '')).not.toBe('replace-me-base64-key')
     expect(atob(String(template.defaults.password || '')).length).toBe(16)
+  })
+})
+
+describe('subscription documents', () => {
+  it('builds subscription entries from the latest healthy runtime release even after bootstrap', async () => {
+    const services = createServices()
+    const node = await createNode(services, {
+      name: 'Node D',
+      nodeType: 'vps',
+      region: 'ap-sg',
+      tags: [],
+      networkType: 'public',
+      primaryDomain: 'edge4.example.com',
+      backupDomain: '',
+      entryIp: '203.0.113.13',
+      githubMirrorUrl: '',
+      cfDnsToken: '',
+      argoTunnelToken: '',
+      argoTunnelDomain: '',
+      argoTunnelPort: 2053,
+    })
+    const template = await createTemplate(services, createValidTemplateInput({
+      defaults: {
+        serverPort: 23491,
+        path: '/ws',
+        host: '',
+        sni: '',
+        uuid: '11111111-1111-4111-8111-111111111111',
+      },
+    }))
+    const runtimeRelease = await publishNodeRelease(
+      services,
+      node.id,
+      'runtime',
+      [template.id],
+      {
+        installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
+        installSingBox: false,
+        installXray: false,
+      },
+      'ship runtime',
+    )
+    expect(runtimeRelease).toBeTruthy()
+    await acknowledgeRelease(services, node.id, String(runtimeRelease?.id), 'healthy', 'runtime ok')
+
+    const bootstrapRelease = await publishNodeRelease(
+      services,
+      node.id,
+      'bootstrap',
+      [],
+      {
+        installWarp: true,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 20,
+        versionPullIntervalSeconds: 30,
+        installSingBox: false,
+        installXray: false,
+      },
+      'bootstrap only',
+    )
+    expect(bootstrapRelease).toBeTruthy()
+    await acknowledgeRelease(services, node.id, String(bootstrapRelease?.id), 'healthy', 'bootstrap ok')
+
+    const subscription = await createSubscription(services, {
+      name: 'Main',
+      enabled: true,
+      visibleNodeIds: [node.id],
+    })
+
+    const document = await buildPublicSubscriptionDocument(services, subscription.token)
+    expect(document).toBeTruthy()
+    expect(document?.entries.length).toBe(1)
+    expect(document?.entries[0]?.server).toBe('edge4.example.com')
+    expect(document?.entries[0]?.sni).toBe('edge4.example.com')
+    expect(document?.entries[0]?.uri).toContain('sni=edge4.example.com')
+  })
+
+  it('updates and deletes subscriptions', async () => {
+    const services = createServices()
+    const node = await createNode(services, {
+      name: 'Node E',
+      nodeType: 'vps',
+      region: 'ap-sg',
+      tags: [],
+      networkType: 'public',
+      primaryDomain: 'edge5.example.com',
+      backupDomain: '',
+      entryIp: '203.0.113.14',
+      githubMirrorUrl: '',
+      cfDnsToken: '',
+      argoTunnelToken: '',
+      argoTunnelDomain: '',
+      argoTunnelPort: 2053,
+    })
+    const subscription = await createSubscription(services, {
+      name: 'Before',
+      enabled: true,
+      visibleNodeIds: [],
+    })
+
+    const updated = await updateSubscription(services, subscription.id, {
+      name: 'After',
+      enabled: false,
+      visibleNodeIds: [node.id, 'missing'],
+    })
+
+    expect(updated?.name).toBe('After')
+    expect(updated?.enabled).toBe(false)
+    expect(updated?.visibleNodeIds).toEqual([node.id])
+
+    const deleted = await deleteSubscription(services, subscription.id)
+    expect(deleted).toBe(true)
   })
 })

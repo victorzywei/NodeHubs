@@ -1,6 +1,7 @@
 ﻿<script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import type { SystemStatus, NodeRecord, TemplateRecord, SubscriptionRecord, ReleaseLogRecord, ReleaseRecord, ReleasePreviewRecord } from '@contracts/index'
+import QRCode from 'qrcode'
 import * as api from './lib/api'
 
 // ---- State ----
@@ -20,6 +21,7 @@ const subscriptions = ref<SubscriptionRecord[]>([])
 const showCreateNode = ref(false)
 const showCreateTemplate = ref(false)
 const showCreateSub = ref(false)
+const showSubscriptionQr = ref(false)
 const showPublishRelease = ref(false)
 const showReleaseLog = ref(false)
 const selectedNode = ref<NodeRecord|null>(null)
@@ -45,6 +47,11 @@ const publishingRelease = ref(false)
 const publishPreview = ref<ReleasePreviewRecord|null>(null)
 const publishPreviewLoading = ref(false)
 const publishPreviewError = ref('')
+const editingSubscriptionId = ref('')
+const subscriptionQrTitle = ref('')
+const subscriptionQrUrl = ref('')
+const subscriptionQrDataUrl = ref('')
+const subscriptionQrLoading = ref(false)
 let publishPreviewRequestId = 0
 
 // Toast
@@ -724,20 +731,107 @@ async function deleteEditingTemplate() {
 }
 
 // ---- Subscription Actions ----
-const newSub = ref({ name:'', enabled:true, visibleNodeIds:[] as string[] })
+function createEmptySubscription() {
+  return { name:'', enabled:true, visibleNodeIds:[] as string[] }
+}
 
-async function createSub() {
+const newSub = ref(createEmptySubscription())
+
+function resetSubscriptionForm() {
+  editingSubscriptionId.value = ''
+  newSub.value = createEmptySubscription()
+}
+
+function closeSubscriptionModal() {
+  showCreateSub.value = false
+  resetSubscriptionForm()
+}
+
+function openCreateSubscription() {
+  resetSubscriptionForm()
+  showCreateSub.value = true
+}
+
+function openEditSubscription(subscription: SubscriptionRecord) {
+  editingSubscriptionId.value = subscription.id
+  newSub.value = {
+    name: subscription.name,
+    enabled: subscription.enabled,
+    visibleNodeIds: [...subscription.visibleNodeIds],
+  }
+  showCreateSub.value = true
+}
+
+async function submitSubscription() {
   try {
-    await api.createSubscription(adminKey.value, newSub.value)
-    showCreateSub.value = false; newSub.value = { name:'', enabled:true, visibleNodeIds:[] }
-    toast('success', '订阅创建成功'); await loadAll(); await refreshStatus()
+    if (editingSubscriptionId.value) {
+      await api.updateSubscription(adminKey.value, editingSubscriptionId.value, newSub.value)
+      toast('success', '订阅更新成功')
+    } else {
+      await api.createSubscription(adminKey.value, newSub.value)
+      toast('success', '订阅创建成功')
+    }
+    closeSubscriptionModal()
+    await loadAll()
+    await refreshStatus()
   } catch (e:any) { toast('error', e.message) }
+}
+
+async function deleteEditingSubscription() {
+  if (!editingSubscriptionId.value) return
+  const current = subscriptions.value.find((item) => item.id === editingSubscriptionId.value)
+  const confirmed = window.confirm(`确认删除订阅 "${current?.name || editingSubscriptionId.value}"？此操作不可恢复。`)
+  if (!confirmed) return
+  try {
+    await api.deleteSubscription(adminKey.value, editingSubscriptionId.value)
+    closeSubscriptionModal()
+    toast('success', '订阅删除成功')
+    await loadAll()
+    await refreshStatus()
+  } catch (e:any) { toast('error', e.message) }
+}
+
+async function openSubscriptionQr(subscription: SubscriptionRecord, format: string, label: string) {
+  const url = getSubscriptionUrl(subscription.token, format)
+  copyToClipboard(url)
+  showSubscriptionQr.value = true
+  subscriptionQrTitle.value = `${subscription.name} / ${label}`
+  subscriptionQrUrl.value = url
+  subscriptionQrDataUrl.value = ''
+  subscriptionQrLoading.value = true
+  try {
+    subscriptionQrDataUrl.value = await QRCode.toDataURL(url, {
+      width: 320,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+    })
+  } catch (e:any) {
+    toast('error', e.message || '二维码生成失败')
+  } finally {
+    subscriptionQrLoading.value = false
+  }
+}
+
+function closeSubscriptionQr() {
+  showSubscriptionQr.value = false
+  subscriptionQrTitle.value = ''
+  subscriptionQrUrl.value = ''
+  subscriptionQrDataUrl.value = ''
+  subscriptionQrLoading.value = false
 }
 
 // Subscription URL helper
 function getSubscriptionUrl(token: string, format: string) {
   const base = status.value?.publicBaseUrl || window.location.origin
   return `${base}/sub/${token}?format=${format}`
+}
+
+function getSubscriptionVisibleNodesLabel(subscription: SubscriptionRecord) {
+  if (subscription.visibleNodeIds.length === 0) return '全部'
+  const names = subscription.visibleNodeIds
+    .map((nodeId) => nodes.value.find((node) => node.id === nodeId)?.name || nodeId)
+  if (names.length <= 2) return names.join(', ')
+  return `${names.slice(0, 2).join(', ')} +${names.length - 2}`
 }
 
 function openPublishRelease(node: NodeRecord) {
@@ -1354,29 +1448,30 @@ onMounted(() => { if (adminKey.value) login() })
           <div class="page-header">
             <div class="page-header-row">
               <div><h1 class="page-title">订阅管理</h1><p class="page-subtitle">管理订阅端点</p></div>
-              <button class="btn btn-primary" @click="showCreateSub=true">+ 添加订阅</button>
+              <button class="btn btn-primary" @click="openCreateSubscription">+ 添加订阅</button>
             </div>
           </div>
           <div class="table-wrapper">
             <table class="data-table">
-              <thead><tr><th>名称</th><th>令牌</th><th>状态</th><th>可见节点</th><th>创建时间</th><th>订阅地址</th></tr></thead>
+              <thead><tr><th>名称</th><th>令牌</th><th>状态</th><th>可见节点</th><th>创建时间</th><th>订阅地址</th><th>操作</th></tr></thead>
               <tbody>
                 <tr v-for="s in subscriptions" :key="s.id">
                   <td style="font-weight:600;color:var(--color-text-primary)">{{ s.name }}</td>
                   <td class="text-mono truncate">{{ s.token }}</td>
                   <td><span class="status-badge" :class="s.enabled?'online':'offline'"><span class="status-dot"></span>{{ s.enabled ? 'Enabled' : 'Disabled' }}</span></td>
-                  <td>{{ s.visibleNodeIds.length || '全部' }}</td>
+                  <td>{{ getSubscriptionVisibleNodesLabel(s) }}</td>
                   <td class="text-muted">{{ timeAgo(s.createdAt) }}</td>
                   <td>
                     <div class="sub-url-actions">
-                      <button class="btn btn-xs btn-secondary" @click="copyToClipboard(getSubscriptionUrl(s.token,'v2ray'))" title="V2Ray 订阅 (Base64)">V2Ray</button>
-                      <button class="btn btn-xs btn-secondary" @click="copyToClipboard(getSubscriptionUrl(s.token,'clash'))" title="Clash 订阅 (YAML)">Clash</button>
-                      <button class="btn btn-xs btn-secondary" @click="copyToClipboard(getSubscriptionUrl(s.token,'singbox'))" title="Sing-Box 订阅 (JSON)">SingBox</button>
-                      <button class="btn btn-xs btn-ghost" @click="copyToClipboard(getSubscriptionUrl(s.token,'plain'))" title="通用订阅 (明文)">通用</button>
+                      <button class="btn btn-xs btn-secondary" @click="openSubscriptionQr(s, 'v2ray', 'V2Ray')" title="复制并显示 V2Ray 订阅二维码">V2Ray</button>
+                      <button class="btn btn-xs btn-secondary" @click="openSubscriptionQr(s, 'clash', 'Clash')" title="复制并显示 Clash 订阅二维码">Clash</button>
+                      <button class="btn btn-xs btn-secondary" @click="openSubscriptionQr(s, 'singbox', 'SingBox')" title="复制并显示 Sing-Box 订阅二维码">SingBox</button>
+                      <button class="btn btn-xs btn-ghost" @click="openSubscriptionQr(s, 'plain', '通用')" title="复制并显示通用订阅二维码">通用</button>
                     </div>
                   </td>
+                  <td><button class="btn btn-xs btn-secondary" @click="openEditSubscription(s)">编辑</button></td>
                 </tr>
-                <tr v-if="subscriptions.length===0"><td colspan="6"><div class="empty-state"><div class="empty-state-icon">🔗</div><div class="empty-state-title">暂无订阅</div><div class="empty-state-text">创建订阅以供客户端访问</div><button class="btn btn-primary" @click="showCreateSub=true">+ 添加订阅</button></div></td></tr>
+                <tr v-if="subscriptions.length===0"><td colspan="7"><div class="empty-state"><div class="empty-state-icon">🔗</div><div class="empty-state-title">暂无订阅</div><div class="empty-state-text">创建订阅以供客户端访问</div><button class="btn btn-primary" @click="openCreateSubscription">+ 添加订阅</button></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -1845,10 +1940,27 @@ onMounted(() => { if (adminKey.value) login() })
       </div>
     </div>
 
+    <!-- Subscription QR Modal -->
+    <div v-if="showSubscriptionQr" class="modal-overlay" @click.self="closeSubscriptionQr">
+      <div class="modal-content" style="max-width:420px">
+        <div class="modal-header"><h3 class="modal-title">订阅二维码</h3><button class="modal-close-btn" @click="closeSubscriptionQr">×</button></div>
+        <div class="modal-body" style="display:grid;gap:12px;justify-items:center">
+          <div style="font-weight:600;text-align:center">{{ subscriptionQrTitle }}</div>
+          <div class="text-muted text-mono" style="word-break:break-all;font-size:12px">{{ subscriptionQrUrl }}</div>
+          <div v-if="subscriptionQrLoading" class="text-muted">二维码生成中...</div>
+          <img v-else-if="subscriptionQrDataUrl" :src="subscriptionQrDataUrl" alt="subscription qr" style="width:320px;max-width:100%;border-radius:16px;background:#fff;padding:12px" />
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="closeSubscriptionQr">关闭</button>
+          <button class="btn btn-primary" :disabled="!subscriptionQrUrl" @click="copyToClipboard(subscriptionQrUrl)">再次复制地址</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Create Subscription Modal -->
-    <div v-if="showCreateSub" class="modal-overlay" @click.self="showCreateSub=false">
+    <div v-if="showCreateSub" class="modal-overlay" @click.self="closeSubscriptionModal">
       <div class="modal-content">
-        <div class="modal-header"><h3 class="modal-title">新建订阅</h3><button class="modal-close-btn" @click="showCreateSub=false">×</button></div>
+        <div class="modal-header"><h3 class="modal-title">{{ editingSubscriptionId ? '编辑订阅' : '新建订阅' }}</h3><button class="modal-close-btn" @click="closeSubscriptionModal">×</button></div>
         <div class="modal-body">
           <div class="form-group"><label class="form-label">名称 *</label><input class="form-input" v-model="newSub.name" placeholder="e.g. Primary Subscription" /></div>
           <div class="form-checkbox-group mb-md"><input type="checkbox" class="form-checkbox" v-model="newSub.enabled" id="sub-en"><label for="sub-en" class="form-label" style="margin:0">启用</label></div>
@@ -1862,7 +1974,13 @@ onMounted(() => { if (adminKey.value) login() })
             </div>
           </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateSub=false">取消</button><button class="btn btn-primary" @click="createSub">创建</button></div>
+        <div class="modal-footer" style="justify-content:space-between">
+          <button v-if="editingSubscriptionId" class="btn btn-danger" style="--btn-bg:var(--color-danger);--btn-hover:var(--color-danger)" @click="deleteEditingSubscription">删除订阅</button>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" @click="closeSubscriptionModal">取消</button>
+            <button class="btn btn-primary" @click="submitSubscription">{{ editingSubscriptionId ? '保存修改' : '创建' }}</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

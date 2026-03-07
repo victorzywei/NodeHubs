@@ -21,12 +21,13 @@ import type {
   TemplateRecord,
   TrafficSample,
   UpdateNodeInput,
+  UpdateSubscriptionInput,
   UpdateTemplateInput,
 } from '@contracts/index'
 import type { AppServices } from '../lib/app-types'
 import { APP_VERSION, ONLINE_WINDOW_MS } from '../lib/constants'
 import { createId, createToken, nowIso, parseJsonObject } from '../lib/utils'
-import { parseReleaseArtifact, renderReleaseArtifact } from './release-renderer'
+import { buildSubscriptionEntries, parseReleaseArtifact, renderReleaseArtifact } from './release-renderer'
 import { repairTemplateDefaults, repairTemplateRecord } from './template-defaults'
 
 type NodeRow = {
@@ -387,6 +388,13 @@ function uniqueIds(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)))
 }
 
+async function normalizeVisibleNodeIds(services: AppServices, values: string[] | undefined): Promise<string[]> {
+  const requestedIds = uniqueIds(values || [])
+  if (requestedIds.length === 0) return []
+  const rows = await Promise.all(requestedIds.map((nodeId) => getNodeRow(services, nodeId)))
+  return requestedIds.filter((_, index) => Boolean(rows[index]))
+}
+
 async function getNodeRow(services: AppServices, nodeId: string): Promise<NodeRow | null> {
   return services.db.get<NodeRow>('SELECT * FROM nodes WHERE id = ?', [nodeId])
 }
@@ -702,6 +710,7 @@ export async function createSubscription(services: AppServices, input: CreateSub
   const id = createId('sub')
   const now = nowIso()
   const token = createToken()
+  const visibleNodeIds = await normalizeVisibleNodeIds(services, input.visibleNodeIds)
   await services.db.run(
     `INSERT INTO subscriptions (id, token, name, enabled, visible_node_ids_json, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -710,7 +719,7 @@ export async function createSubscription(services: AppServices, input: CreateSub
       token,
       input.name,
       input.enabled ? 1 : 0,
-      JSON.stringify(input.visibleNodeIds),
+      JSON.stringify(visibleNodeIds),
       now,
       now,
     ],
@@ -718,6 +727,43 @@ export async function createSubscription(services: AppServices, input: CreateSub
   const row = await services.db.get<SubscriptionRow>('SELECT * FROM subscriptions WHERE id = ?', [id])
   if (!row) throw new Error('failed to create subscription')
   return toSubscriptionRecord(row)
+}
+
+export async function updateSubscription(
+  services: AppServices,
+  subscriptionId: string,
+  input: UpdateSubscriptionInput,
+): Promise<SubscriptionRecord | null> {
+  const current = await services.db.get<SubscriptionRow>('SELECT * FROM subscriptions WHERE id = ?', [subscriptionId])
+  if (!current) return null
+
+  const visibleNodeIds = input.visibleNodeIds === undefined
+    ? parseJsonObject<string[]>(current.visible_node_ids_json, [])
+    : await normalizeVisibleNodeIds(services, input.visibleNodeIds)
+
+  const updatedAt = nowIso()
+  await services.db.run(
+    `UPDATE subscriptions
+     SET name = ?, enabled = ?, visible_node_ids_json = ?, updated_at = ?
+     WHERE id = ?`,
+    [
+      input.name ?? current.name,
+      input.enabled === undefined ? current.enabled : (input.enabled ? 1 : 0),
+      JSON.stringify(visibleNodeIds),
+      updatedAt,
+      subscriptionId,
+    ],
+  )
+
+  const row = await services.db.get<SubscriptionRow>('SELECT * FROM subscriptions WHERE id = ?', [subscriptionId])
+  return row ? toSubscriptionRecord(row) : null
+}
+
+export async function deleteSubscription(services: AppServices, subscriptionId: string): Promise<boolean> {
+  const current = await services.db.get<SubscriptionRow>('SELECT id FROM subscriptions WHERE id = ?', [subscriptionId])
+  if (!current) return false
+  await services.db.run('DELETE FROM subscriptions WHERE id = ?', [subscriptionId])
+  return true
 }
 
 async function reserveNodeReleaseSlot(services: AppServices, nodeId: string): Promise<{ row: NodeRow; revision: number; updatedAt: string } | null> {
@@ -1171,19 +1217,44 @@ export async function buildPublicSubscriptionDocument(
 
   const entries: PublicSubscriptionDocument['entries'] = []
   for (const nodeRow of nodes) {
-    if (Number(nodeRow.current_release_revision || 0) <= 0 || nodeRow.current_release_status !== 'healthy') {
-      continue
-    }
     const release = await services.db.get<ReleaseRow>(
-      'SELECT * FROM releases WHERE node_id = ? AND revision = ? AND status = ?',
-      [nodeRow.id, Number(nodeRow.current_release_revision || 0), 'healthy'],
+      'SELECT * FROM releases WHERE node_id = ? AND kind = ? AND status = ? ORDER BY revision DESC LIMIT 1',
+      [nodeRow.id, 'runtime', 'healthy'],
     )
     if (!release) continue
     const artifact = await services.artifacts.get(release.artifact_key)
     if (!artifact) continue
     const parsedArtifact = parseReleaseArtifact(artifact.body)
     if (!parsedArtifact) continue
-    entries.push(...parsedArtifact.subscriptionEndpoints)
+
+    const node = {
+      ...toNodeRecord(nodeRow),
+      name: parsedArtifact.node.name,
+      nodeType: parsedArtifact.node.nodeType,
+      region: parsedArtifact.node.region,
+      tags: [...parsedArtifact.node.tags],
+      networkType: parsedArtifact.node.networkType,
+      primaryDomain: parsedArtifact.node.primaryDomain,
+      backupDomain: parsedArtifact.node.backupDomain,
+      entryIp: parsedArtifact.node.entryIp,
+      githubMirrorUrl: parsedArtifact.node.githubMirrorUrl,
+      cfDnsToken: parsedArtifact.node.cfDnsToken,
+      argoTunnelToken: parsedArtifact.node.argoTunnelToken,
+      argoTunnelDomain: parsedArtifact.node.argoTunnelDomain,
+      argoTunnelPort: parsedArtifact.node.argoTunnelPort,
+    } satisfies NodeRecord
+
+    try {
+      const templateRecords = parsedArtifact.templates.map((template) => ({
+        ...template,
+        notes: '',
+        createdAt: parsedArtifact.createdAt,
+        updatedAt: parsedArtifact.createdAt,
+      }))
+      entries.push(...buildSubscriptionEntries(node, templateRecords))
+    } catch {
+      entries.push(...parsedArtifact.subscriptionEndpoints)
+    }
   }
 
   return {
