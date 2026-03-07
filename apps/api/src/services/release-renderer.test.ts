@@ -300,5 +300,52 @@ describe('release renderer', () => {
     expect(artifact.bootstrap.installXray).toBe(true)
     expect(artifact.bootstrap.runtimeBinaries.map((item) => item.engine).sort()).toEqual(['sing-box', 'xray'])
   })
+
+  it('repairs placeholder secrets before rendering xray shadowsocks 2022 configs', () => {
+    const runtimeCatalog = buildRuntimeCatalog()
+    const artifact = renderReleaseArtifact({
+      releaseId: 'rel_ss2022',
+      revision: 8,
+      kind: 'runtime',
+      configRevision: 8,
+      bootstrapRevision: 1,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: 'repair invalid password',
+      summary: 'runtime update',
+      node: createNode(),
+      templates: [
+        {
+          ...createTemplate(),
+          id: 'tpl_ss2022',
+          name: 'SS2022 xray',
+          engine: 'xray',
+          protocol: 'shadowsocks',
+          transport: 'tcp',
+          tlsMode: 'none',
+          defaults: {
+            serverPort: 8388,
+            method: '2022-blake3-aes-128-gcm',
+            password: 'replace-me-base64-key',
+          },
+        },
+      ],
+      bootstrapOptions: {
+        installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
+        installSingBox: false,
+        installXray: false,
+      },
+    }, runtimeCatalog)
+
+    const runtimeConfig = JSON.parse(artifact.runtimes[0]?.files[0]?.content || '{}') as {
+      inbounds?: Array<{ settings?: { password?: string } }>
+    }
+    const password = String(runtimeConfig.inbounds?.[0]?.settings?.password || '')
+
+    expect(password).not.toBe('replace-me-base64-key')
+    expect(atob(password).length).toBe(16)
+  })
 })
 

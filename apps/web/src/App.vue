@@ -333,12 +333,46 @@ async function deleteNodeById(nodeId: string, nodeName: string) {
 // ---- Template Actions ----
 const catalogPresets = ref<any[]>([])
 const warpSourceNodeId = ref('')
-const newTemplate = ref({
-  name:'', engine:'xray' as 'sing-box'|'xray',
-  protocol:'vless', transport:'ws', tlsMode:'none' as 'none'|'tls'|'reality',
-  warpExit:false, warpRouteMode:'all' as 'all'|'ipv4'|'ipv6',
-  defaults:{} as Record<string,unknown>, notes:''
-})
+const editingTemplateId = ref('')
+
+function createEmptyTemplate() {
+  return {
+    name:'', engine:'xray' as 'sing-box'|'xray',
+    protocol:'vless', transport:'ws', tlsMode:'none' as 'none'|'tls'|'reality',
+    warpExit:false, warpRouteMode:'all' as 'all'|'ipv4'|'ipv6',
+    defaults:{} as Record<string,unknown>, notes:''
+  }
+}
+
+const newTemplate = ref(createEmptyTemplate())
+
+const sampleSecrets = new Set([
+  'replace-me',
+  'replace_me',
+  'replace-me-base64-key',
+  'your-password',
+  'changeme',
+  'change-me',
+  'password',
+])
+
+const sampleRealitySnis = [
+  'www.microsoft.com',
+  'www.cloudflare.com',
+  'www.apple.com',
+  'aws.amazon.com',
+]
+
+function resetTemplateForm() {
+  editingTemplateId.value = ''
+  newTemplate.value = createEmptyTemplate()
+  warpSourceNodeId.value = selectedNode.value?.id || warpSourceNodes.value[0]?.id || ''
+}
+
+function closeTemplateModal() {
+  showCreateTemplate.value = false
+  resetTemplateForm()
+}
 
 const warpSourceNodes = computed(() =>
   nodes.value.filter((node) =>
@@ -398,15 +432,15 @@ const templateDefaultFields = computed(() => {
 
   // UUID for vless/vmess
   if (p === 'vless' || p === 'vmess') {
-    fields.push({ key:'uuid', label:'UUID', placeholder:'00000000-0000-4000-8000-000000000001', generator:'uuid' })
+    fields.push({ key:'uuid', label:'UUID', placeholder:'点击 Generate 自动生成', generator:'uuid' })
   }
   // Password for trojan/ss/hy2
   if (p === 'trojan' || p === 'shadowsocks' || p === 'hysteria2') {
-    fields.push({ key:'password', label:'密码', placeholder:'your-password', generator:'random-password' })
+    fields.push({ key:'password', label:'密码', placeholder:'点击 Generate 自动生成', generator:'random-password' })
   }
   // SS method
   if (p === 'shadowsocks') {
-    fields.push({ key:'method', label:'加密方式', placeholder:'aes-128-gcm / 2022-blake3-aes-128-gcm' })
+    fields.push({ key:'method', label:'加密方式', placeholder:'例如 2022-blake3-aes-128-gcm' })
   }
   // WS/XHTTP path
   if (t === 'ws' || t === 'xhttp') {
@@ -419,7 +453,7 @@ const templateDefaultFields = computed(() => {
   }
   // TLS SNI
   if (tls === 'tls' || tls === 'reality' || p === 'hysteria2') {
-    fields.push({ key:'sni', label:'SNI', placeholder: tls === 'reality' ? '例如 www.microsoft.com' : '例如 node.example.com', list: tls === 'reality' ? 'reality-sni-list' : undefined })
+    fields.push({ key:'sni', label:'SNI', placeholder: tls === 'reality' ? '自动选择常用目标域名' : '例如 node.example.com', list: tls === 'reality' ? 'reality-sni-list' : undefined })
   }
   // VLESS flow for Reality
   if (p === 'vless' && tls === 'reality') {
@@ -427,9 +461,9 @@ const templateDefaultFields = computed(() => {
   }
   // Reality keys
   if (tls === 'reality') {
-    fields.push({ key:'realityPrivateKey', label:'Reality 私钥', placeholder:'replace-me', generator:'x25519' })
-    fields.push({ key:'realityPublicKey', label:'Reality 公钥', placeholder:'replace-me' })
-    fields.push({ key:'realityShortId', label:'Reality ShortId', placeholder:'0123456789abcdef', generator:'shortId' })
+    fields.push({ key:'realityPrivateKey', label:'Reality 私钥', placeholder:'点击 Generate Keypair 自动生成', generator:'x25519' })
+    fields.push({ key:'realityPublicKey', label:'Reality 公钥', placeholder:'点击 Generate Keypair 自动生成' })
+    fields.push({ key:'realityShortId', label:'Reality ShortId', placeholder:'点击 Generate 自动生成', generator:'shortId' })
   }
   // Hysteria2 bandwidth
   if (p === 'hysteria2') {
@@ -456,15 +490,24 @@ watch(() => newTemplate.value.protocol, (p) => {
   } else {
     if (newTemplate.value.transport === 'hysteria2') newTemplate.value.transport = 'tcp'
   }
+  void hydrateTemplateDefaults('repair')
 })
 
+watch(
+  () => `${newTemplate.value.transport}:${newTemplate.value.tlsMode}:${String(newTemplate.value.defaults['method'] || '')}`,
+  () => {
+    void hydrateTemplateDefaults('repair')
+  },
+)
+
 async function openCreateTemplate() {
+  resetTemplateForm()
   showCreateTemplate.value = true
-  warpSourceNodeId.value = selectedNode.value?.id || warpSourceNodes.value[0]?.id || ''
   try { catalogPresets.value = await api.listTemplateCatalog(adminKey.value) } catch {}
+  await hydrateTemplateDefaults('repair')
 }
 
-function applyPreset(p: any) {
+async function applyPreset(p: any) {
   newTemplate.value = {
     name: p.name, engine: p.engine, protocol: p.protocol,
     transport: p.transport, tlsMode: p.tlsMode,
@@ -472,23 +515,35 @@ function applyPreset(p: any) {
     warpRouteMode: p.warpRouteMode === 'ipv4' || p.warpRouteMode === 'ipv6' ? p.warpRouteMode : 'all',
     defaults: p.defaults ? { ...p.defaults } : {}, notes: p.notes || ''
   }
+  await hydrateTemplateDefaults('force')
 }
 
-async function createTemplate() {
+async function submitTemplate() {
   try {
-    await api.createTemplate(adminKey.value, newTemplate.value)
-    showCreateTemplate.value = false
-    newTemplate.value = { name:'', engine:'xray', protocol:'vless', transport:'ws', tlsMode:'none', warpExit:false, warpRouteMode:'all', defaults:{}, notes:'' }
-    toast('success', '模板创建成功'); await loadAll(); await refreshStatus()
+    await hydrateTemplateDefaults('repair')
+    if (editingTemplateId.value) {
+      await api.updateTemplate(adminKey.value, editingTemplateId.value, newTemplate.value)
+      toast('success', '模板更新成功')
+    } else {
+      await api.createTemplate(adminKey.value, newTemplate.value)
+      toast('success', '模板创建成功')
+    }
+    closeTemplateModal()
+    await loadAll(); await refreshStatus()
   } catch (e:any) { toast('error', e.message) }
 }
 
 // ---- Generators ----
 function generateUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = (Math.random() * 16) | 0, v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  })
+  if (typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID()
+  }
+  const bytes = new Uint8Array(16)
+  window.crypto.getRandomValues(bytes)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
 function generateRandomHex(bytes: number) {
@@ -497,22 +552,125 @@ function generateRandomHex(bytes: number) {
   return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-function generateRandomPassword() {
-  return generateRandomHex(12) // 24 chars hex
+function generateBase64(bytes: number) {
+  const arr = new Uint8Array(bytes)
+  window.crypto.getRandomValues(arr)
+  return btoa(String.fromCharCode(...Array.from(arr)))
 }
 
-async function generateRealityKeys() {
+function generateRandomSecret(bytes = 24) {
+  return generateRandomHex(bytes)
+}
+
+function getShadowsocks2022KeyBytes(method: string) {
+  switch (method.trim().toLowerCase()) {
+    case '2022-blake3-aes-128-gcm':
+      return 16
+    case '2022-blake3-aes-256-gcm':
+      return 32
+    case '2022-blake3-chacha20-poly1305':
+      return 32
+    default:
+      return 0
+  }
+}
+
+function generateTemplatePassword() {
+  if (newTemplate.value.protocol === 'shadowsocks') {
+    const method = String(newTemplate.value.defaults['method'] || '2022-blake3-aes-128-gcm')
+    const ss2022KeyBytes = getShadowsocks2022KeyBytes(method)
+    if (ss2022KeyBytes > 0) {
+      return generateBase64(ss2022KeyBytes)
+    }
+  }
+  return generateRandomSecret(24)
+}
+
+function isPlaceholderSecret(value: unknown) {
+  if (typeof value !== 'string') return true
+  const normalized = value.trim().toLowerCase()
+  return !normalized || sampleSecrets.has(normalized)
+}
+
+function isSampleUuid(value: unknown) {
+  if (typeof value !== 'string') return true
+  const normalized = value.trim().toLowerCase()
+  return !normalized || normalized === '00000000-0000-4000-8000-000000000001' || normalized === '00000000-0000-4000-8000-000000000002' || normalized === '00000000-0000-4000-8000-000000000003'
+}
+
+function isRealityShortId(value: unknown) {
+  return typeof value === 'string' && /^[0-9a-f]{2,32}$/i.test(value.trim())
+}
+
+function isRealityPlaceholder(value: unknown) {
+  if (typeof value !== 'string') return true
+  const normalized = value.trim().toLowerCase()
+  return !normalized || normalized === 'replace-me' || normalized === 'replace_me'
+}
+
+function pickRealitySni() {
+  const bytes = new Uint8Array(1)
+  window.crypto.getRandomValues(bytes)
+  return sampleRealitySnis[bytes[0] % sampleRealitySnis.length] || sampleRealitySnis[0]
+}
+
+async function hydrateTemplateDefaults(mode: 'repair' | 'force' = 'repair') {
+  const nextDefaults = { ...newTemplate.value.defaults }
+  const shouldWrite = (current: unknown, invalid: boolean) => mode === 'force' || invalid
+  const protocol = newTemplate.value.protocol
+  const tlsMode = newTemplate.value.tlsMode
+
+  if (protocol === 'vless' || protocol === 'vmess') {
+    if (shouldWrite(nextDefaults['uuid'], isSampleUuid(nextDefaults['uuid']))) {
+      nextDefaults['uuid'] = generateUUID()
+    }
+  }
+
+  if (protocol === 'trojan' || protocol === 'hysteria2' || protocol === 'shadowsocks') {
+    if (shouldWrite(nextDefaults['password'], isPlaceholderSecret(nextDefaults['password']))) {
+      nextDefaults['password'] = generateTemplatePassword()
+    }
+  }
+
+  if (protocol === 'shadowsocks' && !String(nextDefaults['method'] || '').trim()) {
+    nextDefaults['method'] = '2022-blake3-aes-128-gcm'
+    if (mode === 'force' || isPlaceholderSecret(nextDefaults['password'])) {
+      nextDefaults['password'] = generateTemplatePassword()
+    }
+  }
+
+  if (tlsMode === 'reality') {
+    if (shouldWrite(nextDefaults['realityShortId'], !isRealityShortId(nextDefaults['realityShortId']))) {
+      nextDefaults['realityShortId'] = generateRandomHex(8)
+    }
+    const currentSni = String(nextDefaults['sni'] || '').trim()
+    if (mode === 'force' || !currentSni || currentSni.startsWith('例如 ')) {
+      nextDefaults['sni'] = pickRealitySni()
+    }
+    if (mode === 'force' || isRealityPlaceholder(nextDefaults['realityPrivateKey']) || isRealityPlaceholder(nextDefaults['realityPublicKey'])) {
+      await generateRealityKeys(nextDefaults)
+    }
+  }
+
+  newTemplate.value.defaults = nextDefaults
+}
+
+async function generateRealityKeys(targetDefaults = newTemplate.value.defaults) {
   try {
     const keyPair = await window.crypto.subtle.generateKey({ name: "X25519" } as any, true, ["deriveBits"])
     const pubKeyBuf = await window.crypto.subtle.exportKey("raw", (keyPair as any).publicKey)
     const privKeyBuf = await window.crypto.subtle.exportKey("pkcs8", (keyPair as any).privateKey)
     const privRaw = new Uint8Array(privKeyBuf).slice(-32) // extract raw 32 bytes from pkcs8
     const toBase64Url = (buf: Uint8Array) => btoa(String.fromCharCode(...Array.from(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-    newTemplate.value.defaults['realityPublicKey'] = toBase64Url(new Uint8Array(pubKeyBuf))
-    newTemplate.value.defaults['realityPrivateKey'] = toBase64Url(privRaw)
-    toast('success', 'Generated new Reality key pair')
+    targetDefaults['realityPublicKey'] = toBase64Url(new Uint8Array(pubKeyBuf))
+    targetDefaults['realityPrivateKey'] = toBase64Url(privRaw)
+    if (targetDefaults === newTemplate.value.defaults) {
+      toast('success', 'Generated new Reality key pair')
+    }
   } catch (e) {
-    toast('error', '当前浏览器不支持 X25519 密钥生成，请手动输入')
+    if (targetDefaults === newTemplate.value.defaults) {
+      toast('error', '当前浏览器不支持 X25519 密钥生成，请手动输入')
+    }
   }
 }
 
@@ -520,12 +678,33 @@ function handleGenerate(type: string) {
   if (type === 'uuid') {
     newTemplate.value.defaults['uuid'] = generateUUID()
   } else if (type === 'random-password') {
-    newTemplate.value.defaults['password'] = generateRandomPassword()
+    newTemplate.value.defaults['password'] = generateTemplatePassword()
   } else if (type === 'shortId') {
     newTemplate.value.defaults['realityShortId'] = generateRandomHex(8)
   } else if (type === 'x25519') {
     generateRealityKeys()
   }
+}
+
+async function openEditTemplate(template: TemplateRecord) {
+  editingTemplateId.value = template.id
+  warpSourceNodeId.value = selectedNode.value?.id || warpSourceNodes.value[0]?.id || ''
+  newTemplate.value = {
+    name: template.name,
+    engine: template.engine,
+    protocol: template.protocol,
+    transport: template.transport,
+    tlsMode: template.tlsMode,
+    warpExit: template.warpExit,
+    warpRouteMode: template.warpRouteMode,
+    defaults: { ...(template.defaults || {}) },
+    notes: template.notes || '',
+  }
+  showCreateTemplate.value = true
+  if (catalogPresets.value.length === 0) {
+    try { catalogPresets.value = await api.listTemplateCatalog(adminKey.value) } catch {}
+  }
+  await hydrateTemplateDefaults('repair')
 }
 
 // ---- Subscription Actions ----
@@ -1132,7 +1311,7 @@ onMounted(() => { if (adminKey.value) login() })
           </div>
           <div class="table-wrapper">
             <table class="data-table">
-              <thead><tr><th>名称</th><th>引擎</th><th>协议</th><th>传输</th><th>TLS</th><th>WARP</th><th>更新时间</th></tr></thead>
+              <thead><tr><th>名称</th><th>引擎</th><th>协议</th><th>传输</th><th>TLS</th><th>WARP</th><th>更新时间</th><th>操作</th></tr></thead>
               <tbody>
                 <tr v-for="t in templates" :key="t.id">
                   <td style="font-weight:600;color:var(--color-text-primary)">{{ t.name }}</td>
@@ -1142,8 +1321,13 @@ onMounted(() => { if (adminKey.value) login() })
                   <td><span class="status-badge" :class="t.tlsMode==='reality'?'applying':t.tlsMode==='tls'?'healthy':'offline'">{{ t.tlsMode }}</span></td>
                   <td><span class="tag" :class="{accent:t.warpExit}">{{ t.warpExit ? `on/${t.warpRouteMode}` : 'off' }}</span></td>
                   <td class="text-muted">{{ timeAgo(t.updatedAt) }}</td>
+                  <td>
+                    <div class="table-actions">
+                      <button class="btn btn-sm btn-secondary" @click="openEditTemplate(t)">编辑</button>
+                    </div>
+                  </td>
                 </tr>
-                <tr v-if="templates.length===0"><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-title">暂无模板</div><div class="empty-state-text">创建协议模板来配置您的节点</div><button class="btn btn-primary" @click="openCreateTemplate">+ 添加模板</button></div></td></tr>
+                <tr v-if="templates.length===0"><td colspan="8"><div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-title">暂无模板</div><div class="empty-state-text">创建协议模板来配置您的节点</div><button class="btn btn-primary" @click="openCreateTemplate">+ 添加模板</button></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -1533,9 +1717,9 @@ onMounted(() => { if (adminKey.value) login() })
     </div>
 
     <!-- Create Template Modal -->
-    <div v-if="showCreateTemplate" class="modal-overlay" @click.self="showCreateTemplate=false">
+    <div v-if="showCreateTemplate" class="modal-overlay" @click.self="closeTemplateModal">
       <div class="modal-content" style="max-width:640px">
-        <div class="modal-header"><h3 class="modal-title">新建模板</h3><button class="modal-close-btn" @click="showCreateTemplate=false">×</button></div>
+        <div class="modal-header"><h3 class="modal-title">{{ editingTemplateId ? '编辑模板' : '新建模板' }}</h3><button class="modal-close-btn" @click="closeTemplateModal">×</button></div>
         <div class="modal-body" style="max-height:60vh;overflow-y:auto">
           <!-- Presets -->
           <div v-if="catalogPresets.length" class="mb-lg">
@@ -1635,7 +1819,7 @@ onMounted(() => { if (adminKey.value) login() })
             </div>
           </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateTemplate=false">取消</button><button class="btn btn-primary" @click="createTemplate">创建</button></div>
+        <div class="modal-footer"><button class="btn btn-secondary" @click="closeTemplateModal">取消</button><button class="btn btn-primary" @click="submitTemplate">{{ editingTemplateId ? '保存修改' : '创建' }}</button></div>
       </div>
     </div>
 

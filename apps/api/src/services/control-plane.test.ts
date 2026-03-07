@@ -306,4 +306,26 @@ describe('control-plane template validation', () => {
       }),
     ).rejects.toThrow(/sing-box/i)
   })
+
+  it('normalizes placeholder template defaults before persisting them', async () => {
+    const services = createServices()
+
+    const template = await createTemplate(
+      services,
+      createValidTemplateInput({
+        name: 'SS2022 normalized',
+        protocol: 'shadowsocks',
+        transport: 'tcp',
+        tlsMode: 'none',
+        defaults: {
+          serverPort: 8388,
+          method: '2022-blake3-aes-128-gcm',
+          password: 'replace-me-base64-key',
+        },
+      }),
+    )
+
+    expect(String(template.defaults.password || '')).not.toBe('replace-me-base64-key')
+    expect(atob(String(template.defaults.password || '')).length).toBe(16)
+  })
 })

@@ -27,6 +27,7 @@ import type { AppServices } from '../lib/app-types'
 import { APP_VERSION, ONLINE_WINDOW_MS } from '../lib/constants'
 import { createId, createToken, nowIso, parseJsonObject } from '../lib/utils'
 import { parseReleaseArtifact, renderReleaseArtifact } from './release-renderer'
+import { repairTemplateDefaults, repairTemplateRecord } from './template-defaults'
 
 type NodeRow = {
   id: string
@@ -270,7 +271,10 @@ function parseTemplateInput(input: CreateTemplateInput): CreateTemplateInput {
   if (!parsed.success) {
     throw new Error(parsed.error.issues[0]?.message || 'invalid template body')
   }
-  return parsed.data
+  return {
+    ...parsed.data,
+    defaults: repairTemplateDefaults(parsed.data),
+  }
 }
 
 function parseNodeInput(input: CreateNodeInput): CreateNodeInput {
@@ -592,6 +596,30 @@ export async function listTemplates(services: AppServices): Promise<TemplateReco
   return rows.map(toTemplateRecord)
 }
 
+async function persistRepairedTemplates(
+  services: AppServices,
+  templateRows: TemplateRow[],
+): Promise<TemplateRecord[]> {
+  const repairedTemplates: TemplateRecord[] = []
+
+  for (const row of templateRows) {
+    const currentTemplate = toTemplateRecord(row)
+    const repairedTemplate = repairTemplateRecord(currentTemplate)
+    repairedTemplates.push(repairedTemplate)
+
+    if (JSON.stringify(currentTemplate.defaults) === JSON.stringify(repairedTemplate.defaults)) {
+      continue
+    }
+
+    await services.db.run(
+      'UPDATE templates SET defaults_json = ?, updated_at = ? WHERE id = ?',
+      [JSON.stringify(repairedTemplate.defaults), nowIso(), repairedTemplate.id],
+    )
+  }
+
+  return repairedTemplates
+}
+
 export async function createTemplate(services: AppServices, input: CreateTemplateInput): Promise<TemplateRecord> {
   const nextTemplate = parseTemplateInput(input)
   const id = createId('tpl')
@@ -739,6 +767,7 @@ export async function publishNodeRelease(
   const releaseId = createId('rel')
   const artifactKey = `releases/${nodeId}/r${reserved.revision}.json`
   const summary = summarizeRelease(kind, uniqueTemplateIds, bootstrapOptions, message)
+  const repairedTemplates = await persistRepairedTemplates(services, templateRows)
 
   try {
     const artifact = renderReleaseArtifact({
@@ -755,7 +784,7 @@ export async function publishNodeRelease(
         desiredReleaseRevision: reserved.revision,
         currentReleaseStatus: 'pending',
       },
-      templates: templateRows.map(toTemplateRecord),
+      templates: repairedTemplates,
       bootstrapOptions,
     }, services.runtimeCatalog)
     const stored = await services.artifacts.putJson(artifactKey, artifact)
@@ -833,6 +862,7 @@ export async function previewNodeRelease(
   const previewRevision = Number(node.desiredReleaseRevision || 0) + 1
   const createdAt = nowIso()
   const summary = summarizeRelease(kind, uniqueTemplateIds, bootstrapOptions, message)
+  const repairedTemplates = templateRows.map((row) => repairTemplateRecord(toTemplateRecord(row)))
   const artifact = renderReleaseArtifact(
     {
       releaseId: createId('preview'),
@@ -848,7 +878,7 @@ export async function previewNodeRelease(
         desiredReleaseRevision: previewRevision,
         currentReleaseStatus: 'pending',
       },
-      templates: templateRows.map(toTemplateRecord),
+      templates: repairedTemplates,
       bootstrapOptions,
     },
     services.runtimeCatalog,

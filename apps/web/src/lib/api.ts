@@ -94,6 +94,13 @@ export function createTemplate(adminKey: string, payload: Record<string, unknown
   }, adminKey)
 }
 
+export function updateTemplate(adminKey: string, templateId: string, payload: Record<string, unknown>): Promise<TemplateRecord> {
+  return request(`/api/templates/${templateId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }, adminKey)
+}
+
 export function listTemplateCatalog(adminKey: string): Promise<TemplatePreset[]> {
   return request('/api/templates/catalog', {}, adminKey)
 }

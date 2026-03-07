@@ -11,6 +11,7 @@ import type {
   TemplateRecord,
 } from '@contracts/index'
 import type { RuntimeCatalog } from './runtime-catalog'
+import { hydrateTemplatePreset, repairTemplateRecord } from './template-defaults'
 
 type RenderContext = {
   releaseId: string
@@ -74,7 +75,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     warpRouteMode: 'all',
     defaults: {
       serverPort: 443,
-      password: 'replace-me',
+      password: '',
       sni: '',
       upMbps: 100,
       downMbps: 100,
@@ -93,7 +94,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     defaults: {
       serverPort: 8388,
       method: '2022-blake3-aes-128-gcm',
-      password: 'replace-me-base64-key',
+      password: '',
     },
     notes: 'Shadowsocks 2022 协议，使用 AEAD-2022 加密，兼容 Xray / sing-box。',
   },
@@ -111,7 +112,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
       path: '/ws',
       host: '',
       sni: '',
-      uuid: '00000000-0000-4000-8000-000000000001',
+      uuid: '',
     },
     notes: 'CDN 友好的经典组合，适合反代部署。兼容 Xray / sing-box。',
   },
@@ -126,12 +127,12 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     warpRouteMode: 'all',
     defaults: {
       serverPort: 443,
-      uuid: '00000000-0000-4000-8000-000000000002',
+      uuid: '',
       flow: 'xtls-rprx-vision',
       sni: 'www.cloudflare.com',
-      realityPublicKey: 'replace-me',
-      realityPrivateKey: 'replace-me',
-      realityShortId: '0123456789abcdef',
+      realityPublicKey: '',
+      realityPrivateKey: '',
+      realityShortId: '',
     },
     notes: 'Reality 免证书 TLS 伪装，抗检测能力强。兼容 Xray / sing-box。',
   },
@@ -146,7 +147,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     warpRouteMode: 'all',
     defaults: {
       serverPort: 443,
-      password: 'replace-me',
+      password: '',
       sni: '',
     },
     notes: '经典 Trojan 协议，需要有效 TLS 证书。兼容 Xray / sing-box。',
@@ -163,7 +164,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     defaults: {
       serverPort: 443,
       serviceName: 'grpc',
-      password: 'replace-me',
+      password: '',
       sni: '',
     },
     notes: 'gRPC 多路复用传输，CDN 友好。兼容 Xray / sing-box。',
@@ -182,7 +183,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
       path: '/ws',
       host: '',
       sni: '',
-      uuid: '00000000-0000-4000-8000-000000000003',
+      uuid: '',
       alterId: 0,
     },
     notes: 'VMESS 经典 WebSocket 组合，CDN 可用。兼容 Xray / sing-box。',
@@ -487,27 +488,28 @@ function defaultTemplateServer(node: NodeRecord): string {
 }
 
 function normalizeTemplate(node: NodeRecord, template: TemplateRecord): NormalizedTemplate {
-  ensureProtocolSupport(template)
-  ensureTemplateCompatibility(template)
-  const defaults = template.defaults || {}
+  const repairedTemplate = repairTemplateRecord(template)
+  ensureProtocolSupport(repairedTemplate)
+  ensureTemplateCompatibility(repairedTemplate)
+  const defaults = repairedTemplate.defaults || {}
   const server = readString(defaults, 'server', defaultTemplateServer(node))
   if (!server) {
-    throw new Error(`Node ${node.name} does not have a reachable domain or entry IP for template ${template.name}`)
+    throw new Error(`Node ${node.name} does not have a reachable domain or entry IP for template ${repairedTemplate.name}`)
   }
 
-  const protocol = template.protocol.toLowerCase()
-  const transport = template.transport.toLowerCase()
-  const tlsMode = template.tlsMode
-  const warpExit = template.warpExit === true || readBoolean(defaults.warp_exit, false)
-  const warpRouteModeRaw = readString(defaults, 'warp_route_mode', template.warpRouteMode || 'all')
+  const protocol = repairedTemplate.protocol.toLowerCase()
+  const transport = repairedTemplate.transport.toLowerCase()
+  const tlsMode = repairedTemplate.tlsMode
+  const warpExit = repairedTemplate.warpExit === true || readBoolean(defaults.warp_exit, false)
+  const warpRouteModeRaw = readString(defaults, 'warp_route_mode', repairedTemplate.warpRouteMode || 'all')
   const warpRouteMode: TemplateRecord['warpRouteMode'] = warpRouteModeRaw === 'ipv4' || warpRouteModeRaw === 'ipv6' ? warpRouteModeRaw : 'all'
-  const listenPort = readNumber(defaults, ['serverPort', 'port'], defaultPort(template))
+  const listenPort = readNumber(defaults, ['serverPort', 'port'], defaultPort(repairedTemplate))
   const host = readString(defaults, 'host', node.primaryDomain || node.argoTunnelDomain || server)
   const sni = readString(defaults, 'sni', node.primaryDomain || node.argoTunnelDomain || host || server)
   const normalized: NormalizedTemplate = {
-    id: template.id,
-    name: template.name,
-    engine: template.engine,
+    id: repairedTemplate.id,
+    name: repairedTemplate.name,
+    engine: repairedTemplate.engine,
     protocol,
     transport,
     tlsMode,
@@ -518,8 +520,8 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
     listenPort,
     host,
     sni,
-    path: normalizePath(readString(defaults, 'path', `/connect/${template.id.slice(-6)}`)),
-    serviceName: readString(defaults, 'serviceName', `grpc-${template.id.slice(-6)}`),
+    path: normalizePath(readString(defaults, 'path', `/connect/${repairedTemplate.id.slice(-6)}`)),
+    serviceName: readString(defaults, 'serviceName', `grpc-${repairedTemplate.id.slice(-6)}`),
     uuid: readString(defaults, 'uuid'),
     password: readString(defaults, 'password'),
     method: readString(defaults, 'method', 'aes-128-gcm'),
@@ -1015,10 +1017,7 @@ function buildBootstrapNotes(node: NodeRecord, kind: ReleaseKind, bootstrapOptio
 }
 
 export function listTemplatePresets(): TemplatePreset[] {
-  return TEMPLATE_PRESETS.map((item) => ({
-    ...item,
-    defaults: { ...item.defaults },
-  }))
+  return TEMPLATE_PRESETS.map((item) => hydrateTemplatePreset(item))
 }
 
 function cloneBinaryPlan(plan: RuntimeBinaryPlan): RuntimeBinaryPlan {
