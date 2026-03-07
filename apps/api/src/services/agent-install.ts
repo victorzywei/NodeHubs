@@ -14,24 +14,19 @@ export function buildDeployCommand(input: {
   const installUrl = `${apiBase}/api/nodes/agent/install?nodeId=${encodeURIComponent(input.nodeId)}`
   const tokenHeader = `X-Agent-Token: ${input.agentToken}`
   return [
-    'set -euo pipefail',
     `URL=${shellQuote(installUrl)}`,
     `TOKEN_HEADER=${shellQuote(tokenHeader)}`,
-    'TMP_FILE="$(mktemp)"',
-    'cleanup() { rm -f "$TMP_FILE"; }',
-    'trap cleanup EXIT',
     'if command -v curl >/dev/null 2>&1; then',
-    '  curl -fsSL -H "$TOKEN_HEADER" "$URL" -o "$TMP_FILE"',
+    '  curl -fsSL -H "$TOKEN_HEADER" "$URL"',
     'elif command -v wget >/dev/null 2>&1; then',
-    '  wget -qO "$TMP_FILE" --header="$TOKEN_HEADER" "$URL"',
+    '  wget -qO- --header="$TOKEN_HEADER" "$URL"',
     'elif command -v busybox >/dev/null 2>&1; then',
-    '  busybox wget -qO "$TMP_FILE" --header="$TOKEN_HEADER" "$URL"',
+    '  busybox wget -qO- --header="$TOKEN_HEADER" "$URL"',
     'else',
     "  echo 'A downloader is required: curl, wget, or busybox wget.' >&2",
     '  exit 1',
-    'fi',
-    'bash "$TMP_FILE"',
-  ].join('\n')
+    'fi | bash',
+  ].join(' ')
 }
 
 export function buildUninstallCommand(): string {

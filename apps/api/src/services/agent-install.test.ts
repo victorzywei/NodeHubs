@@ -71,11 +71,10 @@ describe('agent install scripts', () => {
       agentToken: 'token_123',
     })
 
-    expect(command).toContain('set -euo pipefail')
     expect(command).toContain("URL='https://control.example.com/api/nodes/agent/install?nodeId=node_1'")
-    expect(command).toContain('TMP_FILE="$(mktemp)"')
+    expect(command).toContain('TOKEN_HEADER=')
     expect(command).not.toContain('then;')
-    expect(command).not.toContain('| bash')
+    expect(command).toContain('fi | bash')
   })
 
   it('builds a generic installer without package manager dependencies', () => {
