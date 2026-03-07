@@ -1,0 +1,5 @@
+ALTER TABLE templates ADD COLUMN warp_exit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE templates ADD COLUMN warp_route_mode TEXT NOT NULL DEFAULT 'all';
+
+ALTER TABLE nodes ADD COLUMN warp_private_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE nodes ADD COLUMN warp_reserved_json TEXT NOT NULL DEFAULT '[]';

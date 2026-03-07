@@ -58,6 +58,8 @@ type NodeRow = {
   warp_status?: string
   warp_ipv6?: string
   warp_endpoint?: string
+  warp_private_key?: string
+  warp_reserved_json?: string
   argo_status?: string
   argo_domain?: string
   storage_total_bytes?: number
@@ -75,6 +77,8 @@ type TemplateRow = {
   protocol: string
   transport: string
   tls_mode: string
+  warp_exit: number
+  warp_route_mode: string
   defaults_json: string
   notes: string
   created_at: string
@@ -157,6 +161,8 @@ function toNodeRecord(row: NodeRow): NodeRecord {
     warpStatus: row.warp_status || '',
     warpIpv6: row.warp_ipv6 || '',
     warpEndpoint: row.warp_endpoint || '',
+    warpPrivateKey: row.warp_private_key || '',
+    warpReserved: parseJsonObject<number[]>(row.warp_reserved_json || '[]', []),
     argoStatus: row.argo_status || '',
     argoDomain: row.argo_domain || '',
     storageTotalBytes: Number(row.storage_total_bytes || 0),
@@ -178,6 +184,8 @@ function toTemplateRecord(row: TemplateRow): TemplateRecord {
     protocol: row.protocol,
     transport: row.transport,
     tlsMode: row.tls_mode as TemplateRecord['tlsMode'],
+    warpExit: toBool(row.warp_exit),
+    warpRouteMode: row.warp_route_mode === 'ipv4' || row.warp_route_mode === 'ipv6' ? row.warp_route_mode : 'all',
     defaults: parseJsonObject<Record<string, unknown>>(row.defaults_json, {}),
     notes: row.notes,
     createdAt: row.created_at,
@@ -314,9 +322,9 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       github_mirror_url, warp_license_key, cf_dns_token, argo_tunnel_token, argo_tunnel_domain, argo_tunnel_port,
       install_warp, install_argo, config_revision, bootstrap_revision, desired_release_revision,
       current_release_revision, current_release_status, bytes_in_total, bytes_out_total,
-      current_connections, warp_status, warp_ipv6, warp_endpoint, argo_status, argo_domain,
+      current_connections, warp_status, warp_ipv6, warp_endpoint, warp_private_key, warp_reserved_json, argo_status, argo_domain,
       storage_total_bytes, storage_used_bytes, storage_usage_percent, protocol_runtime_version, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       createToken(),
@@ -348,6 +356,8 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       '',
       '',
       '',
+      '[]',
+      '',
       '',
       0,
       0,
@@ -376,6 +386,7 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
          github_mirror_url = ?, warp_license_key = ?, cf_dns_token = ?, argo_tunnel_token = ?, argo_tunnel_domain = ?, argo_tunnel_port = ?,
          install_warp = ?, install_argo = ?, bytes_in_total = ?, bytes_out_total = ?, current_connections = ?,
          cpu_usage_percent = ?, memory_usage_percent = ?, warp_status = ?, warp_ipv6 = ?, warp_endpoint = ?,
+         warp_private_key = ?, warp_reserved_json = ?,
          argo_status = ?, argo_domain = ?, storage_total_bytes = ?, storage_used_bytes = ?, storage_usage_percent = ?,
          protocol_runtime_version = ?, last_seen_at = ?,
          config_revision = ?, bootstrap_revision = ?, updated_at = ?
@@ -405,6 +416,8 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       input.warpStatus ?? current.warp_status ?? '',
       input.warpIpv6 ?? current.warp_ipv6 ?? '',
       input.warpEndpoint ?? current.warp_endpoint ?? '',
+      input.warpPrivateKey ?? current.warp_private_key ?? '',
+      JSON.stringify(input.warpReserved ?? parseJsonObject<number[]>(current.warp_reserved_json || '[]', [])),
       input.argoStatus ?? current.argo_status ?? '',
       input.argoDomain ?? current.argo_domain ?? '',
       input.storageTotalBytes ?? current.storage_total_bytes ?? 0,
@@ -433,8 +446,9 @@ export async function createTemplate(services: AppServices, input: CreateTemplat
   const id = createId('tpl')
   const now = nowIso()
   await services.db.run(
-    `INSERT INTO templates (id, name, engine, protocol, transport, tls_mode, defaults_json, notes, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO templates (
+      id, name, engine, protocol, transport, tls_mode, warp_exit, warp_route_mode, defaults_json, notes, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       nextTemplate.name,
@@ -442,6 +456,8 @@ export async function createTemplate(services: AppServices, input: CreateTemplat
       nextTemplate.protocol,
       nextTemplate.transport,
       nextTemplate.tlsMode,
+      nextTemplate.warpExit ? 1 : 0,
+      nextTemplate.warpRouteMode,
       JSON.stringify(nextTemplate.defaults),
       nextTemplate.notes,
       now,
@@ -462,13 +478,15 @@ export async function updateTemplate(services: AppServices, templateId: string, 
     protocol: input.protocol ?? current.protocol,
     transport: input.transport ?? current.transport,
     tlsMode: input.tlsMode ?? (current.tls_mode as CreateTemplateInput['tlsMode']),
+    warpExit: input.warpExit ?? toBool(current.warp_exit),
+    warpRouteMode: input.warpRouteMode ?? (current.warp_route_mode as CreateTemplateInput['warpRouteMode']),
     defaults: input.defaults ?? parseJsonObject<Record<string, unknown>>(current.defaults_json, {}),
     notes: input.notes ?? current.notes,
   })
 
   await services.db.run(
     `UPDATE templates
-     SET name = ?, engine = ?, protocol = ?, transport = ?, tls_mode = ?, defaults_json = ?, notes = ?, updated_at = ?
+     SET name = ?, engine = ?, protocol = ?, transport = ?, tls_mode = ?, warp_exit = ?, warp_route_mode = ?, defaults_json = ?, notes = ?, updated_at = ?
      WHERE id = ?`,
     [
       nextTemplate.name,
@@ -476,6 +494,8 @@ export async function updateTemplate(services: AppServices, templateId: string, 
       nextTemplate.protocol,
       nextTemplate.transport,
       nextTemplate.tlsMode,
+      nextTemplate.warpExit ? 1 : 0,
+      nextTemplate.warpRouteMode,
       JSON.stringify(nextTemplate.defaults),
       nextTemplate.notes,
       nowIso(),
@@ -692,6 +712,8 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
   const nextWarpStatus = input.warpStatus === undefined ? null : input.warpStatus
   const nextWarpIpv6 = input.warpIpv6 === undefined ? null : input.warpIpv6
   const nextWarpEndpoint = input.warpEndpoint === undefined ? null : input.warpEndpoint
+  const nextWarpPrivateKey = input.warpPrivateKey === undefined ? null : input.warpPrivateKey
+  const nextWarpReservedJson = input.warpReserved === undefined ? null : JSON.stringify(input.warpReserved)
   const nextArgoStatus = input.argoStatus === undefined ? null : input.argoStatus
   const nextArgoDomain = input.argoDomain === undefined ? null : input.argoDomain
   const nextStorageTotalBytes = input.storageTotalBytes === undefined ? null : input.storageTotalBytes
@@ -701,6 +723,7 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
     `UPDATE nodes
      SET bytes_in_total = ?, bytes_out_total = ?, current_connections = ?, cpu_usage_percent = ?, memory_usage_percent = ?,
          warp_status = coalesce(?, warp_status), warp_ipv6 = coalesce(?, warp_ipv6), warp_endpoint = coalesce(?, warp_endpoint),
+         warp_private_key = coalesce(?, warp_private_key), warp_reserved_json = coalesce(?, warp_reserved_json),
          argo_status = coalesce(?, argo_status), argo_domain = coalesce(?, argo_domain),
          storage_total_bytes = coalesce(?, storage_total_bytes), storage_used_bytes = coalesce(?, storage_used_bytes),
          storage_usage_percent = coalesce(?, storage_usage_percent),
@@ -715,6 +738,8 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
       nextWarpStatus,
       nextWarpIpv6,
       nextWarpEndpoint,
+      nextWarpPrivateKey,
+      nextWarpReservedJson,
       nextArgoStatus,
       nextArgoDomain,
       nextStorageTotalBytes,

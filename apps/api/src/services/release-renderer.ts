@@ -31,6 +31,8 @@ type NormalizedTemplate = {
   protocol: string
   transport: string
   tlsMode: TemplateRecord['tlsMode']
+  warpExit: boolean
+  warpRouteMode: TemplateRecord['warpRouteMode']
   server: string
   port: number
   listenPort: number
@@ -52,6 +54,11 @@ type NormalizedTemplate = {
 
 const SUPPORTED_PROTOCOLS = new Set(['vless', 'trojan', 'shadowsocks', 'vmess', 'hysteria2'])
 const SUPPORTED_TRANSPORTS = new Set(['ws', 'grpc', 'tcp', 'h2', 'hysteria2', 'xhttp'])
+const DEFAULT_WARP_SERVER = 'engage.cloudflareclient.com'
+const DEFAULT_WARP_SERVER_PORT = 2408
+const DEFAULT_WARP_PEER_PUBLIC_KEY = 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo='
+const DEFAULT_WARP_LOCAL_ADDRESS_IPV4 = '172.16.0.2/32'
+const DEFAULT_WARP_LOCAL_ADDRESS_IPV6 = '2606:4700:110:8d8d:1845:c39f:2dd5:a03a/128'
 
 const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
@@ -61,6 +68,8 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     protocol: 'hysteria2',
     transport: 'hysteria2',
     tlsMode: 'tls',
+    warpExit: false,
+    warpRouteMode: 'all',
     defaults: {
       serverPort: 443,
       password: 'replace-me',
@@ -77,6 +86,8 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     protocol: 'shadowsocks',
     transport: 'tcp',
     tlsMode: 'none',
+    warpExit: false,
+    warpRouteMode: 'all',
     defaults: {
       serverPort: 8388,
       method: '2022-blake3-aes-128-gcm',
@@ -91,6 +102,8 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     protocol: 'vless',
     transport: 'ws',
     tlsMode: 'tls',
+    warpExit: false,
+    warpRouteMode: 'all',
     defaults: {
       serverPort: 443,
       path: '/ws',
@@ -107,6 +120,8 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     protocol: 'vless',
     transport: 'tcp',
     tlsMode: 'reality',
+    warpExit: false,
+    warpRouteMode: 'all',
     defaults: {
       serverPort: 443,
       uuid: '00000000-0000-4000-8000-000000000002',
@@ -125,6 +140,8 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     protocol: 'trojan',
     transport: 'tcp',
     tlsMode: 'tls',
+    warpExit: false,
+    warpRouteMode: 'all',
     defaults: {
       serverPort: 443,
       password: 'replace-me',
@@ -139,6 +156,8 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     protocol: 'trojan',
     transport: 'grpc',
     tlsMode: 'tls',
+    warpExit: false,
+    warpRouteMode: 'all',
     defaults: {
       serverPort: 443,
       serviceName: 'grpc',
@@ -154,6 +173,8 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     protocol: 'vmess',
     transport: 'ws',
     tlsMode: 'tls',
+    warpExit: false,
+    warpRouteMode: 'all',
     defaults: {
       serverPort: 443,
       path: '/ws',
@@ -188,6 +209,210 @@ function readNumber(source: Record<string, unknown>, keys: string[], fallback: n
 function normalizePath(value: string): string {
   if (!value) return '/'
   return value.startsWith('/') ? value : `/${value}`
+}
+
+type ResolvedWarpRoute = {
+  ipCidrs: string[]
+  server: string
+  serverPort: number
+  localAddress: string[]
+  privateKey: string
+  peerPublicKey: string
+  systemInterface: boolean
+  mtu: number
+  reserved: number[]
+}
+
+function readStringByKeys(source: Record<string, unknown>, keys: string[], fallback = ''): string {
+  for (const key of keys) {
+    const value = source[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  }
+  return fallback
+}
+
+function readNumberByKeys(source: Record<string, unknown>, keys: string[], fallback: number): number {
+  for (const key of keys) {
+    const value = source[key]
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value)
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value)
+      if (Number.isFinite(parsed)) return Math.trunc(parsed)
+    }
+  }
+  return fallback
+}
+
+function readBoolean(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
+    if (['0', 'false', 'no', 'off'].includes(normalized)) return false
+  }
+  return fallback
+}
+
+function readBooleanByKeys(source: Record<string, unknown>, keys: string[], fallback = false): boolean {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      return readBoolean(source[key], fallback)
+    }
+  }
+  return fallback
+}
+
+function toPortNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  const port = Math.trunc(parsed)
+  if (port < 1 || port > 65535) return fallback
+  return port
+}
+
+function normalizeV6Cidr(value: string, fallback: string): string {
+  const raw = value.trim()
+  if (!raw) return fallback
+  return raw.includes('/') ? raw : `${raw}/128`
+}
+
+function parseHostPort(value: string, fallbackHost: string, fallbackPort: number): { host: string; port: number } {
+  const raw = value.trim()
+  if (!raw) return { host: fallbackHost, port: fallbackPort }
+
+  const bracketMatch = raw.match(/^\[(.+)\]:(\d+)$/)
+  if (bracketMatch) {
+    return {
+      host: bracketMatch[1] || fallbackHost,
+      port: toPortNumber(bracketMatch[2], fallbackPort),
+    }
+  }
+
+  const separator = raw.lastIndexOf(':')
+  if (separator <= 0 || separator >= raw.length - 1) {
+    return { host: raw, port: fallbackPort }
+  }
+
+  const host = raw.slice(0, separator)
+  const portText = raw.slice(separator + 1)
+  if (!host || !/^\d+$/.test(portText)) {
+    return { host: raw, port: fallbackPort }
+  }
+
+  return { host, port: toPortNumber(portText, fallbackPort) }
+}
+
+function normalizeReserved(value: unknown, fallback: number[]): number[] {
+  const normalizeArray = (input: unknown[]): number[] | null => {
+    if (input.length !== 3) return null
+    const output = input.map((item) => Number(item))
+    if (!output.every((item) => Number.isFinite(item))) return null
+    return output.map((item) => Math.max(0, Math.min(255, Math.trunc(item))))
+  }
+
+  if (Array.isArray(value)) {
+    const normalized = normalizeArray(value)
+    if (normalized) return normalized
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const normalized = normalizeArray(value.split(',').map((item) => item.trim()))
+    if (normalized) return normalized
+  }
+
+  return fallback
+}
+
+function resolveWarpRouteCidrs(mode: TemplateRecord['warpRouteMode']): string[] {
+  if (mode === 'ipv4') return ['0.0.0.0/0']
+  if (mode === 'ipv6') return ['::/0']
+  return ['0.0.0.0/0', '::/0']
+}
+
+function isIpv4Address(value: string): boolean {
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(value)) return false
+  return value.split('.').every((part) => {
+    const parsed = Number(part)
+    return Number.isInteger(parsed) && parsed >= 0 && parsed <= 255
+  })
+}
+
+function isIpv6Address(value: string): boolean {
+  return value.includes(':') && /^[0-9a-fA-F:]+$/.test(value)
+}
+
+function buildSingBoxWarpEndpointBypassRule(server: string): Record<string, unknown> | null {
+  if (!server) return null
+  if (isIpv4Address(server)) return { ip_cidr: [`${server}/32`], outbound: 'direct' }
+  if (isIpv6Address(server)) return { ip_cidr: [`${server}/128`], outbound: 'direct' }
+  return { domain: [server], outbound: 'direct' }
+}
+
+function buildXrayWarpEndpointBypassRule(server: string): Record<string, unknown> | null {
+  if (!server) return null
+  if (isIpv4Address(server)) return { type: 'field', ip: [`${server}/32`], outboundTag: 'direct' }
+  if (isIpv6Address(server)) return { type: 'field', ip: [`${server}/128`], outboundTag: 'direct' }
+  return { type: 'field', domain: [`full:${server}`], outboundTag: 'direct' }
+}
+
+function resolveInboundTagsByWarp(templates: NormalizedTemplate[]): { warpTags: string[]; directTags: string[] } {
+  return templates.reduce<{ warpTags: string[]; directTags: string[] }>(
+    (result, template, index) => {
+      const tag = `in-${index + 1}`
+      if (template.warpExit) result.warpTags.push(tag)
+      else result.directTags.push(tag)
+      return result
+    },
+    {
+      warpTags: [],
+      directTags: [],
+    },
+  )
+}
+
+function resolveWarpRoute(node: NodeRecord, templates: NormalizedTemplate[]): ResolvedWarpRoute | null {
+  const primaryTemplate = templates.find((template) => template.warpExit)
+  if (!primaryTemplate) return null
+  const defaults = primaryTemplate.defaults || {}
+
+  const endpointFallback = parseHostPort(node.warpEndpoint || '', DEFAULT_WARP_SERVER, DEFAULT_WARP_SERVER_PORT)
+  const fallbackReserved = normalizeReserved(node.warpReserved, [0, 0, 0])
+  const nodeV6 = normalizeV6Cidr(node.warpIpv6 || '', DEFAULT_WARP_LOCAL_ADDRESS_IPV6)
+
+  const privateKey = readStringByKeys(defaults, ['warp_private_key', 'private_key'], node.warpPrivateKey || '')
+  if (!privateKey) {
+    throw new Error(`Template ${primaryTemplate.name} enabled WARP exit but no WARP private key is available`)
+  }
+
+  const server = readStringByKeys(defaults, ['warp_server', 'server'], endpointFallback.host || DEFAULT_WARP_SERVER)
+  const serverPort = toPortNumber(
+    readNumberByKeys(defaults, ['warp_server_port', 'server_port'], endpointFallback.port || DEFAULT_WARP_SERVER_PORT),
+    endpointFallback.port || DEFAULT_WARP_SERVER_PORT,
+  )
+  const peerPublicKey = readStringByKeys(defaults, ['warp_peer_public_key', 'peer_public_key'], DEFAULT_WARP_PEER_PUBLIC_KEY)
+  const systemInterface = readBooleanByKeys(defaults, ['warp_system_interface', 'system_interface'], false)
+  const mtu = Math.max(576, Math.min(65535, Math.trunc(readNumberByKeys(defaults, ['warp_mtu', 'mtu'], 1280))))
+  const reserved = normalizeReserved(defaults.warp_reserved, fallbackReserved)
+
+  const localAddressV4 = readStringByKeys(defaults, ['warp_local_address_ipv4', 'local_address_ipv4'], DEFAULT_WARP_LOCAL_ADDRESS_IPV4)
+  const localAddressV6 = normalizeV6Cidr(
+    readStringByKeys(defaults, ['warp_local_address_ipv6', 'local_address_ipv6'], nodeV6),
+    DEFAULT_WARP_LOCAL_ADDRESS_IPV6,
+  )
+
+  return {
+    ipCidrs: resolveWarpRouteCidrs(primaryTemplate.warpRouteMode),
+    server,
+    serverPort,
+    localAddress: [localAddressV4, localAddressV6].filter(Boolean),
+    privateKey,
+    peerPublicKey,
+    systemInterface,
+    mtu,
+    reserved,
+  }
 }
 
 function ensureProtocolSupport(template: TemplateRecord): void {
@@ -271,6 +496,9 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
   const protocol = template.protocol.toLowerCase()
   const transport = template.transport.toLowerCase()
   const tlsMode = template.tlsMode
+  const warpExit = template.warpExit === true || readBoolean(defaults.warp_exit, false)
+  const warpRouteModeRaw = readString(defaults, 'warp_route_mode', template.warpRouteMode || 'all')
+  const warpRouteMode: TemplateRecord['warpRouteMode'] = warpRouteModeRaw === 'ipv4' || warpRouteModeRaw === 'ipv6' ? warpRouteModeRaw : 'all'
   const listenPort = readNumber(defaults, ['serverPort', 'port'], defaultPort(template))
   const host = readString(defaults, 'host', node.primaryDomain || node.argoTunnelDomain || server)
   const sni = readString(defaults, 'sni', node.primaryDomain || node.argoTunnelDomain || host || server)
@@ -281,6 +509,8 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
     protocol,
     transport,
     tlsMode,
+    warpExit,
+    warpRouteMode,
     server,
     port: node.networkType === 'noPublicIp' ? 443 : listenPort,
     listenPort,
@@ -575,6 +805,8 @@ function buildSubscriptionEntry(node: NodeRecord, template: NormalizedTemplate):
     protocol: template.protocol,
     transport: template.transport,
     tlsMode: template.tlsMode,
+    warpExit: template.warpExit,
+    warpRouteMode: template.warpRouteMode,
     label: `${node.name} ${template.name}`,
     server: template.server,
     port: template.port,
@@ -582,20 +814,147 @@ function buildSubscriptionEntry(node: NodeRecord, template: NormalizedTemplate):
   }
 }
 
-function buildRuntimeConfig(engine: TemplateRecord['engine'], templates: NormalizedTemplate[]): Record<string, unknown> {
+function buildRuntimeConfig(
+  engine: TemplateRecord['engine'],
+  templates: NormalizedTemplate[],
+  node: NodeRecord,
+): Record<string, unknown> {
   if (engine === 'xray') {
+    const outbounds: Array<Record<string, unknown>> = [
+      {
+        protocol: 'freedom',
+        tag: 'direct',
+      },
+    ]
+    const routing: Record<string, unknown> = {
+      domainStrategy: 'AsIs',
+      rules: [],
+    }
+
+    const warp = resolveWarpRoute(node, templates)
+    if (warp) {
+      const inboundTags = resolveInboundTagsByWarp(templates)
+      const rules = routing.rules as Array<Record<string, unknown>>
+      const endpointBypassRule = buildXrayWarpEndpointBypassRule(warp.server)
+      if (endpointBypassRule) rules.push(endpointBypassRule)
+
+      outbounds.push({
+        tag: 'x-warp-out',
+        protocol: 'wireguard',
+        settings: {
+          secretKey: warp.privateKey,
+          address: warp.localAddress,
+          peers: [
+            {
+              publicKey: warp.peerPublicKey,
+              allowedIPs: ['0.0.0.0/0', '::/0'],
+              endpoint: `${warp.server}:${warp.serverPort}`,
+            },
+          ],
+          reserved: warp.reserved,
+          mtu: warp.mtu,
+          kernelMode: warp.systemInterface,
+        },
+      })
+      outbounds.push({
+        tag: 'warp-out',
+        protocol: 'freedom',
+        settings: {
+          domainStrategy: 'ForceIPv6v4',
+        },
+        proxySettings: {
+          tag: 'x-warp-out',
+        },
+      })
+      routing.domainStrategy = 'IPOnDemand'
+      if (inboundTags.warpTags.length > 0) {
+        rules.push({
+          type: 'field',
+          inboundTag: inboundTags.warpTags,
+          ip: warp.ipCidrs,
+          network: 'tcp,udp',
+          outboundTag: 'warp-out',
+        })
+      } else {
+        rules.push({
+          type: 'field',
+          ip: warp.ipCidrs,
+          network: 'tcp,udp',
+          outboundTag: 'warp-out',
+        })
+      }
+      if (inboundTags.directTags.length > 0) {
+        rules.push({
+          type: 'field',
+          inboundTag: inboundTags.directTags,
+          outboundTag: 'direct',
+        })
+      }
+    }
+
     return {
       log: {
         loglevel: 'warning',
       },
       inbounds: templates.map(buildXrayInbound),
-      outbounds: [
+      outbounds,
+      routing,
+    }
+  }
+
+  const outbounds: Array<Record<string, unknown>> = [
+    {
+      type: 'direct',
+      tag: 'direct',
+    },
+  ]
+  const route: Record<string, unknown> = {
+    final: 'direct',
+  }
+  const warp = resolveWarpRoute(node, templates)
+  if (warp) {
+    const inboundTags = resolveInboundTagsByWarp(templates)
+    const rules: Array<Record<string, unknown>> = []
+    const endpointBypassRule = buildSingBoxWarpEndpointBypassRule(warp.server)
+    if (endpointBypassRule) rules.push(endpointBypassRule)
+
+    outbounds.push({
+      type: 'wireguard',
+      tag: 'warp-out',
+      system: warp.systemInterface,
+      mtu: warp.mtu,
+      address: warp.localAddress,
+      private_key: warp.privateKey,
+      peers: [
         {
-          protocol: 'freedom',
-          tag: 'direct',
+          address: warp.server,
+          port: warp.serverPort,
+          public_key: warp.peerPublicKey,
+          allowed_ips: ['0.0.0.0/0', '::/0'],
+          persistent_keepalive_interval: 30,
+          reserved: warp.reserved,
         },
       ],
+    })
+    if (inboundTags.warpTags.length > 0) {
+      rules.push({
+        inbound: inboundTags.warpTags,
+        ip_cidr: warp.ipCidrs,
+        outbound: 'warp-out',
+      })
+    } else {
+      rules.push({
+        ip_cidr: warp.ipCidrs,
+        outbound: 'warp-out',
+      })
     }
+    if (inboundTags.directTags.length > 0) {
+      rules.push({
+        inbound: inboundTags.directTags,
+        outbound: 'direct',
+      })
+    }
+    route.rules = rules
   }
 
   return {
@@ -604,12 +963,8 @@ function buildRuntimeConfig(engine: TemplateRecord['engine'], templates: Normali
       timestamp: true,
     },
     inbounds: templates.map(buildSingBoxInbound),
-    outbounds: [
-      {
-        type: 'direct',
-        tag: 'direct',
-      },
-    ],
+    outbounds,
+    route,
   }
 }
 
@@ -663,7 +1018,7 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
   const runtimes = (Object.keys(groupedTemplates) as Array<TemplateRecord['engine']>)
     .filter((engine) => groupedTemplates[engine].length > 0)
     .map((engine) => {
-      const runtimeConfig = buildRuntimeConfig(engine, groupedTemplates[engine])
+      const runtimeConfig = buildRuntimeConfig(engine, groupedTemplates[engine], context.node)
       const entryConfigPath = `runtime/${engine}.json`
       return {
         engine,
@@ -716,6 +1071,8 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
       protocol: template.protocol,
       transport: template.transport,
       tlsMode: template.tlsMode,
+      warpExit: template.warpExit,
+      warpRouteMode: template.warpRouteMode,
       defaults: { ...template.defaults },
     })),
     runtimes,

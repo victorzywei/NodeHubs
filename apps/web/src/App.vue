@@ -186,11 +186,21 @@ async function deleteNodeById(nodeId: string, nodeName: string) {
 
 // ---- Template Actions ----
 const catalogPresets = ref<any[]>([])
+const warpSourceNodeId = ref('')
 const newTemplate = ref({
   name:'', engine:'xray' as 'sing-box'|'xray',
   protocol:'vless', transport:'ws', tlsMode:'none' as 'none'|'tls'|'reality',
+  warpExit:false, warpRouteMode:'all' as 'all'|'ipv4'|'ipv6',
   defaults:{} as Record<string,unknown>, notes:''
 })
+
+const warpSourceNodes = computed(() =>
+  nodes.value.filter((node) =>
+    Boolean((node.warpPrivateKey || '').trim())
+    || Boolean((node.warpEndpoint || '').trim())
+    || Boolean((node.warpIpv6 || '').trim()),
+  ),
+)
 
 // Protocol options based on engine
 const protocolOptions = computed(() => {
@@ -304,6 +314,7 @@ watch(() => newTemplate.value.protocol, (p) => {
 
 async function openCreateTemplate() {
   showCreateTemplate.value = true
+  warpSourceNodeId.value = selectedNode.value?.id || warpSourceNodes.value[0]?.id || ''
   try { catalogPresets.value = await api.listTemplateCatalog(adminKey.value) } catch {}
 }
 
@@ -311,6 +322,8 @@ function applyPreset(p: any) {
   newTemplate.value = {
     name: p.name, engine: p.engine, protocol: p.protocol,
     transport: p.transport, tlsMode: p.tlsMode,
+    warpExit: p.warpExit === true,
+    warpRouteMode: p.warpRouteMode === 'ipv4' || p.warpRouteMode === 'ipv6' ? p.warpRouteMode : 'all',
     defaults: p.defaults ? { ...p.defaults } : {}, notes: p.notes || ''
   }
 }
@@ -319,7 +332,7 @@ async function createTemplate() {
   try {
     await api.createTemplate(adminKey.value, newTemplate.value)
     showCreateTemplate.value = false
-    newTemplate.value = { name:'', engine:'xray', protocol:'vless', transport:'ws', tlsMode:'none', defaults:{}, notes:'' }
+    newTemplate.value = { name:'', engine:'xray', protocol:'vless', transport:'ws', tlsMode:'none', warpExit:false, warpRouteMode:'all', defaults:{}, notes:'' }
     toast('success', '妯℃澘鍒涘缓鎴愬姛'); await loadAll(); await refreshStatus()
   } catch (e:any) { toast('error', e.message) }
 }
@@ -444,6 +457,80 @@ async function loadPublishPreview() {
       publishPreviewLoading.value = false
     }
   }
+}
+
+function ensureIpv6Cidr(value: string) {
+  const raw = value.trim()
+  if (!raw) return ''
+  return raw.includes('/') ? raw : `${raw}/128`
+}
+
+function parseWarpEndpoint(value: string): { host: string; port: number } | null {
+  const raw = value.trim()
+  if (!raw) return null
+  const bracketMatch = raw.match(/^\[(.+)\]:(\d+)$/)
+  if (bracketMatch) {
+    return {
+      host: bracketMatch[1],
+      port: Number(bracketMatch[2]) || 2408,
+    }
+  }
+  const separator = raw.lastIndexOf(':')
+  if (separator > 0 && separator < raw.length - 1 && /^\d+$/.test(raw.slice(separator + 1)) && !raw.slice(0, separator).includes(':')) {
+    return {
+      host: raw.slice(0, separator),
+      port: Number(raw.slice(separator + 1)) || 2408,
+    }
+  }
+  return {
+    host: raw,
+    port: 2408,
+  }
+}
+
+function fillWarpDefaultsFromNode() {
+  const sourceNode =
+    nodes.value.find((node) => node.id === warpSourceNodeId.value)
+    || selectedNode.value
+    || warpSourceNodes.value[0]
+    || null
+  if (!sourceNode) {
+    toast('error', 'No node with WARP report data available')
+    return
+  }
+
+  const nextDefaults = { ...newTemplate.value.defaults }
+  let patched = 0
+  const privateKey = (sourceNode.warpPrivateKey || '').trim()
+  if (privateKey) {
+    nextDefaults['warp_private_key'] = privateKey
+    patched += 1
+  }
+  const ipv6 = (sourceNode.warpIpv6 || '').trim()
+  if (ipv6) {
+    nextDefaults['warp_local_address_ipv6'] = ensureIpv6Cidr(ipv6)
+    patched += 1
+  }
+  if (Array.isArray(sourceNode.warpReserved) && sourceNode.warpReserved.length === 3) {
+    nextDefaults['warp_reserved'] = sourceNode.warpReserved.map((value) => Number(value))
+    patched += 1
+  }
+  const endpoint = parseWarpEndpoint(sourceNode.warpEndpoint || '')
+  if (endpoint) {
+    nextDefaults['warp_server'] = endpoint.host
+    nextDefaults['warp_server_port'] = endpoint.port
+    patched += 1
+  }
+  if (!nextDefaults['warp_peer_public_key']) {
+    nextDefaults['warp_peer_public_key'] = 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo='
+  }
+  if (patched === 0) {
+    toast('error', `Node ${sourceNode.name} has no usable WARP runtime data`)
+    return
+  }
+  newTemplate.value.defaults = nextDefaults
+  newTemplate.value.warpExit = true
+  toast('success', `Imported WARP params from ${sourceNode.name}`)
 }
 
 async function publishSelectedRelease() {
@@ -760,7 +847,7 @@ onMounted(() => { if (adminKey.value) login() })
           </div>
           <div class="table-wrapper">
             <table class="data-table">
-              <thead><tr><th>鍚嶇О</th><th>寮曟搸</th><th>鍗忚</th><th>浼犺緭</th><th>TLS</th><th>鏇存柊鏃堕棿</th></tr></thead>
+              <thead><tr><th>鍚嶇О</th><th>寮曟搸</th><th>鍗忚</th><th>浼犺緭</th><th>TLS</th><th>WARP</th><th>鏇存柊鏃堕棿</th></tr></thead>
               <tbody>
                 <tr v-for="t in templates" :key="t.id">
                   <td style="font-weight:600;color:var(--color-text-primary)">{{ t.name }}</td>
@@ -768,9 +855,10 @@ onMounted(() => { if (adminKey.value) login() })
                   <td>{{ t.protocol }}</td>
                   <td>{{ t.transport }}</td>
                   <td><span class="status-badge" :class="t.tlsMode==='reality'?'applying':t.tlsMode==='tls'?'healthy':'offline'">{{ t.tlsMode }}</span></td>
+                  <td><span class="tag" :class="{accent:t.warpExit}">{{ t.warpExit ? `on/${t.warpRouteMode}` : 'off' }}</span></td>
                   <td class="text-muted">{{ timeAgo(t.updatedAt) }}</td>
                 </tr>
-                <tr v-if="templates.length===0"><td colspan="6"><div class="empty-state"><div class="empty-state-icon">馃搵</div><div class="empty-state-title">鏆傛棤妯℃澘</div><div class="empty-state-text">鍒涘缓鍗忚妯℃澘鏉ラ厤缃偍鐨勮妭鐐</div><button class="btn btn-primary" @click="openCreateTemplate">+ 娣诲姞妯℃澘</button></div></td></tr>
+                <tr v-if="templates.length===0"><td colspan="7"><div class="empty-state"><div class="empty-state-icon">馃搵</div><div class="empty-state-title">鏆傛棤妯℃澘</div><div class="empty-state-text">鍒涘缓鍗忚妯℃澘鏉ラ厤缃偍鐨勮妭鐐</div><button class="btn btn-primary" @click="openCreateTemplate">+ 娣诲姞妯℃澘</button></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -1111,6 +1199,34 @@ onMounted(() => { if (adminKey.value) login() })
               <select class="form-select" v-model="newTemplate.tlsMode">
                 <option v-for="o in tlsOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
               </select>
+            </div>
+          </div>
+          <div class="form-section-divider">WARP 鍑哄彛</div>
+          <div class="form-checkbox-group mb-md">
+            <input type="checkbox" class="form-checkbox" v-model="newTemplate.warpExit" id="template-warp-exit">
+            <label for="template-warp-exit" class="form-label" style="margin:0">鍚敤模板 WARP 鍑哄彛</label>
+          </div>
+          <div v-if="newTemplate.warpExit" class="form-row">
+            <div class="form-group">
+              <label class="form-label">WARP 璺敱妯″紡</label>
+              <select class="form-select" v-model="newTemplate.warpRouteMode">
+                <option value="all">All (IPv4 + IPv6)</option>
+                <option value="ipv4">IPv4 only</option>
+                <option value="ipv6">IPv6 only</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">鍙傛暟鏉ユ簮鑺傜偣</label>
+              <select class="form-select" v-model="warpSourceNodeId">
+                <option value="">Auto select</option>
+                <option v-for="n in warpSourceNodes" :key="n.id" :value="n.id">{{ n.name }}</option>
+              </select>
+            </div>
+          </div>
+          <div v-if="newTemplate.warpExit" class="form-group">
+            <button type="button" class="btn btn-secondary btn-sm" @click="fillWarpDefaultsFromNode">鑾峰彇涓婃姤 WARP 鍙傛暟</button>
+            <div class="text-muted" style="margin-top:8px;font-size:12px">
+              鎸夎妭鐐逛笂鎶ユ暟鎹～鍏?private key / endpoint / IPv6 / reserved 鍒?defaults銆
             </div>
           </div>
 

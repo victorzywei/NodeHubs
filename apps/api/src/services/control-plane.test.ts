@@ -94,6 +94,8 @@ function createValidTemplateInput(overrides: Partial<CreateTemplateInput> = {}):
     protocol: 'vless',
     transport: 'ws',
     tlsMode: 'tls',
+    warpExit: false,
+    warpRouteMode: 'all',
     defaults: {
       serverPort: 443,
       path: '/ws',

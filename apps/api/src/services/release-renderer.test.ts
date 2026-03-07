@@ -47,6 +47,8 @@ function createTemplate(): TemplateRecord {
     protocol: 'vless',
     transport: 'ws',
     tlsMode: 'tls',
+    warpExit: false,
+    warpRouteMode: 'all',
     defaults: {
       serverPort: 443,
       path: '/ws',
@@ -189,5 +191,41 @@ describe('release renderer', () => {
 
     const engines = artifact.runtimes.map((runtime) => runtime.engine).sort()
     expect(engines).toEqual(['sing-box', 'xray'])
+  })
+
+  it('injects warp outbound routing when warp exit is enabled on a template', () => {
+    const runtimeCatalog = buildRuntimeCatalog()
+    const artifact = renderReleaseArtifact({
+      releaseId: 'rel_warp',
+      revision: 6,
+      kind: 'runtime',
+      configRevision: 6,
+      bootstrapRevision: 1,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: 'warp enabled',
+      summary: 'runtime update',
+      node: {
+        ...createNode(),
+        warpPrivateKey: 'private-key-from-report',
+        warpIpv6: '2606:4700:110:8d8d:1845:c39f:2dd5:a03a',
+        warpEndpoint: 'engage.cloudflareclient.com:2408',
+        warpReserved: [1, 2, 3],
+      },
+      templates: [
+        {
+          ...createTemplate(),
+          warpExit: true,
+          warpRouteMode: 'ipv4',
+        },
+      ],
+    }, runtimeCatalog)
+
+    const runtimeConfig = JSON.parse(artifact.runtimes[0]?.files[0]?.content || '{}') as {
+      outbounds?: Array<Record<string, unknown>>
+      route?: { rules?: Array<Record<string, unknown>> }
+    }
+    const tags = (runtimeConfig.outbounds || []).map((item) => String(item.tag || ''))
+    expect(tags).toContain('warp-out')
+    expect(runtimeConfig.route?.rules?.some((rule) => JSON.stringify(rule).includes('0.0.0.0/0'))).toBe(true)
   })
 })

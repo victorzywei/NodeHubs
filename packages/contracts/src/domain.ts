@@ -5,6 +5,7 @@ export type NetworkType = 'public' | 'noPublicIp'
 export type ReleaseKind = 'runtime' | 'bootstrap'
 
 export type ReleaseStatus = 'pending' | 'applying' | 'healthy' | 'failed'
+export type WarpRouteMode = 'all' | 'ipv4' | 'ipv6'
 
 export type StorageMode = 'cloudflare' | 'docker'
 
@@ -33,6 +34,8 @@ export interface NodeRecord {
   warpStatus?: string
   warpIpv6?: string
   warpEndpoint?: string
+  warpPrivateKey?: string
+  warpReserved?: number[]
   argoStatus?: string
   argoDomain?: string
   storageTotalBytes?: number
@@ -61,6 +64,8 @@ export interface TemplateRecord {
   protocol: string
   transport: string
   tlsMode: 'none' | 'tls' | 'reality'
+  warpExit: boolean
+  warpRouteMode: WarpRouteMode
   defaults: Record<string, unknown>
   notes: string
   updatedAt: string
@@ -151,6 +156,8 @@ export interface SubscriptionEndpoint {
   protocol: string
   transport: string
   tlsMode: TemplateRecord['tlsMode']
+  warpExit: boolean
+  warpRouteMode: WarpRouteMode
   label: string
   server: string
   port: number
@@ -209,7 +216,9 @@ export interface ReleaseArtifact {
     | 'installWarp'
     | 'installArgo'
   >
-  templates: Array<Pick<TemplateRecord, 'id' | 'name' | 'engine' | 'protocol' | 'transport' | 'tlsMode' | 'defaults'>>
+  templates: Array<
+    Pick<TemplateRecord, 'id' | 'name' | 'engine' | 'protocol' | 'transport' | 'tlsMode' | 'warpExit' | 'warpRouteMode' | 'defaults'>
+  >
   runtimes: ReleaseRuntimePlan[]
   bootstrap: BootstrapPlan
   subscriptionEndpoints: SubscriptionEndpoint[]
@@ -230,6 +239,8 @@ export interface TemplatePreset {
   protocol: string
   transport: string
   tlsMode: TemplateRecord['tlsMode']
+  warpExit: boolean
+  warpRouteMode: WarpRouteMode
   defaults: Record<string, unknown>
   notes: string
 }
