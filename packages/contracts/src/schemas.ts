@@ -84,7 +84,7 @@ function validateTemplateCombination(
 
 export const nodeKindSchema = z.enum(['vps', 'edge'])
 
-export const createNodeSchema = z.object({
+const nodeSchemaBase = z.object({
   name: z.string().trim().min(1).max(120),
   nodeType: nodeKindSchema,
   region: z.string().trim().max(120).default(''),
@@ -99,11 +99,19 @@ export const createNodeSchema = z.object({
   argoTunnelToken: z.string().trim().max(500).default(''),
   argoTunnelDomain: z.string().trim().max(255).default(''),
   argoTunnelPort: z.number().int().min(1).max(65535).default(2053),
-  installWarp: z.boolean().default(false),
-  installArgo: z.boolean().default(false),
 })
 
-export const updateNodeSchema = createNodeSchema.partial().extend({
+export const createNodeSchema = nodeSchemaBase.superRefine((input, ctx) => {
+  if (input.networkType === 'public' && !input.primaryDomain.trim()) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['primaryDomain'],
+      message: 'Public-IP nodes require a primary domain for certificate bootstrap',
+    })
+  }
+})
+
+export const updateNodeSchema = nodeSchemaBase.partial().extend({
   bytesInTotal: z.number().nonnegative().optional(),
   bytesOutTotal: z.number().nonnegative().optional(),
   currentConnections: z.number().int().nonnegative().optional(),
@@ -147,10 +155,41 @@ export const createSubscriptionSchema = z.object({
 
 export const subscriptionDocumentFormatSchema = z.enum(['plain', 'base64', 'json', 'v2ray', 'clash', 'singbox'])
 
+export const bootstrapOptionsSchema = z.object({
+  installWarp: z.boolean().default(false),
+  installSingBox: z.boolean().default(false),
+  installXray: z.boolean().default(false),
+})
+
 export const publishNodeSchema = z.object({
   kind: z.enum(['runtime', 'bootstrap']).default('runtime'),
   templateIds: z.array(z.string().trim().min(1)).default([]),
   message: z.string().trim().max(1000).default(''),
+  bootstrapOptions: bootstrapOptionsSchema.default({
+    installWarp: false,
+    installSingBox: false,
+    installXray: false,
+  }),
+}).superRefine((input, ctx) => {
+  if (input.kind === 'runtime' && input.templateIds.length === 0) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['templateIds'],
+      message: 'Runtime releases require at least one template',
+    })
+  }
+  if (
+    input.kind === 'bootstrap'
+    && !input.bootstrapOptions.installWarp
+    && !input.bootstrapOptions.installSingBox
+    && !input.bootstrapOptions.installXray
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['bootstrapOptions'],
+      message: 'Bootstrap releases require at least one selected action',
+    })
+  }
 })
 
 export const heartbeatSchema = z.object({

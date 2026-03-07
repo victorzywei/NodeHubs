@@ -28,6 +28,11 @@ const uninstallCommand = ref('')
 const publishNode = ref<NodeRecord|null>(null)
 const publishKind = ref<'runtime'|'bootstrap'>('runtime')
 const publishTemplateIds = ref<string[]>([])
+const publishBootstrap = ref({
+  installWarp: false,
+  installSingBox: false,
+  installXray: false,
+})
 const publishMessage = ref('')
 const publishingRelease = ref(false)
 const publishPreview = ref<ReleasePreviewRecord|null>(null)
@@ -85,12 +90,11 @@ const newNode = ref({
   networkType:'public' as 'public'|'noPublicIp',
   primaryDomain:'', backupDomain:'', entryIp:'',
   useGithubMirror:false, githubMirrorUrl:'',
-  installWarp:false, warpLicenseKey:'',
-  useCfDnsToken:false, cfDnsToken:'',
-  installArgo:false,
-  useArgoTunnelToken:false, argoTunnelToken:'',
-  useArgoTunnelDomain:false, argoTunnelDomain:'',
-  useArgoTunnelPort:false, argoTunnelPort:2053,
+  warpLicenseKey:'',
+  cfDnsToken:'',
+  argoTunnelToken:'',
+  argoTunnelDomain:'',
+  argoTunnelPort:2053,
 })
 
 function resetNewNode() {
@@ -99,12 +103,11 @@ function resetNewNode() {
     networkType:'public',
     primaryDomain:'', backupDomain:'', entryIp:'',
     useGithubMirror:false, githubMirrorUrl:'',
-    installWarp:false, warpLicenseKey:'',
-    useCfDnsToken:false, cfDnsToken:'',
-    installArgo:false,
-    useArgoTunnelToken:false, argoTunnelToken:'',
-    useArgoTunnelDomain:false, argoTunnelDomain:'',
-    useArgoTunnelPort:false, argoTunnelPort:2053,
+    warpLicenseKey:'',
+    cfDnsToken:'',
+    argoTunnelToken:'',
+    argoTunnelDomain:'',
+    argoTunnelPort:2053,
   }
 }
 
@@ -116,17 +119,15 @@ async function createNode() {
       nodeType: n.nodeType,
       region: n.region,
       networkType: n.networkType,
-      primaryDomain: n.primaryDomain,
-      backupDomain: n.backupDomain,
-      entryIp: n.entryIp,
+      primaryDomain: n.networkType === 'public' ? n.primaryDomain.trim() : '',
+      backupDomain: n.networkType === 'public' ? n.backupDomain.trim() : '',
+      entryIp: n.networkType === 'public' ? n.entryIp.trim() : '',
       githubMirrorUrl: n.useGithubMirror ? n.githubMirrorUrl : '',
-      installWarp: n.installWarp,
-      warpLicenseKey: n.installWarp ? n.warpLicenseKey : '',
-      cfDnsToken: n.useCfDnsToken ? n.cfDnsToken : '',
-      installArgo: n.installArgo || n.networkType === 'noPublicIp',
-      argoTunnelToken: n.useArgoTunnelToken ? n.argoTunnelToken : '',
-      argoTunnelDomain: n.useArgoTunnelDomain ? n.argoTunnelDomain : '',
-      argoTunnelPort: n.useArgoTunnelPort ? n.argoTunnelPort : 2053,
+      warpLicenseKey: n.warpLicenseKey.trim(),
+      cfDnsToken: n.networkType === 'public' ? n.cfDnsToken.trim() : '',
+      argoTunnelToken: n.networkType === 'noPublicIp' ? n.argoTunnelToken.trim() : '',
+      argoTunnelDomain: n.networkType === 'noPublicIp' ? n.argoTunnelDomain.trim() : '',
+      argoTunnelPort: n.networkType === 'noPublicIp' ? (n.argoTunnelPort || 2053) : 2053,
     })
     showCreateNode.value = false
     resetNewNode()
@@ -404,6 +405,11 @@ function openPublishRelease(node: NodeRecord) {
   publishKind.value = 'runtime'
   publishMessage.value = ''
   publishTemplateIds.value = templates.value.map((template) => template.id)
+  publishBootstrap.value = {
+    installWarp: false,
+    installSingBox: false,
+    installXray: false,
+  }
   publishPreview.value = null
   publishPreviewError.value = ''
   showPublishRelease.value = true
@@ -414,6 +420,11 @@ function closePublishRelease() {
   publishNode.value = null
   publishKind.value = 'runtime'
   publishTemplateIds.value = []
+  publishBootstrap.value = {
+    installWarp: false,
+    installSingBox: false,
+    installXray: false,
+  }
   publishMessage.value = ''
   publishPreview.value = null
   publishPreviewError.value = ''
@@ -430,7 +441,23 @@ function togglePublishTemplate(templateId: string) {
 }
 
 async function loadPublishPreview() {
-  if (!publishNode.value || publishTemplateIds.value.length === 0) {
+  const hasBootstrapAction =
+    publishBootstrap.value.installWarp
+    || publishBootstrap.value.installSingBox
+    || publishBootstrap.value.installXray
+  if (!publishNode.value) {
+    publishPreview.value = null
+    publishPreviewError.value = ''
+    publishPreviewLoading.value = false
+    return
+  }
+  if (publishKind.value === 'runtime' && publishTemplateIds.value.length === 0) {
+    publishPreview.value = null
+    publishPreviewError.value = ''
+    publishPreviewLoading.value = false
+    return
+  }
+  if (publishKind.value === 'bootstrap' && !hasBootstrapAction) {
     publishPreview.value = null
     publishPreviewError.value = ''
     publishPreviewLoading.value = false
@@ -443,7 +470,8 @@ async function loadPublishPreview() {
   try {
     const preview = await api.previewNodeRelease(adminKey.value, publishNode.value.id, {
       kind: publishKind.value,
-      templateIds: publishTemplateIds.value,
+      templateIds: publishKind.value === 'runtime' ? publishTemplateIds.value : [],
+      bootstrapOptions: publishBootstrap.value,
       message: publishMessage.value.trim(),
     })
     if (requestId !== publishPreviewRequestId) return
@@ -539,11 +567,16 @@ async function publishSelectedRelease() {
     toast('error', 'Select at least one template')
     return
   }
+  if (publishKind.value === 'bootstrap' && !publishBootstrap.value.installWarp && !publishBootstrap.value.installSingBox && !publishBootstrap.value.installXray) {
+    toast('error', 'Select at least one bootstrap action')
+    return
+  }
   try {
     publishingRelease.value = true
     await api.publishNode(adminKey.value, publishNode.value.id, {
       kind: publishKind.value,
-      templateIds: publishTemplateIds.value,
+      templateIds: publishKind.value === 'runtime' ? publishTemplateIds.value : [],
+      bootstrapOptions: publishBootstrap.value,
       message: publishMessage.value.trim(),
     })
     const selectedNodeId = selectedNode.value?.id
@@ -596,9 +629,12 @@ function getRuntimeVersion(n: NodeRecord) {
   return (n.protocolRuntimeVersion || '').trim() || '-'
 }
 
-const publishBlocked = computed(() =>
-  publishKind.value === 'runtime' && publishTemplateIds.value.length === 0,
-)
+const publishBlocked = computed(() => {
+  if (publishKind.value === 'runtime') {
+    return publishTemplateIds.value.length === 0
+  }
+  return !publishBootstrap.value.installWarp && !publishBootstrap.value.installSingBox && !publishBootstrap.value.installXray
+})
 
 function getWarpLabel(n: NodeRecord) {
   const warpIpv6 = (n.warpIpv6 || '').trim()
@@ -639,7 +675,13 @@ function isPage(page: 'dashboard'|'nodes'|'templates'|'subscriptions') {
 }
 
 watch(
-  [showPublishRelease, publishKind, () => publishNode.value?.id || '', () => publishTemplateIds.value.join(',')],
+  [
+    showPublishRelease,
+    publishKind,
+    () => publishNode.value?.id || '',
+    () => publishTemplateIds.value.join(','),
+    () => `${publishBootstrap.value.installWarp}:${publishBootstrap.value.installSingBox}:${publishBootstrap.value.installXray}`,
+  ],
   ([visible]) => {
     if (!visible) return
     void loadPublishPreview()
@@ -962,6 +1004,9 @@ onMounted(() => { if (adminKey.value) login() })
           </div>
           <div class="detail-section">
             <div class="detail-section-title">部署命令</div>
+            <div class="text-muted" style="margin-bottom:8px;font-size:12px">
+              一行命令安装并启动 agent。远端安装脚本会按网络类型执行必选初始化：有公网 IP 安装证书，无公网 IP 安装 Argo。
+            </div>
             <button v-if="!deployCommand" class="btn btn-secondary btn-sm w-full" @click="loadDeployCommand">生成部署命令</button>
             <div v-else>
               <div class="code-block" style="max-height:120px;overflow-y:auto;font-size:11px;word-break:break-all">{{ deployCommand }}</div>
@@ -992,7 +1037,7 @@ onMounted(() => { if (adminKey.value) login() })
             <div class="card" style="padding:14px">
               <div style="font-size:15px;font-weight:700">{{ publishNode.name }}</div>
               <div class="text-muted text-mono" style="margin-top:4px">{{ publishNode.id }}</div>
-              <div class="text-muted" style="margin-top:8px;font-size:12px">选择发布类型和模板，节点会在下一次 reconcile 时自动拉取。</div>
+              <div class="text-muted" style="margin-top:8px;font-size:12px">Runtime 负责模板与配置下发；Bootstrap 只负责安装 WARP、sing-box、xray，节点会在下一次 reconcile 时自动拉取。</div>
             </div>
 
             <div class="form-group">
@@ -1003,7 +1048,7 @@ onMounted(() => { if (adminKey.value) login() })
               </select>
             </div>
 
-            <div class="form-group">
+            <div v-if="publishKind==='runtime'" class="form-group">
               <label class="form-label">模板选择</label>
               <div v-if="templates.length===0" class="empty-state" style="padding:20px 12px">
                 <div class="empty-state-title">暂无模板</div>
@@ -1031,7 +1076,36 @@ onMounted(() => { if (adminKey.value) login() })
               </div>
               <div class="text-muted" style="margin-top:8px;font-size:12px">
                 <span>支持同时选择多种协议和多个内核，预览会按内核分组生成。</span>
-                
+              </div>
+            </div>
+
+            <div v-else class="form-group">
+              <label class="form-label">Bootstrap 动作</label>
+              <div class="publish-template-list">
+                <label class="publish-template-row">
+                  <input type="checkbox" class="form-checkbox" v-model="publishBootstrap.installWarp" />
+                  <div class="publish-template-copy">
+                    <div class="publish-template-name">安装 WARP</div>
+                    <div class="publish-template-meta">使用节点保存的 WARP License Key；未绑定时按普通 WARP 流程安装。</div>
+                  </div>
+                </label>
+                <label class="publish-template-row">
+                  <input type="checkbox" class="form-checkbox" v-model="publishBootstrap.installSingBox" />
+                  <div class="publish-template-copy">
+                    <div class="publish-template-name">安装 sing-box</div>
+                    <div class="publish-template-meta">仅安装内核二进制，不下发模板运行配置。</div>
+                  </div>
+                </label>
+                <label class="publish-template-row">
+                  <input type="checkbox" class="form-checkbox" v-model="publishBootstrap.installXray" />
+                  <div class="publish-template-copy">
+                    <div class="publish-template-name">安装 xray</div>
+                    <div class="publish-template-meta">仅安装内核二进制，不下发模板运行配置。</div>
+                  </div>
+                </label>
+              </div>
+              <div class="text-muted" style="margin-top:8px;font-size:12px">
+                Deploy 命令已负责证书或 Argo 的必选网络初始化，这里只做可选组件安装。
               </div>
             </div>
 
@@ -1045,6 +1119,14 @@ onMounted(() => { if (adminKey.value) login() })
                 <div v-if="publishPreviewLoading" class="text-muted">预览生成中...</div>
                 <div v-else-if="publishPreviewError" class="publish-preview-error">{{ publishPreviewError }}</div>
                 <div v-else-if="publishPreview">
+                  <div v-if="publishKind === 'bootstrap'" class="publish-preview-file">
+                    <div class="publish-preview-meta">Bootstrap 计划 / {{ publishPreview.bootstrap.mode }}</div>
+                    <div class="detail-row"><span class="detail-label">安装 WARP</span><span class="detail-value">{{ publishPreview.bootstrap.installWarp ? '是' : '否' }}</span></div>
+                    <div class="detail-row"><span class="detail-label">安装 sing-box</span><span class="detail-value">{{ publishPreview.bootstrap.installSingBox ? '是' : '否' }}</span></div>
+                    <div class="detail-row"><span class="detail-label">安装 xray</span><span class="detail-value">{{ publishPreview.bootstrap.installXray ? '是' : '否' }}</span></div>
+                    <div class="detail-row"><span class="detail-label">运行时二进制</span><span class="detail-value">{{ publishPreview.bootstrap.runtimeBinaries.length ? publishPreview.bootstrap.runtimeBinaries.map((item) => `${item.binaryName}@${item.version}`).join(', ') : '-' }}</span></div>
+                    <div v-for="note in publishPreview.bootstrap.notes" :key="note" class="text-muted" style="margin-top:8px;font-size:12px">{{ note }}</div>
+                  </div>
                   <div v-for="runtime in publishPreview.runtimePlans" :key="runtime.engine" class="publish-preview-file">
                     <div class="publish-preview-meta">内核 {{ runtime.engine }} / 入口 {{ runtime.entryConfigPath }}</div>
                     <div v-for="file in runtime.files" :key="`${runtime.engine}:${file.path}`" class="publish-preview-file">
@@ -1053,7 +1135,7 @@ onMounted(() => { if (adminKey.value) login() })
                     </div>
                   </div>
                 </div>
-                <div v-else class="text-muted">选择模板后自动生成预览</div>
+                <div v-else class="text-muted">{{ publishKind === 'runtime' ? '选择模板后自动生成预览' : '选择至少一个 bootstrap 动作后自动生成预览' }}</div>
               </div>
             </div>
           </template>
@@ -1089,17 +1171,6 @@ onMounted(() => { if (adminKey.value) login() })
             <input class="form-input" v-model="newNode.githubMirrorUrl" placeholder="https://ghproxy.com/https://github.com" />
           </div>
 
-          <!-- Install WARP -->
-          <div class="form-checkbox-group mb-md">
-            <input type="checkbox" class="form-checkbox" v-model="newNode.installWarp" id="warp">
-            <label for="warp" class="form-label" style="margin:0">安装 WARP</label>
-          </div>
-          <div v-if="newNode.installWarp" class="form-group">
-            <label class="form-label">WARP 升级密钥（可选，用于升级 WARP+ 账号）</label>
-            <input class="form-input" v-model="newNode.warpLicenseKey" placeholder="WARP+ License Key" />
-          </div>
-
-          <!-- Network Type -->
           <div class="form-section-divider">服务器网络</div>
           <div class="form-group">
             <label class="form-label">网络类型</label>
@@ -1114,43 +1185,33 @@ onMounted(() => { if (adminKey.value) login() })
             <div class="form-group"><label class="form-label">主域名</label><input class="form-input" v-model="newNode.primaryDomain" placeholder="node.example.com" /></div>
             <div class="form-group"><label class="form-label">备域名</label><input class="form-input" v-model="newNode.backupDomain" placeholder="node2.example.com（可选）" /></div>
             <div class="form-group"><label class="form-label">入口 IP</label><input class="form-input" v-model="newNode.entryIp" placeholder="1.2.3.4" /></div>
-            <div class="form-checkbox-group mb-md">
-              <input type="checkbox" class="form-checkbox" v-model="newNode.useCfDnsToken" id="cf-dns">
-              <label for="cf-dns" class="form-label" style="margin:0">CF-DNS-TOKEN (自动 DNS 管理)</label>
-            </div>
-            <div v-if="newNode.useCfDnsToken" class="form-group">
+            <div class="form-group">
               <label class="form-label">Cloudflare DNS API Token</label>
-              <input class="form-input" v-model="newNode.cfDnsToken" placeholder="Cloudflare API Token" />
+              <input class="form-input" v-model="newNode.cfDnsToken" placeholder="可选，用于自动签发真实证书；留空则回退为自签名证书" />
             </div>
           </template>
 
           <!-- No Public IP (Argo) options -->
           <template v-if="newNode.networkType==='noPublicIp'">
-            <div class="form-checkbox-group mb-md">
-              <input type="checkbox" class="form-checkbox" v-model="newNode.useArgoTunnelToken" id="argo-token">
-              <label for="argo-token" class="form-label" style="margin:0">Tunnel Token</label>
-            </div>
-            <div v-if="newNode.useArgoTunnelToken" class="form-group">
+            <div class="form-group">
               <label class="form-label">Argo Tunnel Token</label>
-              <input class="form-input" v-model="newNode.argoTunnelToken" placeholder="Cloudflare Tunnel Token" />
+              <input class="form-input" v-model="newNode.argoTunnelToken" placeholder="可选，绑定固定 Tunnel 时填写" />
             </div>
-            <div class="form-checkbox-group mb-md">
-              <input type="checkbox" class="form-checkbox" v-model="newNode.useArgoTunnelDomain" id="argo-domain">
-              <label for="argo-domain" class="form-label" style="margin:0">固定隧道域名</label>
-            </div>
-            <div v-if="newNode.useArgoTunnelDomain" class="form-group">
+            <div class="form-group">
               <label class="form-label">隧道域名</label>
-              <input class="form-input" v-model="newNode.argoTunnelDomain" placeholder="tunnel.example.com" />
+              <input class="form-input" v-model="newNode.argoTunnelDomain" placeholder="可选，例如 tunnel.example.com" />
             </div>
-            <div class="form-checkbox-group mb-md">
-              <input type="checkbox" class="form-checkbox" v-model="newNode.useArgoTunnelPort" id="argo-port">
-              <label for="argo-port" class="form-label" style="margin:0">隧道回源端口（默认 2053）</label>
-            </div>
-            <div v-if="newNode.useArgoTunnelPort" class="form-group">
+            <div class="form-group">
               <label class="form-label">回源端口</label>
               <input class="form-input" type="number" v-model.number="newNode.argoTunnelPort" placeholder="2053" />
             </div>
           </template>
+
+          <div class="form-section-divider">密钥绑定</div>
+          <div class="form-group">
+            <label class="form-label">WARP License Key</label>
+            <input class="form-input" v-model="newNode.warpLicenseKey" placeholder="可选，Bootstrap 勾选安装 WARP 时自动读取" />
+          </div>
         </div>
         <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateNode=false">取消</button><button class="btn btn-primary" @click="createNode">创建</button></div>
       </div>

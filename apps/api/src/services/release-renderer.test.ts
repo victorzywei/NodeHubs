@@ -20,8 +20,6 @@ function createNode(): NodeRecord {
     argoTunnelToken: '',
     argoTunnelDomain: '',
     argoTunnelPort: 2053,
-    installWarp: false,
-    installArgo: false,
     configRevision: 2,
     bootstrapRevision: 1,
     desiredReleaseRevision: 2,
@@ -76,6 +74,11 @@ describe('release renderer', () => {
       summary: 'runtime update',
       node: createNode(),
       templates: [createTemplate()],
+      bootstrapOptions: {
+        installWarp: false,
+        installSingBox: false,
+        installXray: false,
+      },
     }, runtimeCatalog)
 
     expect(artifact.runtimes.length).toBe(1)
@@ -102,6 +105,11 @@ describe('release renderer', () => {
       summary: 'runtime update',
       node: createNode(),
       templates: [createTemplate()],
+      bootstrapOptions: {
+        installWarp: false,
+        installSingBox: false,
+        installXray: false,
+      },
     }, runtimeCatalog).subscriptionEndpoints
 
     const plain = renderSubscriptionDocument(
@@ -156,6 +164,11 @@ describe('release renderer', () => {
       summary: 'runtime update',
       node: createNode(),
       templates: [invalidTemplate],
+      bootstrapOptions: {
+        installWarp: false,
+        installSingBox: false,
+        installXray: false,
+      },
     }, runtimeCatalog)).toThrow(/requires sing-box/i)
   })
 
@@ -187,6 +200,11 @@ describe('release renderer', () => {
       summary: 'runtime update',
       node: createNode(),
       templates: [createTemplate(), xrayTemplate],
+      bootstrapOptions: {
+        installWarp: false,
+        installSingBox: false,
+        installXray: false,
+      },
     }, runtimeCatalog)
 
     const engines = artifact.runtimes.map((runtime) => runtime.engine).sort()
@@ -218,6 +236,11 @@ describe('release renderer', () => {
           warpRouteMode: 'ipv4',
         },
       ],
+      bootstrapOptions: {
+        installWarp: false,
+        installSingBox: false,
+        installXray: false,
+      },
     }, runtimeCatalog)
 
     const runtimeConfig = JSON.parse(artifact.runtimes[0]?.files[0]?.content || '{}') as {
@@ -227,5 +250,31 @@ describe('release renderer', () => {
     const tags = (runtimeConfig.outbounds || []).map((item) => String(item.tag || ''))
     expect(tags).toContain('warp-out')
     expect(runtimeConfig.route?.rules?.some((rule) => JSON.stringify(rule).includes('0.0.0.0/0'))).toBe(true)
+  })
+
+  it('adds bootstrap runtime binaries when requested', () => {
+    const runtimeCatalog = buildRuntimeCatalog()
+    const artifact = renderReleaseArtifact({
+      releaseId: 'rel_bootstrap',
+      revision: 7,
+      kind: 'bootstrap',
+      configRevision: 6,
+      bootstrapRevision: 2,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: 'bootstrap binaries',
+      summary: 'bootstrap update',
+      node: createNode(),
+      templates: [],
+      bootstrapOptions: {
+        installWarp: true,
+        installSingBox: true,
+        installXray: true,
+      },
+    }, runtimeCatalog)
+
+    expect(artifact.bootstrap.installWarp).toBe(true)
+    expect(artifact.bootstrap.installSingBox).toBe(true)
+    expect(artifact.bootstrap.installXray).toBe(true)
+    expect(artifact.bootstrap.runtimeBinaries.map((item) => item.engine).sort()).toEqual(['sing-box', 'xray'])
   })
 })

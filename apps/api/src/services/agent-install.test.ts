@@ -21,8 +21,6 @@ function createNode(): NodeRecord {
     argoTunnelToken: '',
     argoTunnelDomain: '',
     argoTunnelPort: 2053,
-    installWarp: false,
-    installArgo: false,
     configRevision: 2,
     bootstrapRevision: 1,
     desiredReleaseRevision: 2,
@@ -82,16 +80,28 @@ describe('agent install scripts', () => {
       publicBaseUrl: 'https://control.example.com/',
       nodeId: 'node_1',
       agentToken: 'token_123',
+      networkType: 'public',
+      primaryDomain: 'edge.example.com',
+      backupDomain: 'backup.example.com',
+      entryIp: '203.0.113.1',
+      githubMirrorUrl: 'https://ghproxy.example.com/https://github.com',
+      cfDnsToken: 'cf-token',
+      argoTunnelToken: '',
+      argoTunnelDomain: '',
+      argoTunnelPort: 2053,
     })
 
     expect(script).toContain('/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env')
     expect(script).toContain('curl')
     expect(script).toContain('wget')
     expect(script).toContain('AGENT_VERSION=')
+    expect(script).toContain("NODE_NETWORK_TYPE='public'")
+    expect(script).toContain('run_network_bootstrap')
+    expect(script).toContain('ensure_tls_certificate')
     expect(script).toContain("cat >\"$AGENT_BIN\" <<'NODESHUB_AGENT_BIN_EOF'")
     expect(script).toContain('ensure_downloader() {')
     expect(script).toContain('self_update_if_needed')
-    expect(script).not.toContain('apt-get install')
+    expect(script).not.toContain('sudo ')
     expect(script).not.toContain('jq')
   })
 
@@ -105,13 +115,13 @@ describe('agent install scripts', () => {
       applyUrl: 'https://control.example.com/apply',
       artifactUrl: 'https://control.example.com/artifact',
       status: 'pending',
-      agentVersion: '0.1.2',
+      agentVersion: '0.1.3',
       installUrl: 'https://control.example.com/install',
     })
 
     expect(body).toContain("needs_update=1")
     expect(body).toContain("apply_url='https://control.example.com/apply'")
-    expect(body).toContain("agent_version='0.1.2'")
+    expect(body).toContain("agent_version='0.1.3'")
     expect(body).toContain("install_url='https://control.example.com/install'")
   })
 
@@ -127,6 +137,11 @@ describe('agent install scripts', () => {
       summary: 'runtime update',
       node: createNode(),
       templates: [createTemplate()],
+      bootstrapOptions: {
+        installWarp: false,
+        installSingBox: false,
+        installXray: false,
+      },
     }, buildRuntimeCatalog())
 
     const script = buildReleaseApplyScript(artifact)
@@ -140,5 +155,34 @@ describe('agent install scripts', () => {
     expect(script).toContain('refresh_agent_installation_if_needed')
     expect(script).toContain('schedule_agent_restart_if_needed')
     expect(script).toContain('if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then')
+    expect(script).toContain('apply_bootstrap_runtime_binaries')
+    expect(script).not.toContain('BOOTSTRAP_INSTALL_ARGO')
+  })
+
+  it('builds bootstrap apply scripts that can install sing-box and xray binaries', () => {
+    const artifact = renderReleaseArtifact({
+      releaseId: 'rel_bootstrap',
+      revision: 3,
+      kind: 'bootstrap',
+      configRevision: 2,
+      bootstrapRevision: 2,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: 'bootstrap binaries',
+      summary: 'bootstrap update',
+      node: createNode(),
+      templates: [],
+      bootstrapOptions: {
+        installWarp: false,
+        installSingBox: true,
+        installXray: true,
+      },
+    }, buildRuntimeCatalog())
+
+    const script = buildReleaseApplyScript(artifact)
+
+    expect(script).toContain('BOOTSTRAP_INSTALL_SING_BOX=1')
+    expect(script).toContain('BOOTSTRAP_INSTALL_XRAY=1')
+    expect(script).toContain("RUNTIME_BINARY_NAME='sing-box'")
+    expect(script).toContain("RUNTIME_BINARY_NAME='xray'")
   })
 })

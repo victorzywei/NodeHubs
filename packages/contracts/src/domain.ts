@@ -29,8 +29,6 @@ export interface NodeRecord {
   argoTunnelToken: string
   argoTunnelDomain: string
   argoTunnelPort: number
-  installWarp: boolean
-  installArgo: boolean
   warpStatus?: string
   warpIpv6?: string
   warpEndpoint?: string
@@ -92,6 +90,7 @@ export interface ReleasePreviewRecord {
   kind: ReleaseKind
   runtimePlans: Array<Pick<ReleaseRuntimePlan, 'engine' | 'entryConfigPath' | 'files'>>
   templateIds: string[]
+  bootstrap: BootstrapPlan
 }
 
 export interface SubscriptionRecord {
@@ -168,9 +167,17 @@ export interface BootstrapPlan {
   serviceName: string
   runtimeServiceName: string
   installWarp: boolean
-  installArgo: boolean
+  installSingBox: boolean
+  installXray: boolean
+  runtimeBinaries: RuntimeBinaryPlan[]
   mode: 'runtime-only' | 'bootstrap-required'
   notes: string[]
+}
+
+export interface BootstrapOptions {
+  installWarp: boolean
+  installSingBox: boolean
+  installXray: boolean
 }
 
 export interface RuntimeBinaryPlan {
@@ -213,8 +220,6 @@ export interface ReleaseArtifact {
     | 'argoTunnelToken'
     | 'argoTunnelDomain'
     | 'argoTunnelPort'
-    | 'installWarp'
-    | 'installArgo'
   >
   templates: Array<
     Pick<TemplateRecord, 'id' | 'name' | 'engine' | 'protocol' | 'transport' | 'tlsMode' | 'warpExit' | 'warpRouteMode' | 'defaults'>

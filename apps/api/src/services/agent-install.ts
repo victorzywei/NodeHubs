@@ -91,6 +91,28 @@ function buildRuntimeApplyBlocks(artifact: ReleaseArtifact): string {
     .join('\n')
 }
 
+function buildBootstrapBinaryApplyBlocks(artifact: ReleaseArtifact): string {
+  return artifact.bootstrap.runtimeBinaries
+    .map((binary) => {
+      const configPath = `\${ETC_DIR}/runtime/${binary.engine}.json`
+      return [
+        `  RUNTIME_ENGINE=${shellQuote(binary.engine)}`,
+        `  RUNTIME_VERSION=${shellQuote(binary.version)}`,
+        `  RUNTIME_BINARY_NAME=${shellQuote(binary.binaryName)}`,
+        `  RUNTIME_INSTALL_PATH_DEFAULT=${shellQuote(binary.installPath)}`,
+        `  RUNTIME_DOWNLOAD_BASE_URL=${shellQuote(binary.downloadBaseUrl)}`,
+        `  RUNTIME_ASSET_TEMPLATE=${shellQuote(binary.assetNameTemplate)}`,
+        `  RUNTIME_BINARY_PATH_TEMPLATE=${shellQuote(binary.binaryPathTemplate)}`,
+        `  RUNTIME_RUN_ARGS_TEMPLATE=${shellQuote(binary.runArgsTemplate)}`,
+        `  RUNTIME_ARCHIVE_FORMAT=${shellQuote(binary.archiveFormat)}`,
+        `  RUNTIME_CONFIG_PATH="${configPath}"`,
+        '  resolve_runtime_install_path',
+        '  install_runtime_binary',
+      ].join('\n')
+    })
+    .join('\n')
+}
+
 export function buildAgentReconcileEnv(input: {
   nodeId: string
   needsUpdate: boolean
@@ -198,8 +220,10 @@ function buildShellMultilineAssignment(name: string, values: string[]): string {
 export function buildReleaseApplyScript(artifact: ReleaseArtifact): string {
   const runtimeFileBlocks = buildRuntimeFileBlocks(artifact)
   const runtimeApplyBlocks = buildRuntimeApplyBlocks(artifact)
+  const bootstrapBinaryApplyBlocks = buildBootstrapBinaryApplyBlocks(artifact)
   const primaryRuntimeServiceName = `nodehubsapi-runtime-${artifact.runtimes[0]?.engine || 'sing-box'}`
   const runtimePlanCount = artifact.runtimes.length
+  const bootstrapBinaryCount = artifact.bootstrap.runtimeBinaries.length
   const bootstrapTemplates = buildBootstrapTemplateData(artifact)
   const tlsTemplates = bootstrapTemplates.filter((template) => template.tlsMode === 'tls' || template.protocol === 'hysteria2')
   const tlsDomains = uniqueValues(
@@ -232,7 +256,9 @@ SYSTEMD_DIR="\${SYSTEMD_DIR:-/etc/systemd/system}"
 SYSTEMD_WANTED_BY="\${SYSTEMD_WANTED_BY:-multi-user.target}"
 GITHUB_MIRROR_URL=${shellQuote(artifact.node.githubMirrorUrl || '')}
 BOOTSTRAP_INSTALL_WARP=${artifact.bootstrap.installWarp ? '1' : '0'}
-BOOTSTRAP_INSTALL_ARGO=${artifact.bootstrap.installArgo ? '1' : '0'}
+BOOTSTRAP_INSTALL_SING_BOX=${artifact.bootstrap.installSingBox ? '1' : '0'}
+BOOTSTRAP_INSTALL_XRAY=${artifact.bootstrap.installXray ? '1' : '0'}
+BOOTSTRAP_RUNTIME_BINARY_COUNT=${bootstrapBinaryCount}
 BOOTSTRAP_NEEDS_CERTS=${tlsTemplates.length > 0 ? '1' : '0'}
 BOOTSTRAP_CERT_PATH=${shellQuote(bootstrapCertPath)}
 BOOTSTRAP_KEY_PATH=${shellQuote(bootstrapKeyPath)}
@@ -1257,6 +1283,13 @@ apply_runtime_plans() {
 ${runtimeApplyBlocks}
 }
 
+apply_bootstrap_runtime_binaries() {
+  if [ "$BOOTSTRAP_RUNTIME_BINARY_COUNT" -le 0 ]; then
+    return 0
+  fi
+${bootstrapBinaryApplyBlocks}
+}
+
 run_hooks() {
   local directory="$1"
   if [ ! -d "$directory" ]; then
@@ -1302,8 +1335,8 @@ main() {
   if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then
     ensure_warp_bootstrap
   fi
-  if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_ARGO" = "1" ]; then
-    ensure_argo_bootstrap
+  if [ "$RELEASE_KIND" = "bootstrap" ]; then
+    apply_bootstrap_runtime_binaries
   fi
   run_hooks "$ETC_DIR/hooks/post-apply.d"
   ack_release "healthy" "release applied"
@@ -1320,9 +1353,20 @@ export function buildAgentInstallScript(input: {
   publicBaseUrl: string
   nodeId: string
   agentToken: string
+  networkType: 'public' | 'noPublicIp'
+  primaryDomain: string
+  backupDomain: string
+  entryIp: string
+  githubMirrorUrl: string
+  cfDnsToken: string
+  argoTunnelToken: string
+  argoTunnelDomain: string
+  argoTunnelPort: number
 }): string {
   const apiBase = input.publicBaseUrl.replace(/\/+$/, '')
   const installUrl = `${apiBase}/api/nodes/agent/install?nodeId=${encodeURIComponent(input.nodeId)}`
+  const tlsDomains = uniqueValues([input.primaryDomain, input.backupDomain].filter((value) => value && !isIpLike(value)))
+  const bootstrapTlsDomains = buildShellMultilineAssignment('BOOTSTRAP_TLS_DOMAINS', tlsDomains)
   return `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -1331,6 +1375,17 @@ NODE_ID=${shellQuote(input.nodeId)}
 AGENT_TOKEN=${shellQuote(input.agentToken)}
 AGENT_VERSION=${shellQuote(APP_VERSION)}
 AGENT_INSTALL_URL=${shellQuote(installUrl)}
+NODE_NETWORK_TYPE=${shellQuote(input.networkType)}
+NODE_PRIMARY_DOMAIN=${shellQuote(input.primaryDomain || '')}
+NODE_BACKUP_DOMAIN=${shellQuote(input.backupDomain || '')}
+NODE_ENTRY_IP=${shellQuote(input.entryIp || '')}
+GITHUB_MIRROR_URL=${shellQuote(input.githubMirrorUrl || '')}
+NODE_CF_DNS_TOKEN=${shellQuote(input.cfDnsToken || '')}
+NODE_ARGO_TUNNEL_TOKEN=${shellQuote(input.argoTunnelToken || '')}
+NODE_ARGO_TUNNEL_DOMAIN=${shellQuote(input.argoTunnelDomain || '')}
+NODE_ARGO_ORIGIN_PORT=${shellQuote(String(input.argoTunnelPort || 2053))}
+BOOTSTRAP_NEEDS_CERTS=${input.networkType === 'public' && tlsDomains.length > 0 ? '1' : '0'}
+BOOTSTRAP_PRIMARY_TLS_DOMAIN=${shellQuote(tlsDomains[0] || input.primaryDomain || '')}
 STATE_DIR=""
 ETC_DIR=""
 AGENT_BIN=""
@@ -1341,16 +1396,43 @@ WARP_BIN_PATH=""
 CLOUDFLARED_BIN_PATH=""
 SYSTEMCTL_USER_FLAG=""
 SYSTEMD_WANTED_BY="multi-user.target"
+SYSTEMD_DIR=""
 USE_SYSTEMD=0
 INSTALL_MODE=""
 POLL_INTERVAL=15
+BOOTSTRAP_CERT_PATH=""
+BOOTSTRAP_KEY_PATH=""
+TMP_DIR=""
+${bootstrapTlsDomains}
+trap cleanup_tmp_dir EXIT
 
 json_escape() {
   printf '"%s"' "$1"
 }
 
+log() {
+  printf '%s\n' "[nodehubsapi] $*"
+}
+
+warn() {
+  printf '%s\n' "[nodehubsapi] WARN: $*" >&2
+}
+
+cleanup_tmp_dir() {
+  if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
+    rm -rf "$TMP_DIR"
+  fi
+}
+
 is_root() {
   [ "\${EUID:-$(id -u)}" -eq 0 ]
+}
+
+run_systemctl() {
+  if [ "$USE_SYSTEMD" != "1" ]; then
+    return 1
+  fi
+  systemctl $SYSTEMCTL_USER_FLAG "$@"
 }
 
 detect_install_context() {
@@ -1361,6 +1443,7 @@ detect_install_context() {
     AGENT_BIN="/usr/local/bin/nodehubsapi-agent"
     SERVICE_FILE="/etc/systemd/system/nodehubsapi-agent.service"
     RUNTIME_BIN_DIR="/usr/local/bin"
+    SYSTEMD_DIR="/etc/systemd/system"
   else
     INSTALL_MODE="user"
     STATE_DIR="$HOME/.local/share/nodehubsapi"
@@ -1370,6 +1453,7 @@ detect_install_context() {
     SYSTEMCTL_USER_FLAG="--user"
     SYSTEMD_WANTED_BY="default.target"
     RUNTIME_BIN_DIR="$HOME/.local/bin"
+    SYSTEMD_DIR="$HOME/.config/systemd/user"
   fi
 
   if ! mkdir -p "$STATE_DIR" "$ETC_DIR" "$(dirname "$AGENT_BIN")" >/dev/null 2>&1; then
@@ -1382,6 +1466,7 @@ detect_install_context() {
       SYSTEMCTL_USER_FLAG="--user"
       SYSTEMD_WANTED_BY="default.target"
       RUNTIME_BIN_DIR="$HOME/.local/bin"
+      SYSTEMD_DIR="$HOME/.config/systemd/user"
       mkdir -p "$STATE_DIR" "$ETC_DIR" "$(dirname "$AGENT_BIN")"
     else
       echo "Failed to create user-mode directories." >&2
@@ -1392,6 +1477,8 @@ detect_install_context() {
   AGENT_ENV_FILE="$ETC_DIR/agent.env"
   WARP_BIN_PATH="$RUNTIME_BIN_DIR/warp-go"
   CLOUDFLARED_BIN_PATH="$RUNTIME_BIN_DIR/cloudflared"
+  BOOTSTRAP_CERT_PATH="$ETC_DIR/certs/server.crt"
+  BOOTSTRAP_KEY_PATH="$ETC_DIR/certs/server.key"
 
   if command -v systemctl >/dev/null 2>&1; then
     if [ "$INSTALL_MODE" = "user" ]; then
@@ -1412,14 +1499,386 @@ ensure_downloader() {
   exit 1
 }
 
+wrap_github_url() {
+  local url="$1"
+  if [ -n "$GITHUB_MIRROR_URL" ] && [[ "$url" == https://github.com/* ]]; then
+    printf '%s/%s' "\${GITHUB_MIRROR_URL%/}" "$url"
+    return 0
+  fi
+  printf '%s' "$url"
+}
+
+http_download_to_file() {
+  local url="$1"
+  local target="$2"
+  local resolved_url
+  resolved_url="$(wrap_github_url "$url")"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$resolved_url" -o "$target"
+    return 0
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO "$target" "$resolved_url"
+    return 0
+  fi
+  if command -v busybox >/dev/null 2>&1; then
+    busybox wget -qO "$target" "$resolved_url"
+    return 0
+  fi
+  echo "A downloader is required: curl, wget, or busybox wget." >&2
+  return 1
+}
+
+package_install() {
+  if ! is_root; then
+    return 1
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y "$@" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v yum >/dev/null 2>&1; then
+    yum install -y "$@" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v zypper >/dev/null 2>&1; then
+    zypper --non-interactive install -y "$@" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v pacman >/dev/null 2>&1; then
+    pacman -Sy --noconfirm "$@" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v apk >/dev/null 2>&1; then
+    apk add --no-cache "$@" >/dev/null 2>&1
+    return $?
+  fi
+  return 1
+}
+
+ensure_command() {
+  local cmd="$1"
+  shift || true
+  if command -v "$cmd" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$#" -gt 0 ] && package_install "$@"; then
+    command -v "$cmd" >/dev/null 2>&1
+    return $?
+  fi
+  return 1
+}
+
+install_binary_file() {
+  local source="$1"
+  local target="$2"
+  mkdir -p "$(dirname "$target")"
+  if command -v install >/dev/null 2>&1; then
+    install -m 0755 "$source" "$target"
+    return 0
+  fi
+  cp "$source" "$target"
+  chmod 0755 "$target"
+}
+
+resolve_lego_arch() {
+  case "$(uname -m 2>/dev/null || true)" in
+    x86_64|amd64) echo amd64 ;;
+    aarch64|arm64) echo arm64 ;;
+    armv7l|armv7) echo armv7 ;;
+    i386|i686) echo 386 ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+guess_acme_email() {
+  local domain="$1"
+  local zone="$domain"
+  if [ "$(printf '%s' "$domain" | awk -F '.' '{ print NF }')" -gt 2 ]; then
+    zone="\${domain#*.}"
+  fi
+  if [ -z "$zone" ]; then
+    zone="example.com"
+  fi
+  printf 'hostmaster@%s' "$zone"
+}
+
+install_lego_binary() {
+  local target="$RUNTIME_BIN_DIR/lego"
+  local version="v4.28.1"
+  local arch asset archive_file unpack_dir
+  if [ -x "$target" ]; then
+    printf '%s' "$target"
+    return 0
+  fi
+  arch="$(resolve_lego_arch)" || {
+    warn "lego is not available for this architecture."
+    return 1
+  }
+  ensure_command tar tar || {
+    warn "tar is required to install lego."
+    return 1
+  }
+  asset="lego_\${version#v}_linux_\${arch}.tar.gz"
+  archive_file="$TMP_DIR/$asset"
+  unpack_dir="$TMP_DIR/lego"
+  mkdir -p "$unpack_dir"
+  http_download_to_file "https://github.com/go-acme/lego/releases/download/\${version}/\${asset}" "$archive_file"
+  tar -xzf "$archive_file" -C "$unpack_dir"
+  install_binary_file "$unpack_dir/lego" "$target"
+  printf '%s' "$target"
+}
+
+issue_cloudflare_certificate() {
+  local lego_bin="$1"
+  local primary_domain="$BOOTSTRAP_PRIMARY_TLS_DOMAIN"
+  local certs_dir="$STATE_DIR/lego"
+  local cert_source key_source email
+  if [ -z "$primary_domain" ]; then
+    primary_domain="$(printf '%s\n' "$BOOTSTRAP_TLS_DOMAINS" | awk 'NF { print; exit }')"
+  fi
+  [ -n "$primary_domain" ] || return 1
+  email="$(guess_acme_email "$primary_domain")"
+  mkdir -p "$certs_dir"
+  local args=(--accept-tos --path "$certs_dir" --email "$email" --dns cloudflare)
+  while IFS= read -r domain; do
+    [ -n "$domain" ] || continue
+    args+=(--domains "$domain")
+  done <<< "$BOOTSTRAP_TLS_DOMAINS"
+  CLOUDFLARE_DNS_API_TOKEN="$NODE_CF_DNS_TOKEN" "$lego_bin" "\${args[@]}" run >/dev/null
+  cert_source="$certs_dir/certificates/\${primary_domain}.crt"
+  key_source="$certs_dir/certificates/\${primary_domain}.key"
+  [ -s "$cert_source" ] && [ -s "$key_source" ] || return 1
+  mkdir -p "$(dirname "$BOOTSTRAP_CERT_PATH")"
+  cp "$cert_source" "$BOOTSTRAP_CERT_PATH"
+  cp "$key_source" "$BOOTSTRAP_KEY_PATH"
+}
+
+generate_self_signed_certificate() {
+  local primary_domain="$BOOTSTRAP_PRIMARY_TLS_DOMAIN"
+  local openssl_conf="$TMP_DIR/openssl.cnf"
+  local san_lines=""
+  local index=1
+  [ -n "$primary_domain" ] || primary_domain="localhost"
+  ensure_command openssl openssl || {
+    echo "openssl is required to generate fallback certificates." >&2
+    return 1
+  }
+  while IFS= read -r domain; do
+    [ -n "$domain" ] || continue
+    san_lines="$san_lines"$'\n'"DNS.\${index} = \${domain}"
+    index=$((index + 1))
+  done <<< "$BOOTSTRAP_TLS_DOMAINS"
+  if [ -z "$san_lines" ]; then
+    san_lines=$'\n'"DNS.1 = \${primary_domain}"
+  fi
+  cat >"$openssl_conf" <<EOF
+[req]
+prompt = no
+default_bits = 2048
+default_md = sha256
+distinguished_name = dn
+x509_extensions = req_ext
+
+[dn]
+CN = \${primary_domain}
+
+[req_ext]
+subjectAltName = @alt_names
+
+[alt_names]\${san_lines}
+EOF
+  mkdir -p "$(dirname "$BOOTSTRAP_CERT_PATH")"
+  openssl req -x509 -nodes -newkey rsa:2048 -days 825 -keyout "$BOOTSTRAP_KEY_PATH" -out "$BOOTSTRAP_CERT_PATH" -config "$openssl_conf" >/dev/null 2>&1
+}
+
+ensure_tls_certificate() {
+  if [ "$BOOTSTRAP_NEEDS_CERTS" != "1" ]; then
+    return 0
+  fi
+  if [ -s "$BOOTSTRAP_CERT_PATH" ] && [ -s "$BOOTSTRAP_KEY_PATH" ]; then
+    return 0
+  fi
+  if [ -n "$NODE_CF_DNS_TOKEN" ] && [ -n "$BOOTSTRAP_TLS_DOMAINS" ]; then
+    local lego_bin
+    if lego_bin="$(install_lego_binary)"; then
+      if issue_cloudflare_certificate "$lego_bin"; then
+        log "Issued TLS certificate via lego + Cloudflare DNS."
+        return 0
+      fi
+      warn "lego certificate issuance failed, falling back to self-signed."
+    fi
+  fi
+  generate_self_signed_certificate
+  log "Generated fallback self-signed certificate."
+}
+
+resolve_cloudflared_arch() {
+  case "$(uname -m 2>/dev/null || true)" in
+    x86_64|amd64) echo amd64 ;;
+    aarch64|arm64) echo arm64 ;;
+    armv7l|armv7) echo arm ;;
+    i386|i686) echo 386 ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+install_cloudflared_binary() {
+  local target="$RUNTIME_BIN_DIR/cloudflared"
+  local arch
+  if [ -x "$target" ]; then
+    printf '%s' "$target"
+    return 0
+  fi
+  arch="$(resolve_cloudflared_arch)" || {
+    warn "cloudflared is not available for this architecture."
+    return 1
+  }
+  http_download_to_file "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-\${arch}" "$TMP_DIR/cloudflared"
+  install_binary_file "$TMP_DIR/cloudflared" "$target"
+  printf '%s' "$target"
+}
+
+sync_argo_domain_state() {
+  local log_file="$STATE_DIR/argo/cloudflared.log"
+  local domain_file="$STATE_DIR/argo/domain"
+  if [ -n "$NODE_ARGO_TUNNEL_DOMAIN" ]; then
+    printf '%s\n' "$NODE_ARGO_TUNNEL_DOMAIN" > "$domain_file"
+    return 0
+  fi
+  if [ -f "$log_file" ]; then
+    grep -ao 'https://[a-z0-9-]*\\.trycloudflare\\.com' "$log_file" 2>/dev/null | tail -n1 | sed 's|https://||' > "$domain_file" || true
+  fi
+}
+
+write_argo_service() {
+  local cloudflared_bin="$1"
+  local service_file="$SYSTEMD_DIR/nodehubsapi-cloudflared.service"
+  local env_file="$ETC_DIR/cloudflared.env"
+  local log_file="$STATE_DIR/argo/cloudflared.log"
+  [ "$USE_SYSTEMD" = "1" ] || return 0
+  mkdir -p "$SYSTEMD_DIR"
+  mkdir -p "$STATE_DIR/argo"
+  : > "$log_file"
+  cat >"$env_file" <<EOF
+ARGO_TUNNEL_TOKEN=\${NODE_ARGO_TUNNEL_TOKEN}
+ARGO_ORIGIN_URL=http://127.0.0.1:\${NODE_ARGO_ORIGIN_PORT}
+ARGO_LOG_FILE=\${log_file}
+EOF
+  if [ -n "$NODE_ARGO_TUNNEL_TOKEN" ]; then
+    cat >"$service_file" <<EOF
+[Unit]
+Description=nodehubsapi cloudflared
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=\${env_file}
+ExecStart=/bin/sh -lc 'exec \${cloudflared_bin} tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token "$ARGO_TUNNEL_TOKEN" >>"$ARGO_LOG_FILE" 2>&1'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=$SYSTEMD_WANTED_BY
+EOF
+  else
+    cat >"$service_file" <<EOF
+[Unit]
+Description=nodehubsapi cloudflared
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=\${env_file}
+ExecStart=/bin/sh -lc 'exec \${cloudflared_bin} tunnel --url "$ARGO_ORIGIN_URL" --edge-ip-version auto --no-autoupdate --protocol http2 >>"$ARGO_LOG_FILE" 2>&1'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=$SYSTEMD_WANTED_BY
+EOF
+  fi
+}
+
+start_argo_background() {
+  local cloudflared_bin="$1"
+  local log_file="$STATE_DIR/argo/cloudflared.log"
+  local pid_file="$STATE_DIR/argo/cloudflared.pid"
+  local origin_url="http://127.0.0.1:$NODE_ARGO_ORIGIN_PORT"
+  local old_pid=""
+  mkdir -p "$STATE_DIR/argo"
+  : > "$log_file"
+  if [ -f "$pid_file" ]; then
+    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+      kill "$old_pid" >/dev/null 2>&1 || true
+      sleep 1
+    fi
+  fi
+  if [ -n "$NODE_ARGO_TUNNEL_TOKEN" ]; then
+    nohup /bin/sh -lc "exec \"$cloudflared_bin\" tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token \"$NODE_ARGO_TUNNEL_TOKEN\" >>\"$log_file\" 2>&1" >/dev/null 2>&1 &
+  else
+    nohup /bin/sh -lc "exec \"$cloudflared_bin\" tunnel --url \"$origin_url\" --edge-ip-version auto --no-autoupdate --protocol http2 >>\"$log_file\" 2>&1" >/dev/null 2>&1 &
+  fi
+  echo "$!" > "$pid_file"
+}
+
+ensure_argo_bootstrap() {
+  local cloudflared_bin
+  cloudflared_bin="$(install_cloudflared_binary)" || return 1
+  if [ "$USE_SYSTEMD" = "1" ]; then
+    write_argo_service "$cloudflared_bin"
+    run_systemctl daemon-reload
+    run_systemctl enable --now nodehubsapi-cloudflared.service >/dev/null
+    run_systemctl restart nodehubsapi-cloudflared.service
+  else
+    start_argo_background "$cloudflared_bin"
+  fi
+  sleep 5
+  sync_argo_domain_state
+  log "Argo bootstrap completed."
+}
+
+run_network_bootstrap() {
+  TMP_DIR="$(mktemp -d)"
+  mkdir -p "$ETC_DIR/certs" "$STATE_DIR/lego" "$STATE_DIR/argo"
+  if [ "$NODE_NETWORK_TYPE" = "public" ]; then
+    ensure_tls_certificate
+    return 0
+  fi
+  ensure_argo_bootstrap
+}
+
 write_agent_env() {
-  mkdir -p "$STATE_DIR/releases" "$STATE_DIR/runtime" "$ETC_DIR/hooks/pre-apply.d" "$ETC_DIR/hooks/post-apply.d" "$ETC_DIR/hooks/bootstrap.d"
+  mkdir -p "$STATE_DIR/releases" "$STATE_DIR/runtime" "$STATE_DIR/lego" "$STATE_DIR/argo" "$ETC_DIR/certs" "$ETC_DIR/hooks/pre-apply.d" "$ETC_DIR/hooks/post-apply.d" "$ETC_DIR/hooks/bootstrap.d"
   cat >"$AGENT_ENV_FILE" <<EOF
 API_BASE=$API_BASE
 NODE_ID=$NODE_ID
 AGENT_TOKEN=$AGENT_TOKEN
 AGENT_VERSION=$AGENT_VERSION
 AGENT_INSTALL_URL=$AGENT_INSTALL_URL
+NODE_NETWORK_TYPE=$NODE_NETWORK_TYPE
+NODE_PRIMARY_DOMAIN=$NODE_PRIMARY_DOMAIN
+NODE_BACKUP_DOMAIN=$NODE_BACKUP_DOMAIN
+NODE_ENTRY_IP=$NODE_ENTRY_IP
+GITHUB_MIRROR_URL=$GITHUB_MIRROR_URL
+NODE_CF_DNS_TOKEN=$NODE_CF_DNS_TOKEN
+NODE_ARGO_TUNNEL_TOKEN=$NODE_ARGO_TUNNEL_TOKEN
+NODE_ARGO_TUNNEL_DOMAIN=$NODE_ARGO_TUNNEL_DOMAIN
+NODE_ARGO_ORIGIN_PORT=$NODE_ARGO_ORIGIN_PORT
+BOOTSTRAP_CERT_PATH=$BOOTSTRAP_CERT_PATH
+BOOTSTRAP_KEY_PATH=$BOOTSTRAP_KEY_PATH
 STATE_DIR=$STATE_DIR
 ETC_DIR=$ETC_DIR
 RUNTIME_BIN_DIR=$RUNTIME_BIN_DIR
@@ -1815,8 +2274,11 @@ nodehubsapi agent installed.
 - Install mode: $INSTALL_MODE
 - API base: $API_BASE
 - Node ID: $NODE_ID
+- Network type: $NODE_NETWORK_TYPE
 - Agent env: $AGENT_ENV_FILE
 - Runtime config root: $ETC_DIR/runtime
+- Mandatory bootstrap:
+  $([ "$NODE_NETWORK_TYPE" = "public" ] && printf '%s' "TLS certificate -> $BOOTSTRAP_CERT_PATH (CF DNS token enables ACME; otherwise self-signed fallback)" || printf '%s' "Argo -> $STATE_DIR/argo/domain")
 - Hook directories:
   $ETC_DIR/hooks/pre-apply.d
   $ETC_DIR/hooks/post-apply.d
@@ -1828,9 +2290,11 @@ ensure_downloader
 detect_install_context
 write_agent_env
 write_agent_binary
+run_network_bootstrap
 if ! write_service; then
   start_agent_background
 fi
+cleanup_tmp_dir
 print_summary
 `
 }

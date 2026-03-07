@@ -1,4 +1,5 @@
 import type {
+  BootstrapOptions,
   NodeRecord,
   PublicSubscriptionDocument,
   ReleaseArtifact,
@@ -22,6 +23,7 @@ type RenderContext = {
   summary: string
   node: NodeRecord
   templates: TemplateRecord[]
+  bootstrapOptions: BootstrapOptions
 }
 
 type NormalizedTemplate = {
@@ -968,16 +970,38 @@ function buildRuntimeConfig(
   }
 }
 
-function buildBootstrapNotes(node: NodeRecord, kind: ReleaseKind): string[] {
+function buildBootstrapRuntimeBinaries(
+  runtimeCatalog: RuntimeCatalog,
+  bootstrapOptions: BootstrapOptions,
+): RuntimeBinaryPlan[] {
+  const plans: RuntimeBinaryPlan[] = []
+  if (bootstrapOptions.installSingBox) {
+    plans.push(cloneBinaryPlan(runtimeCatalog['sing-box']))
+  }
+  if (bootstrapOptions.installXray) {
+    plans.push(cloneBinaryPlan(runtimeCatalog.xray))
+  }
+  return plans
+}
+
+function buildBootstrapNotes(node: NodeRecord, kind: ReleaseKind, bootstrapOptions: BootstrapOptions): string[] {
   const notes = [
     'The agent always applies files under /etc/nodehubsapi/runtime.',
     'Runtime services use engine-scoped systemd units: nodehubsapi-runtime-sing-box.service and nodehubsapi-runtime-xray.service.',
+    'Deploy commands always install the agent and perform mandatory network bootstrap based on the node network type.',
   ]
-  if (node.installWarp) {
-    notes.push('This node requests WARP-enabled bootstrap steps.')
+  if (node.networkType === 'public') {
+    notes.push('Public-IP nodes bootstrap TLS certificates during agent installation.')
+  } else {
+    notes.push('No-public-IP nodes bootstrap Argo during agent installation.')
   }
-  if (node.installArgo) {
-    notes.push('This node requests Argo or tunnel-related bootstrap steps.')
+  const actions = [
+    bootstrapOptions.installWarp ? 'WARP' : '',
+    bootstrapOptions.installSingBox ? 'sing-box' : '',
+    bootstrapOptions.installXray ? 'xray' : '',
+  ].filter(Boolean)
+  if (actions.length > 0) {
+    notes.push(`Selected bootstrap actions: ${actions.join(', ')}.`)
   }
   if (kind === 'bootstrap') {
     notes.push('Bootstrap revision changed. Re-run local bootstrap hooks before marking the node ready.')
@@ -1015,6 +1039,7 @@ function groupTemplatesByEngine(templates: NormalizedTemplate[]): Record<Templat
 export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: RuntimeCatalog): ReleaseArtifact {
   const normalizedTemplates = context.templates.map((template) => normalizeTemplate(context.node, template))
   const groupedTemplates = groupTemplatesByEngine(normalizedTemplates)
+  const bootstrapRuntimeBinaries = buildBootstrapRuntimeBinaries(runtimeCatalog, context.bootstrapOptions)
   const runtimes = (Object.keys(groupedTemplates) as Array<TemplateRecord['engine']>)
     .filter((engine) => groupedTemplates[engine].length > 0)
     .map((engine) => {
@@ -1061,8 +1086,6 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
       argoTunnelToken: context.node.argoTunnelToken,
       argoTunnelDomain: context.node.argoTunnelDomain,
       argoTunnelPort: context.node.argoTunnelPort,
-      installWarp: context.node.installWarp,
-      installArgo: context.node.installArgo,
     },
     templates: context.templates.map((template) => ({
       id: template.id,
@@ -1079,10 +1102,12 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
     bootstrap: {
       serviceName: 'nodehubsapi-agent',
       runtimeServiceName: 'nodehubsapi-runtime',
-      installWarp: context.node.installWarp,
-      installArgo: context.node.installArgo,
+      installWarp: context.bootstrapOptions.installWarp,
+      installSingBox: context.bootstrapOptions.installSingBox,
+      installXray: context.bootstrapOptions.installXray,
+      runtimeBinaries: bootstrapRuntimeBinaries,
       mode: context.kind === 'bootstrap' ? 'bootstrap-required' : 'runtime-only',
-      notes: buildBootstrapNotes(context.node, context.kind),
+      notes: buildBootstrapNotes(context.node, context.kind, context.bootstrapOptions),
     },
     subscriptionEndpoints: normalizedTemplates.map((template) => buildSubscriptionEntry(context.node, template)),
   }

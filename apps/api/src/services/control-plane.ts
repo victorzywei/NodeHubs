@@ -1,7 +1,9 @@
 import {
+  createNodeSchema,
   createTemplateSchema,
 } from '@contracts/index'
 import type {
+  BootstrapOptions,
   CreateNodeInput,
   CreateSubscriptionInput,
   CreateTemplateInput,
@@ -121,8 +123,17 @@ type TotalsRow = {
   bytes_out: number
 }
 
-const BOOTSTRAP_FIELDS = new Set(['nodeType', 'installWarp', 'installArgo', 'networkType', 'argoTunnelToken', 'argoTunnelDomain', 'argoTunnelPort'])
-const RUNTIME_FIELDS = new Set(['primaryDomain', 'backupDomain', 'entryIp'])
+const RUNTIME_FIELDS = new Set<string>()
+const SHARED_FIELDS = new Set(['networkType', 'primaryDomain', 'backupDomain', 'entryIp'])
+const BOOTSTRAP_ONLY_FIELDS = new Set([
+  'nodeType',
+  'githubMirrorUrl',
+  'warpLicenseKey',
+  'cfDnsToken',
+  'argoTunnelToken',
+  'argoTunnelDomain',
+  'argoTunnelPort',
+])
 
 function toBool(value: number | boolean | null | undefined): boolean {
   return value === true || value === 1
@@ -145,8 +156,6 @@ function toNodeRecord(row: NodeRow): NodeRecord {
     argoTunnelToken: row.argo_tunnel_token || '',
     argoTunnelDomain: row.argo_tunnel_domain || '',
     argoTunnelPort: Number(row.argo_tunnel_port || 2053),
-    installWarp: toBool(row.install_warp),
-    installArgo: toBool(row.install_argo),
     configRevision: Number(row.config_revision || 1),
     bootstrapRevision: Number(row.bootstrap_revision || 1),
     desiredReleaseRevision: Number(row.desired_release_revision || 0),
@@ -176,6 +185,33 @@ function toNodeRecord(row: NodeRow): NodeRecord {
   }
 }
 
+function mergeImpact(
+  current: 'none' | 'runtime' | 'bootstrap' | 'both',
+  next: 'none' | 'runtime' | 'bootstrap' | 'both',
+): 'none' | 'runtime' | 'bootstrap' | 'both' {
+  if (current === 'both' || next === 'both') return 'both'
+  if (current === 'none') return next
+  if (next === 'none') return current
+  if (current !== next) return 'both'
+  return current
+}
+
+function normalizeBootstrapOptions(kind: ReleaseKind, input?: Partial<BootstrapOptions>): BootstrapOptions {
+  if (kind !== 'bootstrap') {
+    return {
+      installWarp: false,
+      installSingBox: false,
+      installXray: false,
+    }
+  }
+
+  return {
+    installWarp: input?.installWarp === true,
+    installSingBox: input?.installSingBox === true,
+    installXray: input?.installXray === true,
+  }
+}
+
 function toTemplateRecord(row: TemplateRow): TemplateRecord {
   return {
     id: row.id,
@@ -197,6 +233,14 @@ function parseTemplateInput(input: CreateTemplateInput): CreateTemplateInput {
   const parsed = createTemplateSchema.safeParse(input)
   if (!parsed.success) {
     throw new Error(parsed.error.issues[0]?.message || 'invalid template body')
+  }
+  return parsed.data
+}
+
+function parseNodeInput(input: CreateNodeInput): CreateNodeInput {
+  const parsed = createNodeSchema.safeParse(input)
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message || 'invalid node body')
   }
   return parsed.data
 }
@@ -237,17 +281,40 @@ function isOnline(lastSeenAt: string | null): boolean {
   return Number.isFinite(lastSeen) && Date.now() - lastSeen <= ONLINE_WINDOW_MS
 }
 
-function summarizeRelease(kind: ReleaseKind, templateIds: string[], message: string): string {
-  const scope = kind === 'bootstrap' ? 'bootstrap update' : 'runtime update'
+function summarizeRelease(
+  kind: ReleaseKind,
+  templateIds: string[],
+  bootstrapOptions: BootstrapOptions,
+  message: string,
+): string {
+  if (kind === 'bootstrap') {
+    const actions = [
+      bootstrapOptions.installWarp ? 'warp' : '',
+      bootstrapOptions.installSingBox ? 'sing-box' : '',
+      bootstrapOptions.installXray ? 'xray' : '',
+    ].filter(Boolean)
+    const actionSummary = actions.length > 0 ? `actions=${actions.join(',')}` : 'actions=none'
+    return ['bootstrap update', actionSummary, message || 'no-message'].join(' | ')
+  }
+
   const templates = templateIds.length > 0 ? `templates=${templateIds.join(',')}` : 'templates=none'
-  return [scope, templates, message || 'no-message'].join(' | ')
+  return ['runtime update', templates, message || 'no-message'].join(' | ')
 }
 
-function determineNodeImpact(input: UpdateNodeInput): 'none' | 'runtime' | 'bootstrap' {
-  let impact: 'none' | 'runtime' | 'bootstrap' = 'none'
+function determineNodeImpact(input: UpdateNodeInput): 'none' | 'runtime' | 'bootstrap' | 'both' {
+  let impact: 'none' | 'runtime' | 'bootstrap' | 'both' = 'none'
   for (const key of Object.keys(input)) {
-    if (BOOTSTRAP_FIELDS.has(key)) return 'bootstrap'
-    if (RUNTIME_FIELDS.has(key)) impact = 'runtime'
+    if (SHARED_FIELDS.has(key)) {
+      impact = mergeImpact(impact, 'both')
+      continue
+    }
+    if (BOOTSTRAP_ONLY_FIELDS.has(key)) {
+      impact = mergeImpact(impact, 'bootstrap')
+      continue
+    }
+    if (RUNTIME_FIELDS.has(key)) {
+      impact = mergeImpact(impact, 'runtime')
+    }
   }
   return impact
 }
@@ -314,6 +381,7 @@ export async function deleteNode(services: AppServices, nodeId: string): Promise
 }
 
 export async function createNode(services: AppServices, input: CreateNodeInput): Promise<NodeRecord> {
+  const nextNode = parseNodeInput(input)
   const id = createId('node')
   const now = nowIso()
   await services.db.run(
@@ -328,22 +396,22 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
     [
       id,
       createToken(),
-      input.name,
-      input.nodeType,
-      input.region,
-      JSON.stringify(input.tags),
-      input.networkType,
-      input.primaryDomain,
-      input.backupDomain,
-      input.entryIp,
-      input.githubMirrorUrl,
-      input.warpLicenseKey,
-      input.cfDnsToken,
-      input.argoTunnelToken,
-      input.argoTunnelDomain,
-      input.argoTunnelPort,
-      input.installWarp ? 1 : 0,
-      input.installArgo ? 1 : 0,
+      nextNode.name,
+      nextNode.nodeType,
+      nextNode.region,
+      JSON.stringify(nextNode.tags),
+      nextNode.networkType,
+      nextNode.primaryDomain,
+      nextNode.backupDomain,
+      nextNode.entryIp,
+      nextNode.githubMirrorUrl,
+      nextNode.warpLicenseKey,
+      nextNode.cfDnsToken,
+      nextNode.argoTunnelToken,
+      nextNode.argoTunnelDomain,
+      nextNode.argoTunnelPort,
+      0,
+      0,
       1,
       1,
       0,
@@ -376,9 +444,29 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
   const current = await getNodeRow(services, nodeId)
   if (!current) return null
 
+  const nextNode = parseNodeInput({
+    name: input.name ?? current.name,
+    nodeType: (input.nodeType ?? current.node_type) as CreateNodeInput['nodeType'],
+    region: input.region ?? current.region,
+    tags: input.tags ?? parseJsonObject<string[]>(current.tags_json, []),
+    networkType: (input.networkType ?? current.network_type) as CreateNodeInput['networkType'],
+    primaryDomain: input.primaryDomain ?? current.primary_domain,
+    backupDomain: input.backupDomain ?? current.backup_domain,
+    entryIp: input.entryIp ?? current.entry_ip,
+    githubMirrorUrl: input.githubMirrorUrl ?? current.github_mirror_url,
+    warpLicenseKey: input.warpLicenseKey ?? current.warp_license_key,
+    cfDnsToken: input.cfDnsToken ?? current.cf_dns_token,
+    argoTunnelToken: input.argoTunnelToken ?? current.argo_tunnel_token,
+    argoTunnelDomain: input.argoTunnelDomain ?? current.argo_tunnel_domain,
+    argoTunnelPort: input.argoTunnelPort ?? current.argo_tunnel_port,
+  })
   const impact = determineNodeImpact(input)
-  const nextConfigRevision = impact === 'runtime' ? Number(current.config_revision || 1) + 1 : Number(current.config_revision || 1)
-  const nextBootstrapRevision = impact === 'bootstrap' ? Number(current.bootstrap_revision || 1) + 1 : Number(current.bootstrap_revision || 1)
+  const nextConfigRevision = impact === 'runtime' || impact === 'both'
+    ? Number(current.config_revision || 1) + 1
+    : Number(current.config_revision || 1)
+  const nextBootstrapRevision = impact === 'bootstrap' || impact === 'both'
+    ? Number(current.bootstrap_revision || 1) + 1
+    : Number(current.bootstrap_revision || 1)
 
   await services.db.run(
     `UPDATE nodes
@@ -392,22 +480,22 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
          config_revision = ?, bootstrap_revision = ?, updated_at = ?
      WHERE id = ?`,
     [
-      input.name ?? current.name,
-      input.nodeType ?? current.node_type,
-      input.region ?? current.region,
-      JSON.stringify(input.tags ?? parseJsonObject<string[]>(current.tags_json, [])),
-      input.networkType ?? current.network_type,
-      input.primaryDomain ?? current.primary_domain,
-      input.backupDomain ?? current.backup_domain,
-      input.entryIp ?? current.entry_ip,
-      input.githubMirrorUrl ?? current.github_mirror_url,
-      input.warpLicenseKey ?? current.warp_license_key,
-      input.cfDnsToken ?? current.cf_dns_token,
-      input.argoTunnelToken ?? current.argo_tunnel_token,
-      input.argoTunnelDomain ?? current.argo_tunnel_domain,
-      input.argoTunnelPort ?? current.argo_tunnel_port,
-      input.installWarp === undefined ? current.install_warp : (input.installWarp ? 1 : 0),
-      input.installArgo === undefined ? current.install_argo : (input.installArgo ? 1 : 0),
+      nextNode.name,
+      nextNode.nodeType,
+      nextNode.region,
+      JSON.stringify(nextNode.tags),
+      nextNode.networkType,
+      nextNode.primaryDomain,
+      nextNode.backupDomain,
+      nextNode.entryIp,
+      nextNode.githubMirrorUrl,
+      nextNode.warpLicenseKey,
+      nextNode.cfDnsToken,
+      nextNode.argoTunnelToken,
+      nextNode.argoTunnelDomain,
+      nextNode.argoTunnelPort,
+      current.install_warp,
+      current.install_argo,
       input.bytesInTotal ?? current.bytes_in_total,
       input.bytesOutTotal ?? current.bytes_out_total,
       input.currentConnections ?? current.current_connections,
@@ -563,11 +651,13 @@ export async function publishNodeRelease(
   nodeId: string,
   kind: ReleaseKind,
   templateIds: string[],
+  bootstrapOptionsInput: BootstrapOptions,
   message: string,
 ): Promise<ReleaseRecord | null> {
   const node = await getNodeById(services, nodeId)
   if (!node) return null
 
+  const bootstrapOptions = normalizeBootstrapOptions(kind, bootstrapOptionsInput)
   const uniqueTemplateIds = uniqueIds(templateIds)
   const templateRows = await getTemplateRows(services, uniqueTemplateIds)
   if (uniqueTemplateIds.length !== templateRows.length) {
@@ -576,13 +666,16 @@ export async function publishNodeRelease(
   if (kind === 'runtime' && templateRows.length === 0) {
     throw new Error('Runtime releases require at least one protocol template')
   }
+  if (kind === 'bootstrap' && !bootstrapOptions.installWarp && !bootstrapOptions.installSingBox && !bootstrapOptions.installXray) {
+    throw new Error('Bootstrap releases require at least one selected action')
+  }
 
   const reserved = await reserveNodeReleaseSlot(services, nodeId)
   if (!reserved) return null
 
   const releaseId = createId('rel')
   const artifactKey = `releases/${nodeId}/r${reserved.revision}.json`
-  const summary = summarizeRelease(kind, uniqueTemplateIds, message)
+  const summary = summarizeRelease(kind, uniqueTemplateIds, bootstrapOptions, message)
 
   try {
     const artifact = renderReleaseArtifact({
@@ -600,6 +693,7 @@ export async function publishNodeRelease(
         currentReleaseStatus: 'pending',
       },
       templates: templateRows.map(toTemplateRecord),
+      bootstrapOptions,
     }, services.runtimeCatalog)
     const stored = await services.artifacts.putJson(artifactKey, artifact)
 
@@ -650,11 +744,13 @@ export async function previewNodeRelease(
   nodeId: string,
   kind: ReleaseKind,
   templateIds: string[],
+  bootstrapOptionsInput: BootstrapOptions,
   message: string,
 ): Promise<ReleasePreviewRecord | null> {
   const node = await getNodeById(services, nodeId)
   if (!node) return null
 
+  const bootstrapOptions = normalizeBootstrapOptions(kind, bootstrapOptionsInput)
   const uniqueTemplateIds = uniqueIds(templateIds)
   const templateRows = await getTemplateRows(services, uniqueTemplateIds)
   if (uniqueTemplateIds.length !== templateRows.length) {
@@ -663,10 +759,13 @@ export async function previewNodeRelease(
   if (kind === 'runtime' && templateRows.length === 0) {
     throw new Error('Runtime releases require at least one protocol template')
   }
+  if (kind === 'bootstrap' && !bootstrapOptions.installWarp && !bootstrapOptions.installSingBox && !bootstrapOptions.installXray) {
+    throw new Error('Bootstrap releases require at least one selected action')
+  }
 
   const previewRevision = Number(node.desiredReleaseRevision || 0) + 1
   const createdAt = nowIso()
-  const summary = summarizeRelease(kind, uniqueTemplateIds, message)
+  const summary = summarizeRelease(kind, uniqueTemplateIds, bootstrapOptions, message)
   const artifact = renderReleaseArtifact(
     {
       releaseId: createId('preview'),
@@ -683,6 +782,7 @@ export async function previewNodeRelease(
         currentReleaseStatus: 'pending',
       },
       templates: templateRows.map(toTemplateRecord),
+      bootstrapOptions,
     },
     services.runtimeCatalog,
   )
@@ -695,6 +795,7 @@ export async function previewNodeRelease(
       files: runtime.files,
     })),
     templateIds: uniqueTemplateIds,
+    bootstrap: artifact.bootstrap,
   }
 }
 
@@ -805,13 +906,35 @@ export async function resolveAgentNode(services: AppServices, nodeId: string, to
 export async function getNodeInstallTarget(
   services: AppServices,
   nodeId: string,
-): Promise<{ id: string; name: string; agentToken: string } | null> {
+): Promise<{
+  id: string
+  name: string
+  agentToken: string
+  networkType: NodeRecord['networkType']
+  primaryDomain: string
+  backupDomain: string
+  entryIp: string
+  githubMirrorUrl: string
+  cfDnsToken: string
+  argoTunnelToken: string
+  argoTunnelDomain: string
+  argoTunnelPort: number
+} | null> {
   const row = await getNodeRow(services, nodeId)
   if (!row) return null
   return {
     id: row.id,
     name: row.name,
     agentToken: row.agent_token,
+    networkType: (row.network_type as NodeRecord['networkType']) || 'public',
+    primaryDomain: row.primary_domain || '',
+    backupDomain: row.backup_domain || '',
+    entryIp: row.entry_ip || '',
+    githubMirrorUrl: row.github_mirror_url || '',
+    cfDnsToken: row.cf_dns_token || '',
+    argoTunnelToken: row.argo_tunnel_token || '',
+    argoTunnelDomain: row.argo_tunnel_domain || '',
+    argoTunnelPort: Number(row.argo_tunnel_port || 2053),
   }
 }
 

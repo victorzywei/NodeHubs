@@ -75,7 +75,7 @@ function createServices(): AppServices {
   const db = new DatabaseSync(':memory:')
   applyMigrations(db)
   return {
-    appVersion: '0.1.2',
+    appVersion: '0.1.3',
     mode: 'docker',
     dbDriver: 'sqlite',
     artifactDriver: 'minio',
@@ -126,11 +126,20 @@ describe('control-plane release flow', () => {
       argoTunnelToken: '',
       argoTunnelDomain: '',
       argoTunnelPort: 2053,
-      installWarp: false,
-      installArgo: false,
     })
     const template = await createTemplate(services, createValidTemplateInput())
-    const release = await publishNodeRelease(services, node.id, 'runtime', [template.id], 'ship')
+    const release = await publishNodeRelease(
+      services,
+      node.id,
+      'runtime',
+      [template.id],
+      {
+        installWarp: false,
+        installSingBox: false,
+        installXray: false,
+      },
+      'ship',
+    )
     expect(release).toBeTruthy()
     expect(release?.status).toBe('pending')
 

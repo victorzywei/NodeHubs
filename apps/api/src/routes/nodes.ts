@@ -84,7 +84,14 @@ nodeRoutes.post('/:id/releases/preview', async (c) => {
   if (!parsed.success) return fail('VALIDATION', parsed.error.issues[0]?.message || 'invalid preview body', 400)
   let preview = null
   try {
-    preview = await previewNodeRelease(c.get('services'), c.req.param('id'), parsed.data.kind, parsed.data.templateIds, parsed.data.message)
+    preview = await previewNodeRelease(
+      c.get('services'),
+      c.req.param('id'),
+      parsed.data.kind,
+      parsed.data.templateIds,
+      parsed.data.bootstrapOptions,
+      parsed.data.message,
+    )
   } catch (error) {
     return fail('PREVIEW_FAILED', error instanceof Error ? error.message : 'Failed to render release preview', 400)
   }
@@ -100,7 +107,14 @@ nodeRoutes.post('/:id/releases', async (c) => {
   if (!parsed.success) return fail('VALIDATION', parsed.error.issues[0]?.message || 'invalid publish body', 400)
   let release = null
   try {
-    release = await publishNodeRelease(c.get('services'), c.req.param('id'), parsed.data.kind, parsed.data.templateIds, parsed.data.message)
+    release = await publishNodeRelease(
+      c.get('services'),
+      c.req.param('id'),
+      parsed.data.kind,
+      parsed.data.templateIds,
+      parsed.data.bootstrapOptions,
+      parsed.data.message,
+    )
   } catch (error) {
     return fail('PUBLISH_FAILED', error instanceof Error ? error.message : 'Failed to publish node release', 400)
   }
@@ -127,6 +141,15 @@ nodeRoutes.get('/agent/install', async (c) => {
     publicBaseUrl: c.get('services').publicBaseUrl,
     nodeId: nodeRow.id,
     agentToken: nodeRow.agent_token,
+    networkType: (nodeRow.network_type as 'public' | 'noPublicIp') || 'public',
+    primaryDomain: nodeRow.primary_domain || '',
+    backupDomain: nodeRow.backup_domain || '',
+    entryIp: nodeRow.entry_ip || '',
+    githubMirrorUrl: nodeRow.github_mirror_url || '',
+    cfDnsToken: nodeRow.cf_dns_token || '',
+    argoTunnelToken: nodeRow.argo_tunnel_token || '',
+    argoTunnelDomain: nodeRow.argo_tunnel_domain || '',
+    argoTunnelPort: Number(nodeRow.argo_tunnel_port || 2053),
   })
   return new Response(script, {
     status: 200,
@@ -147,6 +170,15 @@ nodeRoutes.get('/:id/install-script', async (c) => {
     publicBaseUrl: c.get('services').publicBaseUrl,
     nodeId: target.id,
     agentToken: target.agentToken,
+    networkType: target.networkType,
+    primaryDomain: target.primaryDomain,
+    backupDomain: target.backupDomain,
+    entryIp: target.entryIp,
+    githubMirrorUrl: target.githubMirrorUrl,
+    cfDnsToken: target.cfDnsToken,
+    argoTunnelToken: target.argoTunnelToken,
+    argoTunnelDomain: target.argoTunnelDomain,
+    argoTunnelPort: target.argoTunnelPort,
   })
   return new Response(script, {
     status: 200,
