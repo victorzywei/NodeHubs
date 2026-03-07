@@ -75,7 +75,7 @@ function createServices(): AppServices {
   const db = new DatabaseSync(':memory:')
   applyMigrations(db)
   return {
-    appVersion: '0.1.3',
+    appVersion: '0.1.5',
     mode: 'docker',
     dbDriver: 'sqlite',
     artifactDriver: 'minio',
@@ -121,7 +121,6 @@ describe('control-plane release flow', () => {
       backupDomain: '',
       entryIp: '203.0.113.10',
       githubMirrorUrl: '',
-      warpLicenseKey: '',
       cfDnsToken: '',
       argoTunnelToken: '',
       argoTunnelDomain: '',
@@ -135,6 +134,9 @@ describe('control-plane release flow', () => {
       [template.id],
       {
         installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
         installSingBox: false,
         installXray: false,
       },
@@ -154,6 +156,44 @@ describe('control-plane release flow', () => {
     const latestNode = await getNodeById(services, node.id)
     expect(latestNode?.desiredReleaseRevision).toBe(latestNode?.currentReleaseRevision)
     expect(latestNode?.currentReleaseStatus).toBe('failed')
+  })
+
+  it('allows bootstrap releases that only change heartbeat and pull schedules', async () => {
+    const services = createServices()
+    const node = await createNode(services, {
+      name: 'Node B',
+      nodeType: 'vps',
+      region: 'ap-sg',
+      tags: [],
+      networkType: 'public',
+      primaryDomain: 'edge2.example.com',
+      backupDomain: '',
+      entryIp: '203.0.113.11',
+      githubMirrorUrl: '',
+      cfDnsToken: '',
+      argoTunnelToken: '',
+      argoTunnelDomain: '',
+      argoTunnelPort: 2053,
+    })
+
+    const release = await publishNodeRelease(
+      services,
+      node.id,
+      'bootstrap',
+      [],
+      {
+        installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 30,
+        versionPullIntervalSeconds: 90,
+        installSingBox: false,
+        installXray: false,
+      },
+      'tune schedules',
+    )
+
+    expect(release).toBeTruthy()
+    expect(release?.summary).toContain('heartbeat=30s,pull=90s')
   })
 })
 

@@ -26,6 +26,8 @@ function createNode(): NodeRecord {
     currentReleaseRevision: 1,
     currentReleaseStatus: 'healthy',
     lastSeenAt: null,
+    heartbeatIntervalSeconds: 15,
+    versionPullIntervalSeconds: 15,
     cpuUsagePercent: null,
     memoryUsagePercent: null,
     bytesInTotal: 0,
@@ -76,6 +78,9 @@ describe('release renderer', () => {
       templates: [createTemplate()],
       bootstrapOptions: {
         installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
         installSingBox: false,
         installXray: false,
       },
@@ -107,6 +112,9 @@ describe('release renderer', () => {
       templates: [createTemplate()],
       bootstrapOptions: {
         installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
         installSingBox: false,
         installXray: false,
       },
@@ -166,6 +174,9 @@ describe('release renderer', () => {
       templates: [invalidTemplate],
       bootstrapOptions: {
         installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
         installSingBox: false,
         installXray: false,
       },
@@ -202,6 +213,9 @@ describe('release renderer', () => {
       templates: [createTemplate(), xrayTemplate],
       bootstrapOptions: {
         installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
         installSingBox: false,
         installXray: false,
       },
@@ -238,6 +252,9 @@ describe('release renderer', () => {
       ],
       bootstrapOptions: {
         installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
         installSingBox: false,
         installXray: false,
       },
@@ -267,14 +284,21 @@ describe('release renderer', () => {
       templates: [],
       bootstrapOptions: {
         installWarp: true,
+        warpLicenseKey: 'warp-license-inline',
+        heartbeatIntervalSeconds: 20,
+        versionPullIntervalSeconds: 45,
         installSingBox: true,
         installXray: true,
       },
     }, runtimeCatalog)
 
     expect(artifact.bootstrap.installWarp).toBe(true)
+    expect(artifact.bootstrap.warpLicenseKey).toBe('warp-license-inline')
+    expect(artifact.bootstrap.heartbeatIntervalSeconds).toBe(20)
+    expect(artifact.bootstrap.versionPullIntervalSeconds).toBe(45)
     expect(artifact.bootstrap.installSingBox).toBe(true)
     expect(artifact.bootstrap.installXray).toBe(true)
     expect(artifact.bootstrap.runtimeBinaries.map((item) => item.engine).sort()).toEqual(['sing-box', 'xray'])
   })
 })
+

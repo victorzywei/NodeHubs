@@ -27,6 +27,8 @@ function createNode(): NodeRecord {
     currentReleaseRevision: 1,
     currentReleaseStatus: 'healthy',
     lastSeenAt: null,
+    heartbeatIntervalSeconds: 15,
+    versionPullIntervalSeconds: 15,
     cpuUsagePercent: null,
     memoryUsagePercent: null,
     bytesInTotal: 0,
@@ -98,6 +100,8 @@ describe('agent install scripts', () => {
     expect(script).toContain("NODE_NETWORK_TYPE='public'")
     expect(script).toContain('run_network_bootstrap')
     expect(script).toContain('ensure_tls_certificate')
+    expect(script).toContain('HEARTBEAT_INTERVAL_SECONDS=15')
+    expect(script).toContain('VERSION_PULL_INTERVAL_SECONDS=15')
     expect(script).toContain("cat >\"$AGENT_BIN\" <<'NODESHUB_AGENT_BIN_EOF'")
     expect(script).toContain('ensure_downloader() {')
     expect(script).toContain('self_update_if_needed')
@@ -139,6 +143,9 @@ describe('agent install scripts', () => {
       templates: [createTemplate()],
       bootstrapOptions: {
         installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
         installSingBox: false,
         installXray: false,
       },
@@ -153,6 +160,9 @@ describe('agent install scripts', () => {
     expect(script).toContain('systemctl stop nodehubsapi-runtime-sing-box.service nodehubsapi-runtime-xray.service')
     expect(script).toContain('RUNTIME_CONFIG_PATH="${ETC_DIR}/runtime/sing-box.json"')
     expect(script).toContain('refresh_agent_installation_if_needed')
+    expect(script).toContain('apply_agent_schedule_settings')
+    expect(script).toContain('BOOTSTRAP_HEARTBEAT_INTERVAL_SECONDS=')
+    expect(script).toContain('BOOTSTRAP_VERSION_PULL_INTERVAL_SECONDS=')
     expect(script).toContain('schedule_agent_restart_if_needed')
     expect(script).toContain('if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then')
     expect(script).toContain('apply_bootstrap_runtime_binaries')
@@ -173,6 +183,9 @@ describe('agent install scripts', () => {
       templates: [],
       bootstrapOptions: {
         installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 30,
+        versionPullIntervalSeconds: 90,
         installSingBox: true,
         installXray: true,
       },
@@ -182,6 +195,9 @@ describe('agent install scripts', () => {
 
     expect(script).toContain('BOOTSTRAP_INSTALL_SING_BOX=1')
     expect(script).toContain('BOOTSTRAP_INSTALL_XRAY=1')
+    expect(script).toContain("BOOTSTRAP_HEARTBEAT_INTERVAL_SECONDS='30'")
+    expect(script).toContain("BOOTSTRAP_VERSION_PULL_INTERVAL_SECONDS='90'")
+    expect(script).toContain("NODE_WARP_LICENSE_KEY=''")
     expect(script).toContain("RUNTIME_BINARY_NAME='sing-box'")
     expect(script).toContain("RUNTIME_BINARY_NAME='xray'")
   })

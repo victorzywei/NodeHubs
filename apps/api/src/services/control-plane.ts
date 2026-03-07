@@ -52,6 +52,8 @@ type NodeRow = {
   current_release_revision: number
   current_release_status: string
   last_seen_at: string | null
+  heartbeat_interval_seconds: number
+  version_pull_interval_seconds: number
   cpu_usage_percent: number | null
   memory_usage_percent: number | null
   bytes_in_total: number
@@ -128,7 +130,6 @@ const SHARED_FIELDS = new Set(['networkType', 'primaryDomain', 'backupDomain', '
 const BOOTSTRAP_ONLY_FIELDS = new Set([
   'nodeType',
   'githubMirrorUrl',
-  'warpLicenseKey',
   'cfDnsToken',
   'argoTunnelToken',
   'argoTunnelDomain',
@@ -162,6 +163,8 @@ function toNodeRecord(row: NodeRow): NodeRecord {
     currentReleaseRevision: Number(row.current_release_revision || 0),
     currentReleaseStatus: String(row.current_release_status || 'idle') as NodeRecord['currentReleaseStatus'],
     lastSeenAt: row.last_seen_at,
+    heartbeatIntervalSeconds: Number(row.heartbeat_interval_seconds || 15),
+    versionPullIntervalSeconds: Number(row.version_pull_interval_seconds || 15),
     cpuUsagePercent: row.cpu_usage_percent === null ? null : Number(row.cpu_usage_percent),
     memoryUsagePercent: row.memory_usage_percent === null ? null : Number(row.memory_usage_percent),
     bytesInTotal: Number(row.bytes_in_total || 0),
@@ -200,16 +203,39 @@ function normalizeBootstrapOptions(kind: ReleaseKind, input?: Partial<BootstrapO
   if (kind !== 'bootstrap') {
     return {
       installWarp: false,
+      warpLicenseKey: '',
+      heartbeatIntervalSeconds: 15,
+      versionPullIntervalSeconds: 15,
       installSingBox: false,
       installXray: false,
     }
   }
 
+  const normalizeInterval = (value: unknown, fallback: number): number => {
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed)) return fallback
+    return Math.max(5, Math.min(3600, Math.trunc(parsed)))
+  }
+
   return {
     installWarp: input?.installWarp === true,
+    warpLicenseKey: input?.installWarp === true ? String(input?.warpLicenseKey || '').trim() : '',
+    heartbeatIntervalSeconds: normalizeInterval(input?.heartbeatIntervalSeconds, 15),
+    versionPullIntervalSeconds: normalizeInterval(input?.versionPullIntervalSeconds, 15),
     installSingBox: input?.installSingBox === true,
     installXray: input?.installXray === true,
   }
+}
+
+function hasBootstrapWork(
+  node: Pick<NodeRecord, 'heartbeatIntervalSeconds' | 'versionPullIntervalSeconds'>,
+  bootstrapOptions: BootstrapOptions,
+): boolean {
+  return bootstrapOptions.installWarp
+    || bootstrapOptions.installSingBox
+    || bootstrapOptions.installXray
+    || bootstrapOptions.heartbeatIntervalSeconds !== Number(node.heartbeatIntervalSeconds || 15)
+    || bootstrapOptions.versionPullIntervalSeconds !== Number(node.versionPullIntervalSeconds || 15)
 }
 
 function toTemplateRecord(row: TemplateRow): TemplateRecord {
@@ -294,7 +320,8 @@ function summarizeRelease(
       bootstrapOptions.installXray ? 'xray' : '',
     ].filter(Boolean)
     const actionSummary = actions.length > 0 ? `actions=${actions.join(',')}` : 'actions=none'
-    return ['bootstrap update', actionSummary, message || 'no-message'].join(' | ')
+    const scheduleSummary = `heartbeat=${bootstrapOptions.heartbeatIntervalSeconds}s,pull=${bootstrapOptions.versionPullIntervalSeconds}s`
+    return ['bootstrap update', actionSummary, scheduleSummary, message || 'no-message'].join(' | ')
   }
 
   const templates = templateIds.length > 0 ? `templates=${templateIds.join(',')}` : 'templates=none'
@@ -389,10 +416,10 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       id, agent_token, name, node_type, region, tags_json, network_type, primary_domain, backup_domain, entry_ip,
       github_mirror_url, warp_license_key, cf_dns_token, argo_tunnel_token, argo_tunnel_domain, argo_tunnel_port,
       install_warp, install_argo, config_revision, bootstrap_revision, desired_release_revision,
-      current_release_revision, current_release_status, bytes_in_total, bytes_out_total,
+      current_release_revision, current_release_status, heartbeat_interval_seconds, version_pull_interval_seconds, bytes_in_total, bytes_out_total,
       current_connections, warp_status, warp_ipv6, warp_endpoint, warp_private_key, warp_reserved_json, argo_status, argo_domain,
       storage_total_bytes, storage_used_bytes, storage_usage_percent, protocol_runtime_version, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       createToken(),
@@ -405,7 +432,7 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       nextNode.backupDomain,
       nextNode.entryIp,
       nextNode.githubMirrorUrl,
-      nextNode.warpLicenseKey,
+      '',
       nextNode.cfDnsToken,
       nextNode.argoTunnelToken,
       nextNode.argoTunnelDomain,
@@ -417,6 +444,8 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       0,
       0,
       'idle',
+      15,
+      15,
       0,
       0,
       0,
@@ -454,7 +483,6 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
     backupDomain: input.backupDomain ?? current.backup_domain,
     entryIp: input.entryIp ?? current.entry_ip,
     githubMirrorUrl: input.githubMirrorUrl ?? current.github_mirror_url,
-    warpLicenseKey: input.warpLicenseKey ?? current.warp_license_key,
     cfDnsToken: input.cfDnsToken ?? current.cf_dns_token,
     argoTunnelToken: input.argoTunnelToken ?? current.argo_tunnel_token,
     argoTunnelDomain: input.argoTunnelDomain ?? current.argo_tunnel_domain,
@@ -476,7 +504,7 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
          cpu_usage_percent = ?, memory_usage_percent = ?, warp_status = ?, warp_ipv6 = ?, warp_endpoint = ?,
          warp_private_key = ?, warp_reserved_json = ?,
          argo_status = ?, argo_domain = ?, storage_total_bytes = ?, storage_used_bytes = ?, storage_usage_percent = ?,
-         protocol_runtime_version = ?, last_seen_at = ?,
+         protocol_runtime_version = ?, last_seen_at = ?, heartbeat_interval_seconds = ?, version_pull_interval_seconds = ?,
          config_revision = ?, bootstrap_revision = ?, updated_at = ?
      WHERE id = ?`,
     [
@@ -489,7 +517,7 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       nextNode.backupDomain,
       nextNode.entryIp,
       nextNode.githubMirrorUrl,
-      nextNode.warpLicenseKey,
+      current.warp_license_key,
       nextNode.cfDnsToken,
       nextNode.argoTunnelToken,
       nextNode.argoTunnelDomain,
@@ -513,6 +541,8 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       input.storageUsagePercent ?? current.storage_usage_percent ?? null,
       input.protocolRuntimeVersion ?? current.protocol_runtime_version,
       input.lastSeenAt ?? current.last_seen_at,
+      current.heartbeat_interval_seconds ?? 15,
+      current.version_pull_interval_seconds ?? 15,
       nextConfigRevision,
       nextBootstrapRevision,
       nowIso(),
@@ -666,8 +696,8 @@ export async function publishNodeRelease(
   if (kind === 'runtime' && templateRows.length === 0) {
     throw new Error('Runtime releases require at least one protocol template')
   }
-  if (kind === 'bootstrap' && !bootstrapOptions.installWarp && !bootstrapOptions.installSingBox && !bootstrapOptions.installXray) {
-    throw new Error('Bootstrap releases require at least one selected action')
+  if (kind === 'bootstrap' && !hasBootstrapWork(node, bootstrapOptions)) {
+    throw new Error('Bootstrap releases require at least one selected action or a schedule change')
   }
 
   const reserved = await reserveNodeReleaseSlot(services, nodeId)
@@ -759,8 +789,8 @@ export async function previewNodeRelease(
   if (kind === 'runtime' && templateRows.length === 0) {
     throw new Error('Runtime releases require at least one protocol template')
   }
-  if (kind === 'bootstrap' && !bootstrapOptions.installWarp && !bootstrapOptions.installSingBox && !bootstrapOptions.installXray) {
-    throw new Error('Bootstrap releases require at least one selected action')
+  if (kind === 'bootstrap' && !hasBootstrapWork(node, bootstrapOptions)) {
+    throw new Error('Bootstrap releases require at least one selected action or a schedule change')
   }
 
   const previewRevision = Number(node.desiredReleaseRevision || 0) + 1
@@ -820,6 +850,8 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
   const nextStorageTotalBytes = input.storageTotalBytes === undefined ? null : input.storageTotalBytes
   const nextStorageUsedBytes = input.storageUsedBytes === undefined ? null : input.storageUsedBytes
   const nextStorageUsagePercent = input.storageUsagePercent === undefined ? null : input.storageUsagePercent
+  const nextHeartbeatIntervalSeconds = input.heartbeatIntervalSeconds === undefined ? null : input.heartbeatIntervalSeconds
+  const nextVersionPullIntervalSeconds = input.versionPullIntervalSeconds === undefined ? null : input.versionPullIntervalSeconds
   await services.db.run(
     `UPDATE nodes
      SET bytes_in_total = ?, bytes_out_total = ?, current_connections = ?, cpu_usage_percent = ?, memory_usage_percent = ?,
@@ -828,6 +860,8 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
          argo_status = coalesce(?, argo_status), argo_domain = coalesce(?, argo_domain),
          storage_total_bytes = coalesce(?, storage_total_bytes), storage_used_bytes = coalesce(?, storage_used_bytes),
          storage_usage_percent = coalesce(?, storage_usage_percent),
+         heartbeat_interval_seconds = coalesce(?, heartbeat_interval_seconds),
+         version_pull_interval_seconds = coalesce(?, version_pull_interval_seconds),
          protocol_runtime_version = ?, last_seen_at = ?, updated_at = ?
      WHERE id = ?`,
     [
@@ -846,6 +880,8 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
       nextStorageTotalBytes,
       nextStorageUsedBytes,
       nextStorageUsagePercent,
+      nextHeartbeatIntervalSeconds,
+      nextVersionPullIntervalSeconds,
       input.protocolRuntimeVersion,
       now,
       now,

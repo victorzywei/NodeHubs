@@ -258,18 +258,21 @@ GITHUB_MIRROR_URL=${shellQuote(artifact.node.githubMirrorUrl || '')}
 BOOTSTRAP_INSTALL_WARP=${artifact.bootstrap.installWarp ? '1' : '0'}
 BOOTSTRAP_INSTALL_SING_BOX=${artifact.bootstrap.installSingBox ? '1' : '0'}
 BOOTSTRAP_INSTALL_XRAY=${artifact.bootstrap.installXray ? '1' : '0'}
+BOOTSTRAP_HEARTBEAT_INTERVAL_SECONDS=${shellQuote(String(artifact.bootstrap.heartbeatIntervalSeconds || 15))}
+BOOTSTRAP_VERSION_PULL_INTERVAL_SECONDS=${shellQuote(String(artifact.bootstrap.versionPullIntervalSeconds || 15))}
 BOOTSTRAP_RUNTIME_BINARY_COUNT=${bootstrapBinaryCount}
 BOOTSTRAP_NEEDS_CERTS=${tlsTemplates.length > 0 ? '1' : '0'}
 BOOTSTRAP_CERT_PATH=${shellQuote(bootstrapCertPath)}
 BOOTSTRAP_KEY_PATH=${shellQuote(bootstrapKeyPath)}
 BOOTSTRAP_PRIMARY_TLS_DOMAIN=${shellQuote(tlsDomains[0] || '')}
 NODE_CF_DNS_TOKEN=${shellQuote(artifact.node.cfDnsToken || '')}
-NODE_WARP_LICENSE_KEY=${shellQuote(artifact.node.warpLicenseKey || '')}
+NODE_WARP_LICENSE_KEY=${shellQuote(artifact.bootstrap.warpLicenseKey || '')}
 NODE_ARGO_TUNNEL_TOKEN=${shellQuote(artifact.node.argoTunnelToken || '')}
 NODE_ARGO_TUNNEL_DOMAIN=${shellQuote(artifact.node.argoTunnelDomain || '')}
 NODE_ARGO_ORIGIN_PORT=${shellQuote(argoOriginPort)}
 CONTROL_PLANE_AGENT_VERSION=${shellQuote(APP_VERSION)}
 AGENT_UPGRADED=0
+AGENT_RESTART_REQUIRED=0
 ${bootstrapTlsDomains}
 
 json_escape() {
@@ -459,7 +462,7 @@ refresh_agent_installation_if_needed() {
 }
 
 schedule_agent_restart_if_needed() {
-  if [ "$AGENT_UPGRADED" != "1" ]; then
+  if [ "$AGENT_UPGRADED" != "1" ] && [ "$AGENT_RESTART_REQUIRED" != "1" ]; then
     return 0
   fi
   if [ "$USE_SYSTEMD" = "1" ]; then
@@ -1283,6 +1286,37 @@ apply_runtime_plans() {
 ${runtimeApplyBlocks}
 }
 
+upsert_env_value() {
+  local key="$1"
+  local value="$2"
+  local env_file="$ETC_DIR/agent.env"
+  local tmp_file
+  mkdir -p "$(dirname "$env_file")"
+  if [ ! -f "$env_file" ]; then
+    printf '%s=%s\n' "$key" "$value" >"$env_file"
+    return 0
+  fi
+  tmp_file="$(mktemp)"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { updated = 0 }
+    index($0, key "=") == 1 { print key "=" value; updated = 1; next }
+    { print }
+    END { if (!updated) print key "=" value }
+  ' "$env_file" >"$tmp_file"
+  mv "$tmp_file" "$env_file"
+}
+
+apply_agent_schedule_settings() {
+  if [ "$RELEASE_KIND" != "bootstrap" ]; then
+    return 0
+  fi
+  upsert_env_value "HEARTBEAT_INTERVAL_SECONDS" "$BOOTSTRAP_HEARTBEAT_INTERVAL_SECONDS"
+  upsert_env_value "VERSION_PULL_INTERVAL_SECONDS" "$BOOTSTRAP_VERSION_PULL_INTERVAL_SECONDS"
+  HEARTBEAT_INTERVAL_SECONDS="$BOOTSTRAP_HEARTBEAT_INTERVAL_SECONDS"
+  VERSION_PULL_INTERVAL_SECONDS="$BOOTSTRAP_VERSION_PULL_INTERVAL_SECONDS"
+  AGENT_RESTART_REQUIRED=1
+}
+
 apply_bootstrap_runtime_binaries() {
   if [ "$BOOTSTRAP_RUNTIME_BINARY_COUNT" -le 0 ]; then
     return 0
@@ -1338,6 +1372,7 @@ main() {
   if [ "$RELEASE_KIND" = "bootstrap" ]; then
     apply_bootstrap_runtime_binaries
   fi
+  apply_agent_schedule_settings
   run_hooks "$ETC_DIR/hooks/post-apply.d"
   ack_release "healthy" "release applied"
   schedule_agent_restart_if_needed
@@ -1399,7 +1434,10 @@ SYSTEMD_WANTED_BY="multi-user.target"
 SYSTEMD_DIR=""
 USE_SYSTEMD=0
 INSTALL_MODE=""
-POLL_INTERVAL=15
+HEARTBEAT_INTERVAL_SECONDS_DEFAULT=15
+VERSION_PULL_INTERVAL_SECONDS_DEFAULT=15
+HEARTBEAT_INTERVAL_SECONDS=15
+VERSION_PULL_INTERVAL_SECONDS=15
 BOOTSTRAP_CERT_PATH=""
 BOOTSTRAP_KEY_PATH=""
 TMP_DIR=""
@@ -1860,8 +1898,24 @@ run_network_bootstrap() {
   ensure_argo_bootstrap
 }
 
+read_existing_env_value() {
+  local key="$1"
+  local fallback="$2"
+  local current=""
+  if [ -f "$AGENT_ENV_FILE" ]; then
+    current="$(awk -F '=' -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$AGENT_ENV_FILE")"
+  fi
+  if [ -n "$current" ]; then
+    printf '%s' "$current"
+    return 0
+  fi
+  printf '%s' "$fallback"
+}
+
 write_agent_env() {
   mkdir -p "$STATE_DIR/releases" "$STATE_DIR/runtime" "$STATE_DIR/lego" "$STATE_DIR/argo" "$ETC_DIR/certs" "$ETC_DIR/hooks/pre-apply.d" "$ETC_DIR/hooks/post-apply.d" "$ETC_DIR/hooks/bootstrap.d"
+  HEARTBEAT_INTERVAL_SECONDS="$(read_existing_env_value HEARTBEAT_INTERVAL_SECONDS "$HEARTBEAT_INTERVAL_SECONDS_DEFAULT")"
+  VERSION_PULL_INTERVAL_SECONDS="$(read_existing_env_value VERSION_PULL_INTERVAL_SECONDS "$VERSION_PULL_INTERVAL_SECONDS_DEFAULT")"
   cat >"$AGENT_ENV_FILE" <<EOF
 API_BASE=$API_BASE
 NODE_ID=$NODE_ID
@@ -1888,7 +1942,8 @@ SYSTEMCTL_USER_FLAG=$SYSTEMCTL_USER_FLAG
 WARP_BIN_PATH=$WARP_BIN_PATH
 CLOUDFLARED_BIN_PATH=$CLOUDFLARED_BIN_PATH
 NODESHUB_AGENT_ENV_FILE=$AGENT_ENV_FILE
-POLL_INTERVAL=$POLL_INTERVAL
+HEARTBEAT_INTERVAL_SECONDS=$HEARTBEAT_INTERVAL_SECONDS
+VERSION_PULL_INTERVAL_SECONDS=$VERSION_PULL_INTERVAL_SECONDS
 EOF
 }
 
@@ -1897,20 +1952,58 @@ write_agent_binary() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ -n "\${NODESHUB_AGENT_ENV_FILE:-}" ] && [ -f "$NODESHUB_AGENT_ENV_FILE" ]; then
-  . "$NODESHUB_AGENT_ENV_FILE"
-elif [ -f /etc/nodehubsapi/agent.env ]; then
-  . /etc/nodehubsapi/agent.env
-elif [ -f "$HOME/.config/nodehubsapi/agent.env" ]; then
-  . "$HOME/.config/nodehubsapi/agent.env"
-else
+discover_agent_env_file() {
+  if [ -n "\${NODESHUB_AGENT_ENV_FILE:-}" ] && [ -f "$NODESHUB_AGENT_ENV_FILE" ]; then
+    printf '%s' "$NODESHUB_AGENT_ENV_FILE"
+    return 0
+  fi
+  if [ -f /etc/nodehubsapi/agent.env ]; then
+    printf '%s' /etc/nodehubsapi/agent.env
+    return 0
+  fi
+  if [ -f "$HOME/.config/nodehubsapi/agent.env" ]; then
+    printf '%s' "$HOME/.config/nodehubsapi/agent.env"
+    return 0
+  fi
+  return 1
+}
+
+normalize_interval() {
+  local value="$1"
+  local fallback="$2"
+  case "$value" in
+    ''|*[!0-9]*)
+    printf '%s' "$fallback"
+    return 0
+    ;;
+  esac
+  if [ "$value" -lt 5 ]; then
+    printf '5'
+    return 0
+  fi
+  if [ "$value" -gt 3600 ]; then
+    printf '3600'
+    return 0
+  fi
+  printf '%s' "$value"
+}
+
+AGENT_ENV_FILE="$(discover_agent_env_file)" || {
   echo "agent.env not found." >&2
   exit 1
-fi
+}
 
-RUNTIME_BIN_DIR="\${RUNTIME_BIN_DIR:-/usr/local/bin}"
-WARP_BIN_PATH="\${WARP_BIN_PATH:-$RUNTIME_BIN_DIR/warp-go}"
-CLOUDFLARED_BIN_PATH="\${CLOUDFLARED_BIN_PATH:-$RUNTIME_BIN_DIR/cloudflared}"
+load_agent_env() {
+  . "$AGENT_ENV_FILE"
+  NODESHUB_AGENT_ENV_FILE="$AGENT_ENV_FILE"
+  RUNTIME_BIN_DIR="\${RUNTIME_BIN_DIR:-/usr/local/bin}"
+  WARP_BIN_PATH="\${WARP_BIN_PATH:-$RUNTIME_BIN_DIR/warp-go}"
+  CLOUDFLARED_BIN_PATH="\${CLOUDFLARED_BIN_PATH:-$RUNTIME_BIN_DIR/cloudflared}"
+  HEARTBEAT_INTERVAL_SECONDS="$(normalize_interval "\${HEARTBEAT_INTERVAL_SECONDS:-15}" 15)"
+  VERSION_PULL_INTERVAL_SECONDS="$(normalize_interval "\${VERSION_PULL_INTERVAL_SECONDS:-15}" 15)"
+}
+
+load_agent_env
 
 json_escape() {
   printf '"%s"' "$1"
@@ -2164,6 +2257,8 @@ EOF_STORAGE
   "currentConnections": \${connections:-0},
   "cpuUsagePercent": \${cpu:-null},
   "memoryUsagePercent": \${memory:-null},
+  "heartbeatIntervalSeconds": \${HEARTBEAT_INTERVAL_SECONDS:-15},
+  "versionPullIntervalSeconds": \${VERSION_PULL_INTERVAL_SECONDS:-15},
   "warpStatus": $(json_escape "$warp_status_value"),
   "warpIpv6": $(json_escape "$warp_ipv6_value"),
   "warpEndpoint": $(json_escape "$warp_endpoint_value"),
@@ -2214,11 +2309,63 @@ reconcile() {
   fi
 }
 
+unix_now() {
+  if command -v date >/dev/null 2>&1; then
+    date +%s
+    return 0
+  fi
+  if command -v busybox >/dev/null 2>&1; then
+    busybox date +%s
+    return 0
+  fi
+  echo "0"
+}
+
 loop() {
+  local next_heartbeat_at=0
+  local next_reconcile_at=0
+  local now heartbeat_interval version_pull_interval next_wake_at sleep_for max_heartbeat_at max_reconcile_at
   while true; do
-    heartbeat
-    reconcile || true
-    sleep "\${POLL_INTERVAL:-15}"
+    load_agent_env
+    now="$(unix_now)"
+    heartbeat_interval="\${HEARTBEAT_INTERVAL_SECONDS:-15}"
+    version_pull_interval="\${VERSION_PULL_INTERVAL_SECONDS:-15}"
+
+    if [ "$next_heartbeat_at" -le 0 ]; then
+      next_heartbeat_at="$now"
+    fi
+    if [ "$next_reconcile_at" -le 0 ]; then
+      next_reconcile_at="$now"
+    fi
+
+    max_heartbeat_at=$((now + heartbeat_interval))
+    max_reconcile_at=$((now + version_pull_interval))
+    if [ "$next_heartbeat_at" -gt "$max_heartbeat_at" ]; then
+      next_heartbeat_at="$max_heartbeat_at"
+    fi
+    if [ "$next_reconcile_at" -gt "$max_reconcile_at" ]; then
+      next_reconcile_at="$max_reconcile_at"
+    fi
+
+    if [ "$now" -ge "$next_heartbeat_at" ]; then
+      heartbeat
+      next_heartbeat_at=$((now + heartbeat_interval))
+    fi
+    if [ "$now" -ge "$next_reconcile_at" ]; then
+      reconcile || true
+      next_reconcile_at=$((now + version_pull_interval))
+    fi
+
+    next_wake_at="$next_heartbeat_at"
+    if [ "$next_reconcile_at" -lt "$next_wake_at" ]; then
+      next_wake_at="$next_reconcile_at"
+    fi
+    now="$(unix_now)"
+    sleep_for=$((next_wake_at - now))
+    if [ "$sleep_for" -lt 1 ]; then
+      sleep_for=1
+    fi
+    sleep "$sleep_for"
   done
 }
 
@@ -2277,6 +2424,8 @@ nodehubsapi agent installed.
 - Network type: $NODE_NETWORK_TYPE
 - Agent env: $AGENT_ENV_FILE
 - Runtime config root: $ETC_DIR/runtime
+- Heartbeat interval: $HEARTBEAT_INTERVAL_SECONDS s
+- Version pull interval: $VERSION_PULL_INTERVAL_SECONDS s
 - Mandatory bootstrap:
   $([ "$NODE_NETWORK_TYPE" = "public" ] && printf '%s' "TLS certificate -> $BOOTSTRAP_CERT_PATH (CF DNS token enables ACME; otherwise self-signed fallback)" || printf '%s' "Argo -> $STATE_DIR/argo/domain")
 - Hook directories:

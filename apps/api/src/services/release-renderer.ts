@@ -1003,6 +1003,11 @@ function buildBootstrapNotes(node: NodeRecord, kind: ReleaseKind, bootstrapOptio
   if (actions.length > 0) {
     notes.push(`Selected bootstrap actions: ${actions.join(', ')}.`)
   }
+  if (bootstrapOptions.installWarp) {
+    notes.push(bootstrapOptions.warpLicenseKey ? 'Bootstrap carries an inline WARP License Key.' : 'Bootstrap installs WARP without a License Key.')
+  }
+  notes.push(`Heartbeat interval: ${bootstrapOptions.heartbeatIntervalSeconds}s.`)
+  notes.push(`Version pull interval: ${bootstrapOptions.versionPullIntervalSeconds}s.`)
   if (kind === 'bootstrap') {
     notes.push('Bootstrap revision changed. Re-run local bootstrap hooks before marking the node ready.')
   }
@@ -1081,7 +1086,6 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
       backupDomain: context.node.backupDomain,
       entryIp: context.node.entryIp,
       githubMirrorUrl: context.node.githubMirrorUrl,
-      warpLicenseKey: context.node.warpLicenseKey,
       cfDnsToken: context.node.cfDnsToken,
       argoTunnelToken: context.node.argoTunnelToken,
       argoTunnelDomain: context.node.argoTunnelDomain,
@@ -1103,6 +1107,9 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
       serviceName: 'nodehubsapi-agent',
       runtimeServiceName: 'nodehubsapi-runtime',
       installWarp: context.bootstrapOptions.installWarp,
+      warpLicenseKey: context.bootstrapOptions.warpLicenseKey,
+      heartbeatIntervalSeconds: context.bootstrapOptions.heartbeatIntervalSeconds,
+      versionPullIntervalSeconds: context.bootstrapOptions.versionPullIntervalSeconds,
       installSingBox: context.bootstrapOptions.installSingBox,
       installXray: context.bootstrapOptions.installXray,
       runtimeBinaries: bootstrapRuntimeBinaries,

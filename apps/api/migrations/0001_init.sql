@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS nodes (
   current_release_revision INTEGER NOT NULL DEFAULT 0,
   current_release_status TEXT NOT NULL DEFAULT 'idle',
   last_seen_at TEXT,
+  heartbeat_interval_seconds INTEGER NOT NULL DEFAULT 15,
+  version_pull_interval_seconds INTEGER NOT NULL DEFAULT 15,
   cpu_usage_percent REAL,
   memory_usage_percent REAL,
   bytes_in_total INTEGER NOT NULL DEFAULT 0,

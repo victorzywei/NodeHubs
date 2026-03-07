@@ -94,7 +94,6 @@ const nodeSchemaBase = z.object({
   backupDomain: z.string().trim().max(255).default(''),
   entryIp: z.string().trim().max(255).default(''),
   githubMirrorUrl: z.string().trim().max(500).default(''),
-  warpLicenseKey: z.string().trim().max(255).default(''),
   cfDnsToken: z.string().trim().max(500).default(''),
   argoTunnelToken: z.string().trim().max(500).default(''),
   argoTunnelDomain: z.string().trim().max(255).default(''),
@@ -157,6 +156,9 @@ export const subscriptionDocumentFormatSchema = z.enum(['plain', 'base64', 'json
 
 export const bootstrapOptionsSchema = z.object({
   installWarp: z.boolean().default(false),
+  warpLicenseKey: z.string().trim().max(255).default(''),
+  heartbeatIntervalSeconds: z.number().int().min(5).max(3600).default(15),
+  versionPullIntervalSeconds: z.number().int().min(5).max(3600).default(15),
   installSingBox: z.boolean().default(false),
   installXray: z.boolean().default(false),
 })
@@ -167,6 +169,9 @@ export const publishNodeSchema = z.object({
   message: z.string().trim().max(1000).default(''),
   bootstrapOptions: bootstrapOptionsSchema.default({
     installWarp: false,
+    warpLicenseKey: '',
+    heartbeatIntervalSeconds: 15,
+    versionPullIntervalSeconds: 15,
     installSingBox: false,
     installXray: false,
   }),
@@ -197,6 +202,8 @@ export const heartbeatSchema = z.object({
   bytesInTotal: z.number().nonnegative(),
   bytesOutTotal: z.number().nonnegative(),
   currentConnections: z.number().int().nonnegative(),
+  heartbeatIntervalSeconds: z.number().int().min(5).max(3600).optional(),
+  versionPullIntervalSeconds: z.number().int().min(5).max(3600).optional(),
   cpuUsagePercent: z.number().min(0).max(100).nullable().default(null),
   memoryUsagePercent: z.number().min(0).max(100).nullable().default(null),
   warpStatus: z.string().trim().max(120).optional(),

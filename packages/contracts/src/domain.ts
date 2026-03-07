@@ -45,6 +45,8 @@ export interface NodeRecord {
   currentReleaseRevision: number
   currentReleaseStatus: ReleaseStatus | 'idle'
   lastSeenAt: string | null
+  heartbeatIntervalSeconds: number
+  versionPullIntervalSeconds: number
   cpuUsagePercent: number | null
   memoryUsagePercent: number | null
   bytesInTotal: number
@@ -167,6 +169,9 @@ export interface BootstrapPlan {
   serviceName: string
   runtimeServiceName: string
   installWarp: boolean
+  warpLicenseKey: string
+  heartbeatIntervalSeconds: number
+  versionPullIntervalSeconds: number
   installSingBox: boolean
   installXray: boolean
   runtimeBinaries: RuntimeBinaryPlan[]
@@ -176,6 +181,9 @@ export interface BootstrapPlan {
 
 export interface BootstrapOptions {
   installWarp: boolean
+  warpLicenseKey: string
+  heartbeatIntervalSeconds: number
+  versionPullIntervalSeconds: number
   installSingBox: boolean
   installXray: boolean
 }
@@ -215,7 +223,6 @@ export interface ReleaseArtifact {
     | 'backupDomain'
     | 'entryIp'
     | 'githubMirrorUrl'
-    | 'warpLicenseKey'
     | 'cfDnsToken'
     | 'argoTunnelToken'
     | 'argoTunnelDomain'
