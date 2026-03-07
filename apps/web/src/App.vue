@@ -707,6 +707,22 @@ async function openEditTemplate(template: TemplateRecord) {
   await hydrateTemplateDefaults('repair')
 }
 
+async function deleteEditingTemplate() {
+  if (!editingTemplateId.value) return
+  const currentTemplate = templates.value.find((item) => item.id === editingTemplateId.value)
+  const confirmed = window.confirm(`Confirm deleting template "${currentTemplate?.name || editingTemplateId.value}"? This cannot be undone.`)
+  if (!confirmed) return
+  try {
+    await api.deleteTemplate(adminKey.value, editingTemplateId.value)
+    closeTemplateModal()
+    toast('success', '模板删除成功')
+    await loadAll()
+    await refreshStatus()
+  } catch (e:any) {
+    toast('error', e.message)
+  }
+}
+
 // ---- Subscription Actions ----
 const newSub = ref({ name:'', enabled:true, visibleNodeIds:[] as string[] })
 
@@ -1819,7 +1835,13 @@ onMounted(() => { if (adminKey.value) login() })
             </div>
           </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-secondary" @click="closeTemplateModal">取消</button><button class="btn btn-primary" @click="submitTemplate">{{ editingTemplateId ? '保存修改' : '创建' }}</button></div>
+        <div class="modal-footer" style="justify-content:space-between">
+          <button v-if="editingTemplateId" class="btn btn-danger" style="--btn-bg:var(--color-danger);--btn-hover:var(--color-danger)" @click="deleteEditingTemplate">删除模板</button>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" @click="closeTemplateModal">取消</button>
+            <button class="btn btn-primary" @click="submitTemplate">{{ editingTemplateId ? '保存修改' : '创建' }}</button>
+          </div>
+        </div>
       </div>
     </div>
 

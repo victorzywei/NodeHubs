@@ -101,6 +101,12 @@ export function updateTemplate(adminKey: string, templateId: string, payload: Re
   }, adminKey)
 }
 
+export function deleteTemplate(adminKey: string, templateId: string): Promise<{ deleted: string }> {
+  return request(`/api/templates/${templateId}`, {
+    method: 'DELETE',
+  }, adminKey)
+}
+
 export function listTemplateCatalog(adminKey: string): Promise<TemplatePreset[]> {
   return request('/api/templates/catalog', {}, adminKey)
 }

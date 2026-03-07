@@ -592,7 +592,7 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
 }
 
 export async function listTemplates(services: AppServices): Promise<TemplateRecord[]> {
-  const rows = await services.db.all<TemplateRow>('SELECT * FROM templates ORDER BY updated_at DESC')
+  const rows = await services.db.all<TemplateRow>('SELECT * FROM templates ORDER BY created_at ASC')
   return rows.map(toTemplateRecord)
 }
 
@@ -684,6 +684,13 @@ export async function updateTemplate(services: AppServices, templateId: string, 
 
   const row = await getTemplateRow(services, templateId)
   return row ? toTemplateRecord(row) : null
+}
+
+export async function deleteTemplate(services: AppServices, templateId: string): Promise<boolean> {
+  const current = await getTemplateRow(services, templateId)
+  if (!current) return false
+  await services.db.run('DELETE FROM templates WHERE id = ?', [templateId])
+  return true
 }
 
 export async function listSubscriptions(services: AppServices): Promise<SubscriptionRecord[]> {

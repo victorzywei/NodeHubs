@@ -74,7 +74,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     warpExit: false,
     warpRouteMode: 'all',
     defaults: {
-      serverPort: 443,
+      serverPort: 23485,
       password: '',
       sni: '',
       upMbps: 100,
@@ -92,7 +92,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     warpExit: false,
     warpRouteMode: 'all',
     defaults: {
-      serverPort: 8388,
+      serverPort: 23486,
       method: '2022-blake3-aes-128-gcm',
       password: '',
     },
@@ -108,7 +108,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     warpExit: false,
     warpRouteMode: 'all',
     defaults: {
-      serverPort: 443,
+      serverPort: 23491,
       path: '/ws',
       host: '',
       sni: '',
@@ -126,7 +126,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     warpExit: false,
     warpRouteMode: 'all',
     defaults: {
-      serverPort: 443,
+      serverPort: 23490,
       uuid: '',
       flow: 'xtls-rprx-vision',
       sni: 'www.cloudflare.com',
@@ -146,7 +146,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     warpExit: false,
     warpRouteMode: 'all',
     defaults: {
-      serverPort: 443,
+      serverPort: 23487,
       password: '',
       sni: '',
     },
@@ -162,7 +162,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     warpExit: false,
     warpRouteMode: 'all',
     defaults: {
-      serverPort: 443,
+      serverPort: 23488,
       serviceName: 'grpc',
       password: '',
       sni: '',
@@ -179,7 +179,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     warpExit: false,
     warpRouteMode: 'all',
     defaults: {
-      serverPort: 443,
+      serverPort: 23489,
       path: '/ws',
       host: '',
       sni: '',
@@ -487,6 +487,20 @@ function defaultTemplateServer(node: NodeRecord): string {
   return node.primaryDomain || node.entryIp || node.backupDomain || node.argoTunnelDomain
 }
 
+function defaultTemplateHost(node: NodeRecord, server: string): string {
+  if (node.networkType === 'noPublicIp') {
+    return node.argoTunnelDomain || node.primaryDomain || server
+  }
+  return node.primaryDomain || node.backupDomain || server
+}
+
+function defaultTemplateSni(node: NodeRecord, server: string): string {
+  if (node.networkType === 'noPublicIp') {
+    return node.argoTunnelDomain || node.primaryDomain || server
+  }
+  return node.primaryDomain || node.backupDomain || server
+}
+
 function normalizeTemplate(node: NodeRecord, template: TemplateRecord): NormalizedTemplate {
   const repairedTemplate = repairTemplateRecord(template)
   ensureProtocolSupport(repairedTemplate)
@@ -504,8 +518,8 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
   const warpRouteModeRaw = readString(defaults, 'warp_route_mode', repairedTemplate.warpRouteMode || 'all')
   const warpRouteMode: TemplateRecord['warpRouteMode'] = warpRouteModeRaw === 'ipv4' || warpRouteModeRaw === 'ipv6' ? warpRouteModeRaw : 'all'
   const listenPort = readNumber(defaults, ['serverPort', 'port'], defaultPort(repairedTemplate))
-  const host = readString(defaults, 'host', node.primaryDomain || node.argoTunnelDomain || server)
-  const sni = readString(defaults, 'sni', node.primaryDomain || node.argoTunnelDomain || host || server)
+  const host = readString(defaults, 'host', defaultTemplateHost(node, server))
+  const sni = readString(defaults, 'sni', defaultTemplateSni(node, host || server))
   const normalized: NormalizedTemplate = {
     id: repairedTemplate.id,
     name: repairedTemplate.name,

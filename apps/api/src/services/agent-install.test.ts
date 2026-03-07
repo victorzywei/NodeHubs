@@ -101,6 +101,8 @@ describe('agent install scripts', () => {
     expect(script).toContain('run_network_bootstrap')
     expect(script).toContain('Running mandatory network bootstrap: TLS certificate.')
     expect(script).toContain('ensure_tls_certificate')
+    expect(script).toContain('issue_standalone_certificate')
+    expect(script).toContain('Existing TLS certificate is self-signed; attempting ACME replacement.')
     expect(script).toContain('HEARTBEAT_INTERVAL_SECONDS=15')
     expect(script).toContain('VERSION_PULL_INTERVAL_SECONDS=15')
     expect(script).toContain("cat >\"$AGENT_BIN\" <<'NODESHUB_AGENT_BIN_EOF'")
@@ -173,6 +175,7 @@ describe('agent install scripts', () => {
     expect(script).toContain('schedule_agent_restart_if_needed')
     expect(script).toContain('if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then')
     expect(script).toContain('apply_bootstrap_runtime_binaries')
+    expect(script).toContain('Issued TLS certificate via lego standalone HTTP challenge.')
     expect(script).not.toContain('BOOTSTRAP_INSTALL_ARGO')
   })
 

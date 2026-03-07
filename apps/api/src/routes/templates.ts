@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { createTemplateSchema, updateTemplateSchema } from '@contracts/index'
 import { requireAdmin } from '../lib/auth'
 import { fail, ok } from '../lib/response'
-import { createTemplate, listTemplates, updateTemplate } from '../services/control-plane'
+import { createTemplate, deleteTemplate, listTemplates, updateTemplate } from '../services/control-plane'
 import { listTemplatePresets } from '../services/release-renderer'
 import type { AppServices } from '../lib/app-types'
 
@@ -49,4 +49,12 @@ templateRoutes.patch('/:id', async (c) => {
   }
   if (!template) return fail('NOT_FOUND', 'Template not found', 404)
   return ok(template)
+})
+
+templateRoutes.delete('/:id', async (c) => {
+  const auth = requireAdmin(c)
+  if (auth) return auth
+  const deleted = await deleteTemplate(c.get('services'), c.req.param('id'))
+  if (!deleted) return fail('NOT_FOUND', 'Template not found', 404)
+  return ok({ deleted: c.req.param('id') })
 })

@@ -331,6 +331,52 @@ issue_cloudflare_certificate() {
   cp "$key_source" "$BOOTSTRAP_KEY_PATH"
 }
 
+issue_standalone_certificate() {
+  local lego_bin="$1"
+  local primary_domain="$BOOTSTRAP_PRIMARY_TLS_DOMAIN"
+  local certs_dir="$STATE_DIR/lego"
+  local cert_source key_source email issue_log
+  if [ -z "$primary_domain" ]; then
+    primary_domain="$(printf '%s\n' "$BOOTSTRAP_TLS_DOMAINS" | awk 'NF { print; exit }')"
+  fi
+  [ -n "$primary_domain" ] || return 1
+  if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    warn "Standalone ACME requires root to bind port 80."
+    return 1
+  fi
+  email="$(guess_acme_email "$primary_domain")"
+  mkdir -p "$certs_dir"
+  issue_log="$certs_dir/issue-standalone.log"
+  : > "$issue_log"
+  local args=(--accept-tos --path "$certs_dir" --email "$email" --http --http.port 80)
+  while IFS= read -r domain; do
+    [ -n "$domain" ] || continue
+    args+=(--domains "$domain")
+  done <<< "$BOOTSTRAP_TLS_DOMAINS"
+  log "Requesting TLS certificate via standalone HTTP challenge for: $(printf '%s' "$BOOTSTRAP_TLS_DOMAINS" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  if ! "$lego_bin" "${args[@]}" run >>"$issue_log" 2>&1; then
+    warn "lego standalone certificate issuance failed."
+    tail_recent_lines "$issue_log" 20 >&2
+    return 1
+  fi
+  cert_source="$certs_dir/certificates/${primary_domain}.crt"
+  key_source="$certs_dir/certificates/${primary_domain}.key"
+  [ -s "$cert_source" ] && [ -s "$key_source" ] || return 1
+  mkdir -p "$(dirname "$BOOTSTRAP_CERT_PATH")"
+  cp "$cert_source" "$BOOTSTRAP_CERT_PATH"
+  cp "$key_source" "$BOOTSTRAP_KEY_PATH"
+}
+
+existing_certificate_is_self_signed() {
+  if [ ! -s "$BOOTSTRAP_CERT_PATH" ] || ! command -v openssl >/dev/null 2>&1; then
+    return 1
+  fi
+  local issuer subject
+  issuer="$(openssl x509 -in "$BOOTSTRAP_CERT_PATH" -noout -issuer 2>/dev/null | sed 's/^issuer= *//')"
+  subject="$(openssl x509 -in "$BOOTSTRAP_CERT_PATH" -noout -subject 2>/dev/null | sed 's/^subject= *//')"
+  [ -n "$issuer" ] && [ "$issuer" = "$subject" ]
+}
+
 generate_self_signed_certificate() {
   local primary_domain="$BOOTSTRAP_PRIMARY_TLS_DOMAIN"
   local openssl_conf="$TMP_DIR/openssl.cnf"
@@ -377,14 +423,22 @@ EOF
 }
 
 ensure_tls_certificate() {
+  local had_existing_cert=0
+  local existing_self_signed=0
   if [ "$BOOTSTRAP_NEEDS_CERTS" != "1" ]; then
     return 0
   fi
   log "TLS bootstrap mode: public node"
   if [ -s "$BOOTSTRAP_CERT_PATH" ] && [ -s "$BOOTSTRAP_KEY_PATH" ]; then
-    log "Reusing existing TLS certificate at $BOOTSTRAP_CERT_PATH."
-    describe_tls_certificate || true
-    return 0
+    had_existing_cert=1
+    if existing_certificate_is_self_signed; then
+      existing_self_signed=1
+      warn "Existing TLS certificate is self-signed; attempting ACME replacement."
+    else
+      log "Reusing existing TLS certificate at $BOOTSTRAP_CERT_PATH."
+      describe_tls_certificate || true
+      return 0
+    fi
   fi
   if [ -n "$NODE_CF_DNS_TOKEN" ] && [ -n "$BOOTSTRAP_TLS_DOMAINS" ]; then
     log "Cloudflare DNS token detected; ACME DNS challenge will be used."
@@ -398,7 +452,23 @@ ensure_tls_certificate() {
       warn "lego certificate issuance failed, falling back to self-signed."
     fi
   else
-    log "Cloudflare DNS token missing or no TLS domains configured; using self-signed certificate fallback."
+    log "Cloudflare DNS token missing or no TLS domains configured."
+  fi
+  if [ -n "$BOOTSTRAP_TLS_DOMAINS" ]; then
+    local lego_bin
+    if lego_bin="$(install_lego_binary)"; then
+      if issue_standalone_certificate "$lego_bin"; then
+        log "Issued TLS certificate via lego standalone HTTP challenge."
+        describe_tls_certificate || true
+        return 0
+      fi
+      warn "lego standalone certificate issuance failed."
+    fi
+  fi
+  if [ "$had_existing_cert" = "1" ] && [ "$existing_self_signed" = "1" ]; then
+    warn "Keeping existing self-signed TLS certificate at $BOOTSTRAP_CERT_PATH."
+    describe_tls_certificate || true
+    return 0
   fi
   generate_self_signed_certificate
   log "Generated fallback self-signed certificate at $BOOTSTRAP_CERT_PATH."

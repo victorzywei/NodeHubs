@@ -144,7 +144,15 @@ describe('release renderer', () => {
   })
 
   it('exposes a small template catalog', () => {
-    expect(listTemplatePresets().length).toBeGreaterThan(0)
+    const presets = listTemplatePresets()
+    expect(presets.length).toBeGreaterThan(0)
+    expect(presets.find((item) => item.id === 'preset-hysteria2')?.defaults.serverPort).toBe(23485)
+    expect(presets.find((item) => item.id === 'preset-ss2022')?.defaults.serverPort).toBe(23486)
+    expect(presets.find((item) => item.id === 'preset-trojan-tcp-tls')?.defaults.serverPort).toBe(23487)
+    expect(presets.find((item) => item.id === 'preset-trojan-grpc-tls')?.defaults.serverPort).toBe(23488)
+    expect(presets.find((item) => item.id === 'preset-vmess-tls-ws')?.defaults.serverPort).toBe(23489)
+    expect(presets.find((item) => item.id === 'preset-vless-reality-tcp')?.defaults.serverPort).toBe(23490)
+    expect(presets.find((item) => item.id === 'preset-vless-ws-tls')?.defaults.serverPort).toBe(23491)
   })
 
   it('rejects incompatible engine and protocol combinations', () => {
