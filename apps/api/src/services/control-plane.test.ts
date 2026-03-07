@@ -75,7 +75,7 @@ function createServices(): AppServices {
   const db = new DatabaseSync(':memory:')
   applyMigrations(db)
   return {
-    appVersion: '0.1.9',
+    appVersion: '0.1.10',
     mode: 'docker',
     dbDriver: 'sqlite',
     artifactDriver: 'minio',

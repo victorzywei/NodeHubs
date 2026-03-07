@@ -278,18 +278,13 @@ APPLY_LOG_FILE=""
 ${bootstrapTlsDomains}
 
 json_escape() {
-  printf '%s' "$1" | awk '
-    BEGIN { printf "\"" }
-    {
-      gsub(/\\/,"\\\\")
-      gsub(/"/,"\\\"")
-      gsub(/\t/,"\\t")
-      gsub(/\r/,"\\r")
-      if (NR > 1) printf "\\n"
-      printf "%s", $0
-    }
-    END { printf "\"" }
-  '
+  local value="$1"
+  value="\${value//\\\\/\\\\\\\\}"
+  value="\${value//\\\"/\\\\\\\"}"
+  value="\${value//$'\\t'/\\\\t}"
+  value="\${value//$'\\r'/\\\\r}"
+  value="\${value//$'\\n'/\\\\n}"
+  printf '"%s"' "$value"
 }
 
 append_apply_log() {
@@ -1478,18 +1473,13 @@ ${bootstrapTlsDomains}
 trap cleanup_tmp_dir EXIT
 
 json_escape() {
-  printf '%s' "$1" | awk '
-    BEGIN { printf "\"" }
-    {
-      gsub(/\\/,"\\\\")
-      gsub(/"/,"\\\"")
-      gsub(/\t/,"\\t")
-      gsub(/\r/,"\\r")
-      if (NR > 1) printf "\\n"
-      printf "%s", $0
-    }
-    END { printf "\"" }
-  '
+  local value="$1"
+  value="\${value//\\\\/\\\\\\\\}"
+  value="\${value//\\\"/\\\\\\\"}"
+  value="\${value//$'\\t'/\\\\t}"
+  value="\${value//$'\\r'/\\\\r}"
+  value="\${value//$'\\n'/\\\\n}"
+  printf '"%s"' "$value"
 }
 
 log() {
@@ -2141,18 +2131,13 @@ load_agent_env() {
 load_agent_env
 
 json_escape() {
-  printf '%s' "$1" | awk '
-    BEGIN { printf "\"" }
-    {
-      gsub(/\\/,"\\\\")
-      gsub(/"/,"\\\"")
-      gsub(/\t/,"\\t")
-      gsub(/\r/,"\\r")
-      if (NR > 1) printf "\\n"
-      printf "%s", $0
-    }
-    END { printf "\"" }
-  '
+  local value="$1"
+  value="\${value//\\\\/\\\\\\\\}"
+  value="\${value//\\\"/\\\\\\\"}"
+  value="\${value//$'\\t'/\\\\t}"
+  value="\${value//$'\\r'/\\\\r}"
+  value="\${value//$'\\n'/\\\\n}"
+  printf '"%s"' "$value"
 }
 
 http_get() {

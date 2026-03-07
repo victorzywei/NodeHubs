@@ -1,4 +1,4 @@
-export const APP_VERSION = '0.1.9'
+export const APP_VERSION = '0.1.10'
 export const ONLINE_WINDOW_MS = 10 * 60 * 1000
 
 

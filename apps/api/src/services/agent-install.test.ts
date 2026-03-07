@@ -105,6 +105,8 @@ describe('agent install scripts', () => {
     expect(script).toContain('VERSION_PULL_INTERVAL_SECONDS=15')
     expect(script).toContain("cat >\"$AGENT_BIN\" <<'NODESHUB_AGENT_BIN_EOF'")
     expect(script).toContain('ensure_downloader() {')
+    expect(script).toContain('value="${value//$\'\\n\'/\\\\n}"')
+    expect(script).not.toContain("printf '\\\"' | awk")
     expect(script).toContain('self_update_if_needed')
     expect(script).not.toContain('sudo ')
     expect(script).not.toContain('jq')
