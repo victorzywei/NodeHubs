@@ -1,6 +1,6 @@
 ﻿<script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
-import type { SystemStatus, NodeRecord, TemplateRecord, SubscriptionRecord, ReleaseRecord, ReleasePreviewRecord } from '@contracts/index'
+import type { SystemStatus, NodeRecord, TemplateRecord, SubscriptionRecord, ReleaseLogRecord, ReleaseRecord, ReleasePreviewRecord } from '@contracts/index'
 import * as api from './lib/api'
 
 // ---- State ----
@@ -21,8 +21,12 @@ const showCreateNode = ref(false)
 const showCreateTemplate = ref(false)
 const showCreateSub = ref(false)
 const showPublishRelease = ref(false)
+const showReleaseLog = ref(false)
 const selectedNode = ref<NodeRecord|null>(null)
 const nodeReleases = ref<ReleaseRecord[]>([])
+const selectedReleaseLog = ref<ReleaseLogRecord|null>(null)
+const selectedReleaseLogNode = ref<NodeRecord|null>(null)
+const releaseLogLoading = ref(false)
 const deployCommand = ref('')
 const uninstallCommand = ref('')
 const publishNode = ref<NodeRecord|null>(null)
@@ -158,6 +162,61 @@ async function loadUninstallCommand() {
 
 function copyToClipboard(text: string) {
   navigator.clipboard.writeText(text).then(() => toast('success', 'Copied to clipboard')).catch(() => toast('error', 'Copy failed'))
+}
+
+function closeReleaseLog() {
+  showReleaseLog.value = false
+  releaseLogLoading.value = false
+  selectedReleaseLog.value = null
+  selectedReleaseLogNode.value = null
+}
+
+async function openReleaseLog(node: NodeRecord, releaseId: string) {
+  showReleaseLog.value = true
+  releaseLogLoading.value = true
+  selectedReleaseLog.value = null
+  selectedReleaseLogNode.value = node
+  try {
+    selectedReleaseLog.value = await api.getNodeReleaseLog(adminKey.value, node.id, releaseId)
+  } catch (e:any) {
+    closeReleaseLog()
+    toast('error', e.message || '加载版本日志失败')
+  } finally {
+    releaseLogLoading.value = false
+  }
+}
+
+async function openNodeReleaseLog(node: NodeRecord, revision?: number) {
+  const targetRevision = revision && revision > 0
+    ? revision
+    : Math.max(Number(node.currentReleaseRevision || 0), Number(node.desiredReleaseRevision || 0))
+  if (targetRevision <= 0) {
+    toast('error', '当前节点还没有可查看的版本日志')
+    return
+  }
+
+  let releases = selectedNode.value?.id === node.id ? nodeReleases.value : []
+  let release = releases.find((item) => Number(item.revision || 0) === targetRevision)
+
+  if (!release) {
+    try {
+      releases = await api.listNodeReleases(adminKey.value, node.id)
+      if (selectedNode.value?.id === node.id) {
+        nodeReleases.value = releases
+      }
+      release = releases.find((item) => Number(item.revision || 0) === targetRevision)
+    } catch (e:any) {
+      toast('error', e.message || '加载版本列表失败')
+      return
+    }
+  }
+
+  if (!release) {
+    toast('error', `未找到版本 r${targetRevision} 的日志`)
+    return
+  }
+
+  await openReleaseLog(node, release.id)
 }
 
 function getNodeCheckCommands(node: NodeRecord) {
@@ -717,6 +776,49 @@ function getRuntimeVersion(n: NodeRecord) {
   return (n.protocolRuntimeVersion || '').trim() || '-'
 }
 
+function getReleaseStatusText(status: string | null | undefined) {
+  switch (status) {
+    case 'healthy':
+      return '成功'
+    case 'failed':
+      return '失败'
+    case 'pending':
+      return '待部署'
+    case 'applying':
+      return '部署中'
+    default:
+      return '未上报'
+  }
+}
+
+function getReleaseStatusClass(status: string | null | undefined) {
+  switch (status) {
+    case 'healthy':
+      return 'healthy'
+    case 'failed':
+      return 'failed'
+    case 'pending':
+      return 'pending'
+    case 'applying':
+      return 'applying'
+    default:
+      return 'offline'
+  }
+}
+
+function getNodeVersionLabel(n: NodeRecord) {
+  const revision = Math.max(Number(n.currentReleaseRevision || 0), Number(n.desiredReleaseRevision || 0))
+  return revision > 0 ? `r${revision}` : '---'
+}
+
+function getNodeDeployStatusText(n: NodeRecord) {
+  return n.currentReleaseStatus === 'idle' ? '未部署' : getReleaseStatusText(n.currentReleaseStatus)
+}
+
+function getNodeDeployStatusClass(n: NodeRecord) {
+  return n.currentReleaseStatus === 'idle' ? 'offline' : getReleaseStatusClass(n.currentReleaseStatus)
+}
+
 function normalizeBootstrapIntervalSeconds(value: unknown, fallback = 15) {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return fallback
@@ -766,7 +868,7 @@ const publishBlocked = computed(() => {
 function getWarpLabel(n: NodeRecord) {
   const warpIpv6 = (n.warpIpv6 || '').trim()
   if (warpIpv6) return warpIpv6
-  return getWarpStatusText(n)
+  return '---'
 }
 
 function getArgoStatusText(n: NodeRecord) {
@@ -982,15 +1084,29 @@ onMounted(() => { if (adminKey.value) login() })
           <div class="table-wrapper">
             <table class="data-table node-table">
               <thead><tr>
-                <th>名称</th><th>类型</th><th>地区</th><th>域名/Argo</th><th>Warp</th><th>连接数</th><th>流量</th><th>操作</th>
+                <th>名称</th><th>类型</th><th>版本</th><th>地区</th><th>域名/Argo</th><th>WARP IPv6</th><th>连接数</th><th>流量</th><th>操作</th>
               </tr></thead>
               <tbody>
                 <tr v-for="n in nodes" :key="n.id" class="cursor-pointer" @click="selectNode(n)">
                   <td class="node-name" :class="isOnline(n) ? 'online' : 'offline'">{{ n.name }}</td>
                   <td><span class="tag" :class="{accent:n.nodeType==='edge'}">{{ n.nodeType }}</span></td>
+                  <td>
+                    <div style="display:grid;gap:4px">
+                      <button
+                        type="button"
+                        class="btn btn-xs btn-ghost text-mono"
+                        style="justify-content:flex-start;padding:0;font-size:12px"
+                        :disabled="getNodeVersionLabel(n) === '---'"
+                        @click.stop="openNodeReleaseLog(n)"
+                      >
+                        {{ getNodeVersionLabel(n) }}
+                      </button>
+                      <span class="status-badge" :class="getNodeDeployStatusClass(n)">{{ getNodeDeployStatusText(n) }}</span>
+                    </div>
+                  </td>
                   <td>{{ n.region || '-' }}</td>
                   <td class="text-mono truncate">{{ getNodeDomainDisplay(n) }}</td>
-                  <td><span class="warp-badge" :class="isWarpRunning(n) ? 'online' : 'offline'">{{ getWarpLabel(n) }}</span></td>
+                  <td class="text-mono">{{ getWarpLabel(n) }}</td>
                   <td>{{ n.currentConnections }}</td>
                   <td class="text-muted" style="font-size:12px">↑{{ formatBytes(n.bytesOutTotal) }} ↓{{ formatBytes(n.bytesInTotal) }}</td>
                   <td>
@@ -1000,7 +1116,7 @@ onMounted(() => { if (adminKey.value) login() })
                     </div>
                   </td>
                 </tr>
-                <tr v-if="nodes.length===0"><td colspan="8"><div class="empty-state"><div class="empty-state-icon">🖥️</div><div class="empty-state-title">暂无节点</div><div class="empty-state-text">添加您的第一个代理节点以开始使用</div><button class="btn btn-primary" @click="showCreateNode=true">+ 添加节点</button></div></td></tr>
+                <tr v-if="nodes.length===0"><td colspan="9"><div class="empty-state"><div class="empty-state-icon">🖥️</div><div class="empty-state-title">暂无节点</div><div class="empty-state-text">添加您的第一个代理节点以开始使用</div><button class="btn btn-primary" @click="showCreateNode=true">+ 添加节点</button></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -1121,10 +1237,18 @@ onMounted(() => { if (adminKey.value) login() })
           </div>
           <div class="detail-section">
             <div class="detail-section-title">发布记录 ({{ nodeReleases.length }})</div>
+            <div class="text-muted" style="margin-bottom:8px;font-size:12px">点击版本号可查看该版本的应用日志。</div>
             <div v-for="r in nodeReleases.slice(0,5)" :key="r.id" class="card mb-md" style="padding:12px">
               <div class="flex items-center justify-between gap-sm">
-                <span style="font-weight:600;font-size:13px">版本 #{{ r.revision }}</span>
-                <span class="status-badge" :class="r.status">{{ r.status }}</span>
+                <button
+                  type="button"
+                  class="btn btn-xs btn-ghost"
+                  style="padding:0;font-weight:600;font-size:13px"
+                  @click.stop="openReleaseLog(selectedNode, r.id)"
+                >
+                  版本 #{{ r.revision }}
+                </button>
+                <span class="status-badge" :class="getReleaseStatusClass(r.status)">{{ getReleaseStatusText(r.status) }}</span>
               </div>
               <div class="text-muted" style="font-size:11px;margin-top:4px">{{ r.kind }} · {{ timeAgo(r.createdAt) }}</div>
               <div v-if="r.summary" style="font-size:12px;margin-top:4px;color:var(--color-text-secondary)">{{ r.summary }}</div>
@@ -1169,6 +1293,42 @@ onMounted(() => { if (adminKey.value) login() })
         </div>
       </aside>
     </template>
+
+    <div v-if="showReleaseLog" class="modal-overlay" @click.self="closeReleaseLog">
+      <div class="modal-content" style="max-width:880px">
+        <div class="modal-header">
+          <h3 class="modal-title">版本应用日志</h3>
+          <button class="modal-close-btn" @click="closeReleaseLog">×</button>
+        </div>
+        <div class="modal-body" style="display:grid;gap:16px">
+          <div v-if="releaseLogLoading" class="text-muted">日志加载中...</div>
+          <template v-else-if="selectedReleaseLog">
+            <div class="card" style="padding:14px">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+                <div>
+                  <div style="font-size:15px;font-weight:700">{{ selectedReleaseLogNode?.name || '-' }} / r{{ selectedReleaseLog.revision }}</div>
+                  <div class="text-muted text-mono" style="margin-top:4px">{{ selectedReleaseLog.id }}</div>
+                </div>
+                <span class="status-badge" :class="getReleaseStatusClass(selectedReleaseLog.status)">{{ getReleaseStatusText(selectedReleaseLog.status) }}</span>
+              </div>
+              <div class="text-muted" style="margin-top:8px;font-size:12px">{{ selectedReleaseLog.kind }} · {{ timeAgo(selectedReleaseLog.createdAt) }}</div>
+              <div v-if="selectedReleaseLog.summary" style="margin-top:8px;font-size:12px;color:var(--color-text-secondary)">{{ selectedReleaseLog.summary }}</div>
+              <div class="detail-row" style="margin-top:12px"><span class="detail-label">结果消息</span><span class="detail-value">{{ selectedReleaseLog.message || '-' }}</span></div>
+              <div class="detail-row"><span class="detail-label">日志状态</span><span class="detail-value"><span class="status-badge" :class="getReleaseStatusClass(selectedReleaseLog.applyLogStatus)">{{ getReleaseStatusText(selectedReleaseLog.applyLogStatus) }}</span></span></div>
+              <div class="detail-row"><span class="detail-label">日志更新时间</span><span class="detail-value">{{ selectedReleaseLog.applyLogUpdatedAt ? `${timeAgo(selectedReleaseLog.applyLogUpdatedAt)} (${selectedReleaseLog.applyLogUpdatedAt})` : '-' }}</span></div>
+            </div>
+            <div class="form-group">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px">
+                <label class="form-label" style="margin:0">应用日志</label>
+                <button class="btn btn-secondary btn-xs" :disabled="!selectedReleaseLog.applyLog" @click="copyToClipboard(selectedReleaseLog.applyLog)">复制日志</button>
+              </div>
+              <pre class="code-block" style="max-height:460px;overflow:auto;font-size:11px;white-space:pre-wrap">{{ selectedReleaseLog.applyLog || '暂无应用日志。只有 agent 实际开始应用该版本后，这里才会记录覆盖式日志。' }}</pre>
+            </div>
+          </template>
+          <div v-else class="text-muted">未找到版本日志。</div>
+        </div>
+      </div>
+    </div>
 
     <!-- Publish Release Modal -->
     <div v-if="showPublishRelease" class="modal-overlay" @click.self="closePublishRelease">

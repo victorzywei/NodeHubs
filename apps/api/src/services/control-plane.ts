@@ -9,6 +9,7 @@ import type {
   CreateTemplateInput,
   DashboardSummary,
   HeartbeatInput,
+  ReleaseLogRecord,
   NodeRecord,
   PublicSubscriptionDocument,
   ReleaseKind,
@@ -102,6 +103,9 @@ type ReleaseRow = {
   artifact_sha256: string
   summary: string
   message: string
+  apply_log: string
+  apply_log_status: string
+  apply_log_updated_at: string | null
   created_at: string
   updated_at: string
 }
@@ -135,6 +139,12 @@ const BOOTSTRAP_ONLY_FIELDS = new Set([
   'argoTunnelDomain',
   'argoTunnelPort',
 ])
+const MAX_APPLY_LOG_CHARS = 20000
+const APPLY_LOG_REDACTIONS: Array<[RegExp, string]> = [
+  [/(X-Agent-Token:\s*)([^\s'"]+)/gi, '$1[REDACTED]'],
+  [/((?:AGENT_TOKEN|NODE_CF_DNS_TOKEN|CF_DNS_API_TOKEN|NODE_WARP_LICENSE_KEY|WARP_LICENSE_KEY|ARGO_TUNNEL_TOKEN)=)([^\r\n]+)/gi, '$1[REDACTED]'],
+  [/((?:LicenseKey|CF_DNS_API_TOKEN|ARGO_TUNNEL_TOKEN)\s*[:=]\s*)([^\r\n]+)/gi, '$1[REDACTED]'],
+]
 
 function toBool(value: number | boolean | null | undefined): boolean {
   return value === true || value === 1
@@ -287,6 +297,29 @@ function toReleaseRecord(row: ReleaseRow): ReleaseRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+}
+
+function toReleaseLogRecord(row: ReleaseRow): ReleaseLogRecord {
+  return {
+    ...toReleaseRecord(row),
+    applyLog: row.apply_log || '',
+    applyLogStatus: (row.apply_log_status || '') as ReleaseLogRecord['applyLogStatus'],
+    applyLogUpdatedAt: row.apply_log_updated_at,
+  }
+}
+
+function sanitizeApplyLog(input: string): string {
+  let value = String(input || '')
+    .replace(/\0/g, '')
+    .replace(/\r\n?/g, '\n')
+    .trim()
+  for (const [pattern, replacement] of APPLY_LOG_REDACTIONS) {
+    value = value.replace(pattern, replacement)
+  }
+  if (value.length > MAX_APPLY_LOG_CHARS) {
+    value = `${value.slice(0, MAX_APPLY_LOG_CHARS)}\n...[truncated]`
+  }
+  return value
 }
 
 function toSubscriptionRecord(row: SubscriptionRow): SubscriptionRecord {
@@ -730,8 +763,9 @@ export async function publishNodeRelease(
     await services.db.run(
       `INSERT INTO releases (
         id, node_id, kind, revision, status, config_revision, bootstrap_revision,
-        template_ids_json, artifact_key, artifact_sha256, summary, message, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        template_ids_json, artifact_key, artifact_sha256, summary, message,
+        apply_log, apply_log_status, apply_log_updated_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         releaseId,
         nodeId,
@@ -745,6 +779,9 @@ export async function publishNodeRelease(
         stored.etag,
         summary,
         message,
+        '',
+        '',
+        null,
         reserved.updatedAt,
         reserved.updatedAt,
       ],
@@ -836,6 +873,16 @@ export async function listNodeReleases(services: AppServices, nodeId: string): P
 
 export async function getReleaseById(services: AppServices, releaseId: string): Promise<ReleaseRow | null> {
   return getReleaseRow(services, releaseId)
+}
+
+export async function getNodeReleaseLog(
+  services: AppServices,
+  nodeId: string,
+  releaseId: string,
+): Promise<ReleaseLogRecord | null> {
+  const row = await getReleaseRow(services, releaseId)
+  if (!row || row.node_id !== nodeId) return null
+  return toReleaseLogRecord(row)
 }
 
 export async function recordHeartbeat(services: AppServices, input: HeartbeatInput): Promise<NodeRecord | null> {
@@ -1005,15 +1052,43 @@ export async function acknowledgeRelease(
   releaseId: string,
   status: ReleaseStatus,
   message: string,
+  applyLogInput = '',
 ): Promise<ReleaseRecord | null> {
   const release = await getReleaseRow(services, releaseId)
   if (!release || release.node_id !== nodeId) return null
 
   const updatedAt = nowIso()
-  await services.db.run(
-    'UPDATE releases SET status = ?, message = ?, updated_at = ? WHERE id = ?',
-    [status, message, updatedAt, releaseId],
-  )
+  const applyLog = sanitizeApplyLog(applyLogInput)
+  const shouldWriteApplyLog = Boolean(applyLog) && release.apply_log_status !== status
+  const isDuplicateResultStatus = release.status === status && !shouldWriteApplyLog
+
+  if (isDuplicateResultStatus) {
+    return toReleaseRecord(release)
+  }
+
+  if (release.status !== status) {
+    await services.db.run(
+      `UPDATE releases
+       SET status = ?, message = ?, updated_at = ?, apply_log = ?, apply_log_status = ?, apply_log_updated_at = ?
+       WHERE id = ?`,
+      [
+        status,
+        message,
+        updatedAt,
+        shouldWriteApplyLog ? applyLog : release.apply_log,
+        shouldWriteApplyLog ? status : (release.apply_log_status || ''),
+        shouldWriteApplyLog ? updatedAt : release.apply_log_updated_at,
+        releaseId,
+      ],
+    )
+  } else if (shouldWriteApplyLog) {
+    await services.db.run(
+      `UPDATE releases
+       SET updated_at = ?, apply_log = ?, apply_log_status = ?, apply_log_updated_at = ?
+       WHERE id = ?`,
+      [updatedAt, applyLog, status, updatedAt, releaseId],
+    )
+  }
 
   if (status === 'healthy') {
     await services.db.run(

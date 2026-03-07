@@ -183,18 +183,6 @@ export const publishNodeSchema = z.object({
       message: 'Runtime releases require at least one template',
     })
   }
-  if (
-    input.kind === 'bootstrap'
-    && !input.bootstrapOptions.installWarp
-    && !input.bootstrapOptions.installSingBox
-    && !input.bootstrapOptions.installXray
-  ) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['bootstrapOptions'],
-      message: 'Bootstrap releases require at least one selected action',
-    })
-  }
 })
 
 export const heartbeatSchema = z.object({

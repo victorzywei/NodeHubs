@@ -1,7 +1,7 @@
 {
   "name": "nodehubsapi",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.9",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -24,6 +24,7 @@
     "wrangler": "^4.57.1"
   }
 }
+
 
 
 

@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS releases (
   artifact_sha256 TEXT NOT NULL,
   summary TEXT NOT NULL DEFAULT '',
   message TEXT NOT NULL DEFAULT '',
+  apply_log TEXT NOT NULL DEFAULT '',
+  apply_log_status TEXT NOT NULL DEFAULT '',
+  apply_log_updated_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE

@@ -243,6 +243,7 @@ export function buildReleaseApplyScript(artifact: ReleaseArtifact): string {
 set -euo pipefail
 
 RELEASE_ID=${shellQuote(artifact.releaseId)}
+RELEASE_REVISION=${shellQuote(String(artifact.revision))}
 RELEASE_KIND=${shellQuote(artifact.kind)}
 RUNTIME_PRIMARY_SERVICE_NAME=${shellQuote(primaryRuntimeServiceName)}
 RUNTIME_PLAN_COUNT=${runtimePlanCount}
@@ -273,18 +274,40 @@ NODE_ARGO_ORIGIN_PORT=${shellQuote(argoOriginPort)}
 CONTROL_PLANE_AGENT_VERSION=${shellQuote(APP_VERSION)}
 AGENT_UPGRADED=0
 AGENT_RESTART_REQUIRED=0
+APPLY_LOG_FILE=""
 ${bootstrapTlsDomains}
 
 json_escape() {
-  printf '"%s"' "$1"
+  printf '%s' "$1" | awk '
+    BEGIN { printf "\"" }
+    {
+      gsub(/\\/,"\\\\")
+      gsub(/"/,"\\\"")
+      gsub(/\t/,"\\t")
+      gsub(/\r/,"\\r")
+      if (NR > 1) printf "\\n"
+      printf "%s", $0
+    }
+    END { printf "\"" }
+  '
+}
+
+append_apply_log() {
+  [ -n "$APPLY_LOG_FILE" ] || return 0
+  mkdir -p "$(dirname "$APPLY_LOG_FILE")"
+  printf '%s\n' "$1" >>"$APPLY_LOG_FILE"
 }
 
 log() {
-  printf '%s\n' "[nodehubsapi] $*"
+  local line="[nodehubsapi] $*"
+  printf '%s\n' "$line"
+  append_apply_log "$line"
 }
 
 warn() {
-  printf '%s\n' "[nodehubsapi] WARN: $*" >&2
+  local line="[nodehubsapi] WARN: $*"
+  printf '%s\n' "$line" >&2
+  append_apply_log "$line"
 }
 
 is_root() {
@@ -474,12 +497,17 @@ schedule_agent_restart_if_needed() {
 ack_release() {
   local status="$1"
   local message="$2"
+  local apply_log=""
   local payload
+  if [ -n "$APPLY_LOG_FILE" ] && [ -f "$APPLY_LOG_FILE" ]; then
+    apply_log="$(cat "$APPLY_LOG_FILE" 2>/dev/null || true)"
+  fi
   payload=$(cat <<EOF_JSON
 {
   "nodeId": $(json_escape "$NODE_ID"),
   "status": $(json_escape "$status"),
-  "message": $(json_escape "$message")
+  "message": $(json_escape "$message"),
+  "applyLog": $(json_escape "$apply_log")
 }
 EOF_JSON
 )
@@ -1342,6 +1370,7 @@ cleanup() {
 
 fail_apply() {
   local code=$?
+  warn "Release apply failed with exit code $code."
   ack_release "failed" "release apply failed"
   cleanup
   exit "$code"
@@ -1354,6 +1383,10 @@ main() {
   trap fail_apply ERR
 
   mkdir -p "$ETC_DIR/runtime" "$ETC_DIR/certs" "$STATE_DIR/releases" "$STATE_DIR/warp" "$STATE_DIR/argo" "$STATE_DIR/lego" "$ETC_DIR/hooks/pre-apply.d" "$ETC_DIR/hooks/post-apply.d" "$ETC_DIR/hooks/bootstrap.d"
+  APPLY_LOG_FILE="$STATE_DIR/releases/apply-$RELEASE_ID.log"
+  : > "$APPLY_LOG_FILE"
+  log "Release apply start: release=$RELEASE_ID revision=$RELEASE_REVISION kind=$RELEASE_KIND"
+  log "Release apply mode: $INSTALL_MODE"
 
   refresh_agent_installation_if_needed
   ack_release "applying" "release apply started"
@@ -1445,7 +1478,18 @@ ${bootstrapTlsDomains}
 trap cleanup_tmp_dir EXIT
 
 json_escape() {
-  printf '"%s"' "$1"
+  printf '%s' "$1" | awk '
+    BEGIN { printf "\"" }
+    {
+      gsub(/\\/,"\\\\")
+      gsub(/"/,"\\\"")
+      gsub(/\t/,"\\t")
+      gsub(/\r/,"\\r")
+      if (NR > 1) printf "\\n"
+      printf "%s", $0
+    }
+    END { printf "\"" }
+  '
 }
 
 log() {
@@ -2097,7 +2141,18 @@ load_agent_env() {
 load_agent_env
 
 json_escape() {
-  printf '"%s"' "$1"
+  printf '%s' "$1" | awk '
+    BEGIN { printf "\"" }
+    {
+      gsub(/\\/,"\\\\")
+      gsub(/"/,"\\\"")
+      gsub(/\t/,"\\t")
+      gsub(/\r/,"\\r")
+      if (NR > 1) printf "\\n"
+      printf "%s", $0
+    }
+    END { printf "\"" }
+  '
 }
 
 http_get() {

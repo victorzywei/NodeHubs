@@ -10,6 +10,7 @@ import {
   getNodeInstallTarget,
   getNodeById,
   getReleaseById,
+  getNodeReleaseLog,
   listNodeReleases,
   listNodeTraffic,
   listNodes,
@@ -74,6 +75,14 @@ nodeRoutes.get('/:id/releases', async (c) => {
   const auth = requireAdmin(c)
   if (auth) return auth
   return ok(await listNodeReleases(c.get('services'), c.req.param('id')))
+})
+
+nodeRoutes.get('/:id/releases/:releaseId/log', async (c) => {
+  const auth = requireAdmin(c)
+  if (auth) return auth
+  const release = await getNodeReleaseLog(c.get('services'), c.req.param('id'), c.req.param('releaseId'))
+  if (!release) return fail('NOT_FOUND', 'Release not found', 404)
+  return ok(release)
 })
 
 nodeRoutes.post('/:id/releases/preview', async (c) => {
@@ -356,6 +365,7 @@ nodeRoutes.post('/agent/releases/:releaseId/ack', async (c) => {
     nodeId?: string
     status?: 'applying' | 'healthy' | 'failed'
     message?: string
+    applyLog?: string
   } | null
   const nodeId = String(body?.nodeId || '')
   if (!nodeId) return fail('VALIDATION', 'nodeId is required', 400)
@@ -372,6 +382,7 @@ nodeRoutes.post('/agent/releases/:releaseId/ack', async (c) => {
     c.req.param('releaseId'),
     body.status,
     String(body.message || ''),
+    typeof body?.applyLog === 'string' ? body.applyLog : '',
   )
   if (!release) return fail('NOT_FOUND', 'Release not found', 404)
   return ok(release)

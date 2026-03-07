@@ -88,6 +88,12 @@ export interface ReleaseRecord {
   updatedAt: string
 }
 
+export interface ReleaseLogRecord extends ReleaseRecord {
+  applyLog: string
+  applyLogStatus: ReleaseStatus | ''
+  applyLogUpdatedAt: string | null
+}
+
 export interface ReleasePreviewRecord {
   kind: ReleaseKind
   runtimePlans: Array<Pick<ReleaseRuntimePlan, 'engine' | 'entryConfigPath' | 'files'>>

@@ -164,6 +164,8 @@ describe('agent install scripts', () => {
     expect(script).toContain('apply_agent_schedule_settings')
     expect(script).toContain('BOOTSTRAP_HEARTBEAT_INTERVAL_SECONDS=')
     expect(script).toContain('BOOTSTRAP_VERSION_PULL_INTERVAL_SECONDS=')
+    expect(script).toContain('APPLY_LOG_FILE="$STATE_DIR/releases/apply-$RELEASE_ID.log"')
+    expect(script).toContain('"applyLog": $(json_escape "$apply_log")')
     expect(script).toContain('schedule_agent_restart_if_needed')
     expect(script).toContain('if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then')
     expect(script).toContain('apply_bootstrap_runtime_binaries')

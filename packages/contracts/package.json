@@ -1,12 +1,13 @@
 {
   "name": "@nodehubsapi/contracts",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.9",
   "type": "module",
   "dependencies": {
     "zod": "^4.3.6"
   }
 }
+
 
 
 

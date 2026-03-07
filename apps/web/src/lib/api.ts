@@ -1,5 +1,6 @@
 import type {
   NodeRecord,
+  ReleaseLogRecord,
   ReleasePreviewRecord,
   ReleaseRecord,
   SubscriptionRecord,
@@ -110,6 +111,10 @@ export function createSubscription(adminKey: string, payload: Record<string, unk
 
 export function listNodeReleases(adminKey: string, nodeId: string): Promise<ReleaseRecord[]> {
   return request(`/api/nodes/${nodeId}/releases`, {}, adminKey)
+}
+
+export function getNodeReleaseLog(adminKey: string, nodeId: string, releaseId: string): Promise<ReleaseLogRecord> {
+  return request(`/api/nodes/${nodeId}/releases/${releaseId}/log`, {}, adminKey)
 }
 
 export function publishNode(adminKey: string, nodeId: string, payload: Record<string, unknown>): Promise<ReleaseRecord> {
