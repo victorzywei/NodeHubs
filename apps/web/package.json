@@ -1,7 +1,7 @@
 {
   "name": "@nodehubsapi/web",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.7",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,4 +16,6 @@
     "zod": "^4.3.6"
   }
 }
+
+
 

@@ -1648,11 +1648,33 @@ guess_acme_email() {
   printf 'hostmaster@%s' "$zone"
 }
 
+tail_recent_lines() {
+  local file="$1"
+  local lines="\${2:-20}"
+  if [ -f "$file" ]; then
+    tail -n "$lines" "$file" 2>/dev/null || true
+  fi
+}
+
+describe_tls_certificate() {
+  if [ ! -s "$BOOTSTRAP_CERT_PATH" ] || [ ! -s "$BOOTSTRAP_KEY_PATH" ]; then
+    return 1
+  fi
+  log "TLS certificate path: $BOOTSTRAP_CERT_PATH"
+  log "TLS private key path: $BOOTSTRAP_KEY_PATH"
+  if command -v openssl >/dev/null 2>&1; then
+    local summary
+    summary="$(openssl x509 -in "$BOOTSTRAP_CERT_PATH" -noout -issuer -subject -dates 2>/dev/null | tr '\n' '; ' | sed 's/; $//')"
+    [ -n "$summary" ] && log "TLS certificate details: $summary"
+  fi
+}
+
 install_lego_binary() {
   local target="$RUNTIME_BIN_DIR/lego"
   local version="v4.28.1"
   local arch asset archive_file unpack_dir
   if [ -x "$target" ]; then
+    log "Reusing existing lego binary: $target"
     printf '%s' "$target"
     return 0
   fi
@@ -1668,6 +1690,7 @@ install_lego_binary() {
   archive_file="$TMP_DIR/$asset"
   unpack_dir="$TMP_DIR/lego"
   mkdir -p "$unpack_dir"
+  log "Downloading lego \${version} for TLS bootstrap."
   http_download_to_file "https://github.com/go-acme/lego/releases/download/\${version}/\${asset}" "$archive_file"
   tar -xzf "$archive_file" -C "$unpack_dir"
   install_binary_file "$unpack_dir/lego" "$target"
@@ -1678,19 +1701,26 @@ issue_cloudflare_certificate() {
   local lego_bin="$1"
   local primary_domain="$BOOTSTRAP_PRIMARY_TLS_DOMAIN"
   local certs_dir="$STATE_DIR/lego"
-  local cert_source key_source email
+  local cert_source key_source email issue_log
   if [ -z "$primary_domain" ]; then
     primary_domain="$(printf '%s\n' "$BOOTSTRAP_TLS_DOMAINS" | awk 'NF { print; exit }')"
   fi
   [ -n "$primary_domain" ] || return 1
   email="$(guess_acme_email "$primary_domain")"
   mkdir -p "$certs_dir"
+  issue_log="$certs_dir/issue.log"
+  : > "$issue_log"
   local args=(--accept-tos --path "$certs_dir" --email "$email" --dns cloudflare)
   while IFS= read -r domain; do
     [ -n "$domain" ] || continue
     args+=(--domains "$domain")
   done <<< "$BOOTSTRAP_TLS_DOMAINS"
-  CLOUDFLARE_DNS_API_TOKEN="$NODE_CF_DNS_TOKEN" "$lego_bin" "\${args[@]}" run >/dev/null
+  log "Requesting TLS certificate via Cloudflare DNS for: $(printf '%s' "$BOOTSTRAP_TLS_DOMAINS" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  if ! CLOUDFLARE_DNS_API_TOKEN="$NODE_CF_DNS_TOKEN" "$lego_bin" "\${args[@]}" run >>"$issue_log" 2>&1; then
+    warn "lego certificate issuance failed."
+    tail_recent_lines "$issue_log" 20 >&2
+    return 1
+  fi
   cert_source="$certs_dir/certificates/\${primary_domain}.crt"
   key_source="$certs_dir/certificates/\${primary_domain}.key"
   [ -s "$cert_source" ] && [ -s "$key_source" ] || return 1
@@ -1702,9 +1732,11 @@ issue_cloudflare_certificate() {
 generate_self_signed_certificate() {
   local primary_domain="$BOOTSTRAP_PRIMARY_TLS_DOMAIN"
   local openssl_conf="$TMP_DIR/openssl.cnf"
+  local openssl_log="$STATE_DIR/lego/self-signed.log"
   local san_lines=""
   local index=1
   [ -n "$primary_domain" ] || primary_domain="localhost"
+  log "Generating self-signed TLS certificate for \${primary_domain}."
   ensure_command openssl openssl || {
     echo "openssl is required to generate fallback certificates." >&2
     return 1
@@ -1734,28 +1766,41 @@ subjectAltName = @alt_names
 [alt_names]\${san_lines}
 EOF
   mkdir -p "$(dirname "$BOOTSTRAP_CERT_PATH")"
-  openssl req -x509 -nodes -newkey rsa:2048 -days 825 -keyout "$BOOTSTRAP_KEY_PATH" -out "$BOOTSTRAP_CERT_PATH" -config "$openssl_conf" >/dev/null 2>&1
+  mkdir -p "$STATE_DIR/lego"
+  if ! openssl req -x509 -nodes -newkey rsa:2048 -days 825 -keyout "$BOOTSTRAP_KEY_PATH" -out "$BOOTSTRAP_CERT_PATH" -config "$openssl_conf" >"$openssl_log" 2>&1; then
+    warn "Self-signed certificate generation failed."
+    tail_recent_lines "$openssl_log" 20 >&2
+    return 1
+  fi
 }
 
 ensure_tls_certificate() {
   if [ "$BOOTSTRAP_NEEDS_CERTS" != "1" ]; then
     return 0
   fi
+  log "TLS bootstrap mode: public node"
   if [ -s "$BOOTSTRAP_CERT_PATH" ] && [ -s "$BOOTSTRAP_KEY_PATH" ]; then
+    log "Reusing existing TLS certificate at $BOOTSTRAP_CERT_PATH."
+    describe_tls_certificate || true
     return 0
   fi
   if [ -n "$NODE_CF_DNS_TOKEN" ] && [ -n "$BOOTSTRAP_TLS_DOMAINS" ]; then
+    log "Cloudflare DNS token detected; ACME DNS challenge will be used."
     local lego_bin
     if lego_bin="$(install_lego_binary)"; then
       if issue_cloudflare_certificate "$lego_bin"; then
         log "Issued TLS certificate via lego + Cloudflare DNS."
+        describe_tls_certificate || true
         return 0
       fi
       warn "lego certificate issuance failed, falling back to self-signed."
     fi
+  else
+    log "Cloudflare DNS token missing or no TLS domains configured; using self-signed certificate fallback."
   fi
   generate_self_signed_certificate
-  log "Generated fallback self-signed certificate."
+  log "Generated fallback self-signed certificate at $BOOTSTRAP_CERT_PATH."
+  describe_tls_certificate || true
 }
 
 resolve_cloudflared_arch() {
@@ -1774,6 +1819,7 @@ install_cloudflared_binary() {
   local target="$RUNTIME_BIN_DIR/cloudflared"
   local arch
   if [ -x "$target" ]; then
+    log "Reusing existing cloudflared binary: $target"
     printf '%s' "$target"
     return 0
   fi
@@ -1781,9 +1827,25 @@ install_cloudflared_binary() {
     warn "cloudflared is not available for this architecture."
     return 1
   }
+  log "Downloading cloudflared for Argo bootstrap."
   http_download_to_file "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-\${arch}" "$TMP_DIR/cloudflared"
   install_binary_file "$TMP_DIR/cloudflared" "$target"
   printf '%s' "$target"
+}
+
+wait_for_argo_domain() {
+  local retries="\${1:-10}"
+  local delay="\${2:-2}"
+  local attempt=0
+  while [ "$attempt" -lt "$retries" ]; do
+    sync_argo_domain_state
+    if [ -s "$STATE_DIR/argo/domain" ]; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep "$delay"
+  done
+  return 1
 }
 
 sync_argo_domain_state() {
@@ -1874,17 +1936,44 @@ start_argo_background() {
 
 ensure_argo_bootstrap() {
   local cloudflared_bin
+  log "Preparing Argo bootstrap."
+  log "Argo origin URL: http://127.0.0.1:$NODE_ARGO_ORIGIN_PORT"
+  if [ -n "$NODE_ARGO_TUNNEL_TOKEN" ]; then
+    log "Argo tunnel mode: token-managed tunnel"
+  else
+    log "Argo tunnel mode: quick tunnel"
+  fi
+  if [ -n "$NODE_ARGO_TUNNEL_DOMAIN" ]; then
+    log "Expected Argo domain: $NODE_ARGO_TUNNEL_DOMAIN"
+  fi
   cloudflared_bin="$(install_cloudflared_binary)" || return 1
   if [ "$USE_SYSTEMD" = "1" ]; then
+    log "Starting cloudflared with systemd."
     write_argo_service "$cloudflared_bin"
     run_systemctl daemon-reload
     run_systemctl enable --now nodehubsapi-cloudflared.service >/dev/null
     run_systemctl restart nodehubsapi-cloudflared.service
+    if run_systemctl is-active --quiet nodehubsapi-cloudflared.service; then
+      log "cloudflared service is active."
+    else
+      warn "cloudflared service is not active yet; check logs if Argo stays unavailable."
+    fi
   else
+    log "Starting cloudflared in background mode."
     start_argo_background "$cloudflared_bin"
+    if [ -f "$STATE_DIR/argo/cloudflared.pid" ] && kill -0 "$(cat "$STATE_DIR/argo/cloudflared.pid" 2>/dev/null || true)" 2>/dev/null; then
+      log "cloudflared background process is running."
+    else
+      warn "cloudflared background process did not stay up; check logs if Argo stays unavailable."
+    fi
   fi
-  sleep 5
-  sync_argo_domain_state
+  if wait_for_argo_domain 15 2; then
+    log "Argo domain: $(cat "$STATE_DIR/argo/domain" 2>/dev/null || true)"
+  else
+    warn "Argo domain was not detected yet."
+  fi
+  log "Argo env file: $ETC_DIR/cloudflared.env"
+  log "Argo log file: $STATE_DIR/argo/cloudflared.log"
   log "Argo bootstrap completed."
 }
 
@@ -1892,9 +1981,11 @@ run_network_bootstrap() {
   TMP_DIR="$(mktemp -d)"
   mkdir -p "$ETC_DIR/certs" "$STATE_DIR/lego" "$STATE_DIR/argo"
   if [ "$NODE_NETWORK_TYPE" = "public" ]; then
+    log "Running mandatory network bootstrap: TLS certificate."
     ensure_tls_certificate
     return 0
   fi
+  log "Running mandatory network bootstrap: Argo tunnel."
   ensure_argo_bootstrap
 }
 

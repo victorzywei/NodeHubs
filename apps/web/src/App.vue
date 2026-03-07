@@ -160,6 +160,92 @@ function copyToClipboard(text: string) {
   navigator.clipboard.writeText(text).then(() => toast('success', 'Copied to clipboard')).catch(() => toast('error', 'Copy failed'))
 }
 
+function getNodeCheckCommands(node: NodeRecord) {
+  const detectPaths = [
+    'ETC_DIR="$(if [ -d /etc/nodehubsapi ]; then echo /etc/nodehubsapi; else echo "$HOME/.config/nodehubsapi"; fi)"',
+    'STATE_DIR="$(if [ -d /opt/nodehubsapi ]; then echo /opt/nodehubsapi; else echo "$HOME/.local/share/nodehubsapi"; fi)"',
+  ].join('\n')
+  const commands = [
+    {
+      title: 'Agent 参数',
+      description: '查看 agent.env，确认 API、节点 ID、心跳和拉取版本时间。',
+      command: `${detectPaths}
+sed -n '1,200p' "$ETC_DIR/agent.env"`,
+    },
+    {
+      title: 'Agent 运行状态',
+      description: '优先检查 systemd，其次回退到进程列表。',
+      command: `systemctl status nodehubsapi-agent.service --no-pager || systemctl --user status nodehubsapi-agent.service --no-pager || pgrep -af nodehubsapi-agent`,
+    },
+    {
+      title: 'Agent 日志',
+      description: '优先查看 journalctl，没有 systemd 时回退到 agent.log。',
+      command: `${detectPaths}
+journalctl -u nodehubsapi-agent.service -n 120 --no-pager || journalctl --user -u nodehubsapi-agent.service -n 120 --no-pager || tail -n 120 "$STATE_DIR/agent.log"`,
+    },
+    {
+      title: 'sing-box 配置与日志',
+      description: '查看 sing-box 当前配置、服务状态和日志。',
+      command: `${detectPaths}
+[ -f "$ETC_DIR/runtime/sing-box.json" ] && sed -n '1,200p' "$ETC_DIR/runtime/sing-box.json"
+systemctl status nodehubsapi-runtime-sing-box.service --no-pager || systemctl --user status nodehubsapi-runtime-sing-box.service --no-pager || pgrep -af sing-box
+journalctl -u nodehubsapi-runtime-sing-box.service -n 120 --no-pager || journalctl --user -u nodehubsapi-runtime-sing-box.service -n 120 --no-pager || tail -n 120 "$STATE_DIR/runtime/sing-box.log"`,
+    },
+    {
+      title: 'xray 配置与日志',
+      description: '查看 xray 当前配置、服务状态和日志。',
+      command: `${detectPaths}
+[ -f "$ETC_DIR/runtime/xray.json" ] && sed -n '1,200p' "$ETC_DIR/runtime/xray.json"
+systemctl status nodehubsapi-runtime-xray.service --no-pager || systemctl --user status nodehubsapi-runtime-xray.service --no-pager || pgrep -af xray
+journalctl -u nodehubsapi-runtime-xray.service -n 120 --no-pager || journalctl --user -u nodehubsapi-runtime-xray.service -n 120 --no-pager || tail -n 120 "$STATE_DIR/runtime/xray.log"`,
+    },
+    {
+      title: 'WARP 注册信息',
+      description: '查看 WARP 配置中的 IPv6、Endpoint、DeviceID、LicenseKey。',
+      command: `${detectPaths}
+[ -f "$STATE_DIR/warp/warp.conf" ] && grep -E '^(Address6|Endpoint|DeviceID|LicenseKey)' "$STATE_DIR/warp/warp.conf"
+ls -lah "$STATE_DIR/warp"`,
+    },
+    {
+      title: 'WARP 日志',
+      description: '查看 WARP 服务状态和运行日志。',
+      command: `${detectPaths}
+systemctl status nodehubsapi-warp.service --no-pager || systemctl --user status nodehubsapi-warp.service --no-pager || pgrep -af warp-go
+journalctl -u nodehubsapi-warp.service -n 120 --no-pager || journalctl --user -u nodehubsapi-warp.service -n 120 --no-pager || tail -n 120 "$STATE_DIR/warp/warp.log"`,
+    },
+  ]
+
+  if (node.networkType === 'public') {
+    commands.push({
+      title: 'TLS 证书检查',
+      description: '查看证书文件、签发信息和有效期。',
+      command: `${detectPaths}
+ls -lah "$ETC_DIR/certs"
+[ -f "$ETC_DIR/certs/server.crt" ] && openssl x509 -in "$ETC_DIR/certs/server.crt" -noout -issuer -subject -dates`,
+    })
+  } else {
+    commands.push(
+      {
+        title: 'Argo 参数',
+        description: '查看 cloudflared 环境变量和已记录的 Argo 域名。',
+        command: `${detectPaths}
+[ -f "$ETC_DIR/cloudflared.env" ] && sed -n '1,120p' "$ETC_DIR/cloudflared.env"
+[ -f "$STATE_DIR/argo/domain" ] && cat "$STATE_DIR/argo/domain"
+ls -lah "$STATE_DIR/argo"`,
+      },
+      {
+        title: 'Argo 日志',
+        description: '查看 cloudflared 服务状态和日志。',
+        command: `${detectPaths}
+systemctl status nodehubsapi-cloudflared.service --no-pager || systemctl --user status nodehubsapi-cloudflared.service --no-pager || pgrep -af cloudflared
+journalctl -u nodehubsapi-cloudflared.service -n 120 --no-pager || journalctl --user -u nodehubsapi-cloudflared.service -n 120 --no-pager || tail -n 120 "$STATE_DIR/argo/cloudflared.log"`,
+      },
+    )
+  }
+
+  return commands
+}
+
 async function publishRelease(nodeId: string) {
   try {
     await api.publishNode(adminKey.value, nodeId, { kind:'runtime', templateIds: templates.value.map(t=>t.id) })
@@ -1048,7 +1134,7 @@ onMounted(() => { if (adminKey.value) login() })
           <div class="detail-section">
             <div class="detail-section-title">部署命令</div>
             <div class="text-muted" style="margin-bottom:8px;font-size:12px">
-              一行命令安装并启动 agent。远端安装脚本会按网络类型执行必选初始化：有公网 IP 安装证书，无公网 IP 安装 Argo。
+              一行命令安装并启动 agent。远端安装脚本会按网络类型执行必选初始化：有公网 IP 安装证书，无公网 IP 安装 Argo，并输出关键进度。
             </div>
             <button v-if="!deployCommand" class="btn btn-secondary btn-sm w-full" @click="loadDeployCommand">生成部署命令</button>
             <div v-else>
@@ -1062,6 +1148,22 @@ onMounted(() => { if (adminKey.value) login() })
             <div v-else>
               <div class="code-block" style="max-height:120px;overflow-y:auto;font-size:11px;word-break:break-all">{{ uninstallCommand }}</div>
               <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(uninstallCommand)">📋 复制卸载命令</button>
+            </div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-section-title">检查命令</div>
+            <div class="text-muted" style="margin-bottom:8px;font-size:12px">
+              下列命令会自动兼容 system 和 user 两种安装路径，可直接复制到 VPS 执行。
+            </div>
+            <div v-for="item in getNodeCheckCommands(selectedNode)" :key="item.title" class="card mb-md" style="padding:12px">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+                <div>
+                  <div style="font-size:13px;font-weight:700">{{ item.title }}</div>
+                  <div class="text-muted" style="margin-top:4px;font-size:12px">{{ item.description }}</div>
+                </div>
+                <button class="btn btn-secondary btn-xs" @click="copyToClipboard(item.command)">复制</button>
+              </div>
+              <pre class="code-block" style="margin-top:10px;max-height:180px;overflow-y:auto;font-size:11px;white-space:pre-wrap">{{ item.command }}</pre>
             </div>
           </div>
         </div>

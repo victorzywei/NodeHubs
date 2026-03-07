@@ -99,6 +99,7 @@ describe('agent install scripts', () => {
     expect(script).toContain('AGENT_VERSION=')
     expect(script).toContain("NODE_NETWORK_TYPE='public'")
     expect(script).toContain('run_network_bootstrap')
+    expect(script).toContain('Running mandatory network bootstrap: TLS certificate.')
     expect(script).toContain('ensure_tls_certificate')
     expect(script).toContain('HEARTBEAT_INTERVAL_SECONDS=15')
     expect(script).toContain('VERSION_PULL_INTERVAL_SECONDS=15')
