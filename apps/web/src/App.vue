@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import type { SystemStatus, NodeRecord, TemplateRecord, SubscriptionRecord, ReleaseRecord, ReleasePreviewRecord } from '@contracts/index'
 import * as api from './lib/api'
@@ -52,7 +52,7 @@ async function login() {
     status.value = s; loggedIn.value = true
     localStorage.setItem('nh_admin_key', adminKey.value)
     await loadAll()
-  } catch (e:any) { error.value = e.message || '璁よ瘉澶辫触' }
+  } catch (e:any) { error.value = e.message || '认证失败' }
   loading.value = false
 }
 
@@ -130,7 +130,7 @@ async function createNode() {
     })
     showCreateNode.value = false
     resetNewNode()
-    toast('success', '鑺傜偣鍒涘缓鎴愬姛'); await loadAll(); await refreshStatus()
+    toast('success', '节点创建成功'); await loadAll(); await refreshStatus()
   } catch (e:any) { toast('error', e.message) }
 }
 
@@ -162,7 +162,7 @@ function copyToClipboard(text: string) {
 async function publishRelease(nodeId: string) {
   try {
     await api.publishNode(adminKey.value, nodeId, { kind:'runtime', templateIds: templates.value.map(t=>t.id) })
-    toast('success', '鍙戝竷鎴愬姛'); await loadAll(); await refreshStatus()
+    toast('success', '发布成功'); await loadAll(); await refreshStatus()
     if (selectedNode.value?.id === nodeId) await selectNode(selectedNode.value)
   } catch (e:any) { toast('error', e.message) }
 }
@@ -248,7 +248,7 @@ const templateDefaultFields = computed(() => {
   const fields: Array<{key:string, label:string, placeholder:string, type?:string, generator?:string, list?:string}> = []
 
   // Port
-  fields.push({ key:'serverPort', label:'绔彛', placeholder:'443', type:'number' })
+  fields.push({ key:'serverPort', label:'端口', placeholder:'443', type:'number' })
 
   // UUID for vless/vmess
   if (p === 'vless' || p === 'vmess') {
@@ -256,15 +256,15 @@ const templateDefaultFields = computed(() => {
   }
   // Password for trojan/ss/hy2
   if (p === 'trojan' || p === 'shadowsocks' || p === 'hysteria2') {
-    fields.push({ key:'password', label:'瀵嗙爜', placeholder:'your-password', generator:'random-password' })
+    fields.push({ key:'password', label:'密码', placeholder:'your-password', generator:'random-password' })
   }
   // SS method
   if (p === 'shadowsocks') {
-    fields.push({ key:'method', label:'鍔犲瘑鏂瑰紡', placeholder:'aes-128-gcm / 2022-blake3-aes-128-gcm' })
+    fields.push({ key:'method', label:'加密方式', placeholder:'aes-128-gcm / 2022-blake3-aes-128-gcm' })
   }
   // WS/XHTTP path
   if (t === 'ws' || t === 'xhttp') {
-    fields.push({ key:'path', label:'璺緞', placeholder: t === 'ws' ? '/ws' : '/' })
+    fields.push({ key:'path', label:'路径', placeholder: t === 'ws' ? '/ws' : '/' })
     fields.push({ key:'host', label:'Host (optional)', placeholder: 'example.com' })
   }
   // gRPC service name
@@ -273,7 +273,7 @@ const templateDefaultFields = computed(() => {
   }
   // TLS SNI
   if (tls === 'tls' || tls === 'reality' || p === 'hysteria2') {
-    fields.push({ key:'sni', label:'SNI', placeholder: tls === 'reality' ? '渚嬪 www.microsoft.com' : '渚嬪 node.example.com', list: tls === 'reality' ? 'reality-sni-list' : undefined })
+    fields.push({ key:'sni', label:'SNI', placeholder: tls === 'reality' ? '例如 www.microsoft.com' : '例如 node.example.com', list: tls === 'reality' ? 'reality-sni-list' : undefined })
   }
   // VLESS flow for Reality
   if (p === 'vless' && tls === 'reality') {
@@ -281,14 +281,14 @@ const templateDefaultFields = computed(() => {
   }
   // Reality keys
   if (tls === 'reality') {
-    fields.push({ key:'realityPrivateKey', label:'Reality 绉侀挜', placeholder:'replace-me', generator:'x25519' })
-    fields.push({ key:'realityPublicKey', label:'Reality 鍏挜', placeholder:'replace-me' })
+    fields.push({ key:'realityPrivateKey', label:'Reality 私钥', placeholder:'replace-me', generator:'x25519' })
+    fields.push({ key:'realityPublicKey', label:'Reality 公钥', placeholder:'replace-me' })
     fields.push({ key:'realityShortId', label:'Reality ShortId', placeholder:'0123456789abcdef', generator:'shortId' })
   }
   // Hysteria2 bandwidth
   if (p === 'hysteria2') {
-    fields.push({ key:'upMbps', label:'涓婅甯﹀ (Mbps)', placeholder:'100', type:'number' })
-    fields.push({ key:'downMbps', label:'涓嬭甯﹀ (Mbps)', placeholder:'100', type:'number' })
+    fields.push({ key:'upMbps', label:'上行带宽 (Mbps)', placeholder:'100', type:'number' })
+    fields.push({ key:'downMbps', label:'下行带宽 (Mbps)', placeholder:'100', type:'number' })
   }
   // VMESS alterId
   if (p === 'vmess') {
@@ -333,7 +333,7 @@ async function createTemplate() {
     await api.createTemplate(adminKey.value, newTemplate.value)
     showCreateTemplate.value = false
     newTemplate.value = { name:'', engine:'xray', protocol:'vless', transport:'ws', tlsMode:'none', warpExit:false, warpRouteMode:'all', defaults:{}, notes:'' }
-    toast('success', '妯℃澘鍒涘缓鎴愬姛'); await loadAll(); await refreshStatus()
+    toast('success', '模板创建成功'); await loadAll(); await refreshStatus()
   } catch (e:any) { toast('error', e.message) }
 }
 
@@ -366,7 +366,7 @@ async function generateRealityKeys() {
     newTemplate.value.defaults['realityPrivateKey'] = toBase64Url(privRaw)
     toast('success', 'Generated new Reality key pair')
   } catch (e) {
-    toast('error', '褰撳墠娴忚鍣ㄤ笉鏀寔 X25519 瀵嗛挜鐢熸垚锛岃鎵嬪姩杈撳叆')
+    toast('error', '当前浏览器不支持 X25519 密钥生成，请手动输入')
   }
 }
 
@@ -389,7 +389,7 @@ async function createSub() {
   try {
     await api.createSubscription(adminKey.value, newSub.value)
     showCreateSub.value = false; newSub.value = { name:'', enabled:true, visibleNodeIds:[] }
-    toast('success', '璁㈤槄鍒涘缓鎴愬姛'); await loadAll(); await refreshStatus()
+    toast('success', '订阅创建成功'); await loadAll(); await refreshStatus()
   } catch (e:any) { toast('error', e.message) }
 }
 
@@ -547,7 +547,7 @@ async function publishSelectedRelease() {
       message: publishMessage.value.trim(),
     })
     const selectedNodeId = selectedNode.value?.id
-    toast('success', '鍙戝竷鎴愬姛')
+    toast('success', '发布成功')
     closePublishRelease()
     await loadAll()
     await refreshStatus()
@@ -626,12 +626,12 @@ function getStorageUsage(n: NodeRecord) {
 }
 
 function timeAgo(d: string|null) {
-  if (!d) return '浠庢湭'
+  if (!d) return '从未'
   const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000)
-  if (s < 60) return s + '绉掑墠'
+  if (s < 60) return s + '秒前'
   if (s < 3600) return Math.floor(s/60) + 'm ago'
   if (s < 86400) return Math.floor(s/3600) + 'h ago'
-  return Math.floor(s/86400) + '澶╁墠'
+  return Math.floor(s/86400) + '天前'
 }
 
 function isPage(page: 'dashboard'|'nodes'|'templates'|'subscriptions') {
@@ -656,7 +656,7 @@ onMounted(() => { if (adminKey.value) login() })
   <div class="toast-container">
     <div v-for="t in toasts" :key="t.id" class="toast" :class="t.type">
       <span class="toast-message">{{ t.msg }}</span>
-      <button class="toast-close" @click="toasts = toasts.filter(x=>x.id!==t.id)">鉁</button>
+      <button class="toast-close" @click="toasts = toasts.filter(x=>x.id!==t.id)">×</button>
     </div>
   </div>
 
@@ -667,10 +667,10 @@ onMounted(() => { if (adminKey.value) login() })
         <div class="login-logo">N</div>
         <div class="login-brand-name">NodeHub</div>
       </div>
-      <p class="login-description">鑺傜偣绠＄悊鎺у埗闈㈡澘</p>
+      <p class="login-description">节点管理控制面板</p>
       <form @submit.prevent="login">
         <div class="form-group">
-          <label class="form-label">绠＄悊瀵嗛挜</label>
+          <label class="form-label">管理密钥</label>
           <input class="form-input" type="password" v-model="adminKey" placeholder="Enter admin key" autofocus />
         </div>
         <p v-if="error" style="color:var(--color-danger);font-size:12px;margin-bottom:12px">{{ error }}</p>
@@ -693,30 +693,30 @@ onMounted(() => { if (adminKey.value) login() })
         </div>
       </div>
       <nav class="sidebar-nav">
-        <div class="nav-section-label">姒傝</div>
+        <div class="nav-section-label">概览</div>
         <div class="nav-item" :class="{active: currentPage==='dashboard'}" @click="currentPage='dashboard'">
-          <span class="nav-icon">馃搳</span><span>浠〃鐩</span>
+          <span class="nav-icon">📊</span><span>仪表盘</span>
         </div>
-        <div class="nav-section-label">绠＄悊</div>
+        <div class="nav-section-label">管理</div>
         <div class="nav-item" :class="{active: currentPage==='nodes'}" @click="currentPage='nodes'">
-          <span class="nav-icon">馃枼锔</span><span>鑺傜偣</span>
+          <span class="nav-icon">🖥️</span><span>节点</span>
           <span class="nav-badge">{{ nodes.length }}</span>
         </div>
         <div class="nav-item" :class="{active: currentPage==='templates'}" @click="currentPage='templates'">
-          <span class="nav-icon">馃搵</span><span>妯℃澘</span>
+          <span class="nav-icon">📋</span><span>模板</span>
           <span class="nav-badge">{{ templates.length }}</span>
         </div>
         <div class="nav-item" :class="{active: currentPage==='subscriptions'}" @click="currentPage='subscriptions'">
-          <span class="nav-icon">馃敆</span><span>璁㈤槄</span>
+          <span class="nav-icon">🔗</span><span>订阅</span>
           <span class="nav-badge">{{ subscriptions.length }}</span>
         </div>
       </nav>
       <div class="sidebar-footer">
         <div class="sidebar-mode-badge" :class="status?.mode||'docker'">
-          {{ status?.mode === 'cloudflare' ? '鈽侊笍 Cloudflare' : '馃惓 Docker' }}
+          {{ status?.mode === 'cloudflare' ? '☁️ Cloudflare' : '🐳 Docker' }}
         </div>
         <button class="btn btn-ghost btn-sm mt-md" @click="logout" style="width:100%;justify-content:flex-start;gap:8px">
-          馃毆 <span>閫€鍑虹櫥褰</span>
+          🚪 <span>退出登录</span>
         </button>
       </div>
     </aside>
@@ -729,73 +729,73 @@ onMounted(() => { if (adminKey.value) login() })
         <div v-if="currentPage==='dashboard'" class="animate-fade-in">
           <div class="page-header">
             <div class="page-header-row">
-              <div><h1 class="page-title">浠〃鐩</h1><p class="page-subtitle">绯荤粺姒傝涓庣粺璁℃暟鎹</p></div>
-              <button class="btn btn-secondary" @click="loadAll();refreshStatus()">鈫?鍒锋柊</button>
+              <div><h1 class="page-title">仪表盘</h1><p class="page-subtitle">系统概览与统计数据</p></div>
+              <button class="btn btn-secondary" @click="loadAll();refreshStatus()">刷新</button>
             </div>
           </div>
           <div class="stats-grid">
             <div class="stat-card">
-              <div class="stat-card-icon accent">馃枼锔</div>
+              <div class="stat-card-icon accent">🖥️</div>
               <div class="stat-value">{{ status?.summary.nodeCount ?? 0 }}</div>
-              <div class="stat-label">鑺傜偣鎬绘暟</div>
+              <div class="stat-label">节点总数</div>
               <div class="stat-glow accent"></div>
             </div>
             <div class="stat-card">
-              <div class="stat-card-icon success">馃煝</div>
+              <div class="stat-card-icon success">🟢</div>
               <div class="stat-value">{{ onlineCount }}</div>
-              <div class="stat-label">鍦ㄧ嚎鑺傜偣</div>
+              <div class="stat-label">在线节点</div>
               <div class="stat-glow success"></div>
             </div>
             <div class="stat-card">
-              <div class="stat-card-icon info">馃搵</div>
+              <div class="stat-card-icon info">📋</div>
               <div class="stat-value">{{ status?.summary.templateCount ?? 0 }}</div>
-              <div class="stat-label">妯℃澘鏁伴噺</div>
+              <div class="stat-label">模板数量</div>
               <div class="stat-glow info"></div>
             </div>
             <div class="stat-card">
-              <div class="stat-card-icon warning">馃摝</div>
+              <div class="stat-card-icon warning">📦</div>
               <div class="stat-value">{{ status?.summary.releaseCount ?? 0 }}</div>
-              <div class="stat-label">鍙戝竷娆℃暟</div>
+              <div class="stat-label">发布次数</div>
               <div class="stat-glow warning"></div>
             </div>
           </div>
           <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
             <div class="card">
-              <div class="card-header"><span class="card-title">鍏ョ珯娴侀噺</span></div>
+              <div class="card-header"><span class="card-title">入站流量</span></div>
               <div class="stat-value" style="font-size:22px">{{ formatBytes(status?.summary.totalBytesIn ?? 0) }}</div>
-              <div class="stat-label">鎬诲叆绔欐祦閲</div>
+              <div class="stat-label">总入站流量</div>
             </div>
             <div class="card">
-              <div class="card-header"><span class="card-title">鍑虹珯娴侀噺</span></div>
+              <div class="card-header"><span class="card-title">出站流量</span></div>
               <div class="stat-value" style="font-size:22px">{{ formatBytes(status?.summary.totalBytesOut ?? 0) }}</div>
-              <div class="stat-label">鎬诲嚭绔欐祦閲</div>
+              <div class="stat-label">总出站流量</div>
             </div>
             <div class="card">
-              <div class="card-header"><span class="card-title">鏁版嵁搴</span></div>
+              <div class="card-header"><span class="card-title">数据库</span></div>
               <div class="stat-value" style="font-size:22px">{{ status?.databaseDriver ?? '-' }}</div>
-              <div class="stat-label">{{ status?.artifactDriver ?? '-' }} 鍒跺搧瀛樺偍</div>
+              <div class="stat-label">{{ status?.artifactDriver ?? '-' }} 制品存储</div>
             </div>
           </div>
           <!-- Recent Nodes -->
           <div class="card">
             <div class="card-header">
-              <span class="card-title">鏈€杩戣妭鐐</span>
-              <button class="btn btn-sm btn-secondary" @click="currentPage='nodes'">鏌ョ湅鍏ㄩ儴 鈫</button>
+              <span class="card-title">最近节点</span>
+              <button class="btn btn-sm btn-secondary" @click="currentPage='nodes'">查看全部 →</button>
             </div>
             <div class="table-wrapper" style="border:none;background:transparent">
               <table class="data-table">
                 <thead><tr>
-                  <th>鍚嶇О</th><th>绫诲瀷</th><th>鍦板尯</th><th>鐘舵€</th><th>鏈€鍚庡湪绾</th>
+                  <th>名称</th><th>类型</th><th>地区</th><th>状态</th><th>最后在线</th>
                 </tr></thead>
                 <tbody>
                   <tr v-for="n in nodes.slice(0,5)" :key="n.id">
                     <td style="font-weight:600;color:var(--color-text-primary)">{{ n.name }}</td>
                     <td><span class="tag" :class="{accent:n.nodeType==='edge'}">{{ n.nodeType }}</span></td>
                     <td>{{ n.region || '-' }}</td>
-                    <td><span class="status-badge" :class="isOnline(n)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(n)?'鍦ㄧ嚎':'绂荤嚎' }}</span></td>
+                    <td><span class="status-badge" :class="isOnline(n)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(n)?'在线':'离线' }}</span></td>
                     <td class="text-muted">{{ timeAgo(n.lastSeenAt) }}</td>
                   </tr>
-                  <tr v-if="nodes.length===0"><td colspan="5" class="text-center text-muted" style="padding:32px">鏆傛棤鑺傜偣</td></tr>
+                  <tr v-if="nodes.length===0"><td colspan="5" class="text-center text-muted" style="padding:32px">暂无节点</td></tr>
                 </tbody>
               </table>
             </div>
@@ -806,14 +806,14 @@ onMounted(() => { if (adminKey.value) login() })
         <div v-if="isPage('nodes')" class="animate-fade-in">
           <div class="page-header">
             <div class="page-header-row">
-              <div><h1 class="page-title">鑺傜偣绠＄悊</h1><p class="page-subtitle">绠＄悊鎮ㄧ殑浠ｇ悊鑺傜偣</p></div>
-              <button class="btn btn-primary" @click="showCreateNode=true">+ 娣诲姞鑺傜偣</button>
+              <div><h1 class="page-title">节点管理</h1><p class="page-subtitle">管理您的代理节点</p></div>
+              <button class="btn btn-primary" @click="showCreateNode=true">+ 添加节点</button>
             </div>
           </div>
           <div class="table-wrapper">
             <table class="data-table node-table">
               <thead><tr>
-                <th>鍚嶇О</th><th>绫诲瀷</th><th>鍦板尯</th><th>鍩熷悕/Argo</th><th>Warp</th><th>杩炴帴鏁</th><th>娴侀噺</th><th>鎿嶄綔</th>
+                <th>名称</th><th>类型</th><th>地区</th><th>域名/Argo</th><th>Warp</th><th>连接数</th><th>流量</th><th>操作</th>
               </tr></thead>
               <tbody>
                 <tr v-for="n in nodes" :key="n.id" class="cursor-pointer" @click="selectNode(n)">
@@ -823,15 +823,15 @@ onMounted(() => { if (adminKey.value) login() })
                   <td class="text-mono truncate">{{ getNodeDomainDisplay(n) }}</td>
                   <td><span class="warp-badge" :class="isWarpRunning(n) ? 'online' : 'offline'">{{ getWarpLabel(n) }}</span></td>
                   <td>{{ n.currentConnections }}</td>
-                  <td class="text-muted" style="font-size:12px">鈫憑{ formatBytes(n.bytesOutTotal) }} 鈫搟{ formatBytes(n.bytesInTotal) }}</td>
+                  <td class="text-muted" style="font-size:12px">↑{{ formatBytes(n.bytesOutTotal) }} ↓{{ formatBytes(n.bytesInTotal) }}</td>
                   <td>
                     <div class="table-actions">
-                      <button class="btn btn-sm btn-secondary" @click.stop="openPublishRelease(n)">鍙戝竷</button>
-                      <button class="btn btn-sm btn-danger" @click.stop="deleteNodeById(n.id, n.name)">鍒犻櫎</button>
+                      <button class="btn btn-sm btn-secondary" @click.stop="openPublishRelease(n)">发布</button>
+                      <button class="btn btn-sm btn-danger" @click.stop="deleteNodeById(n.id, n.name)">删除</button>
                     </div>
                   </td>
                 </tr>
-                <tr v-if="nodes.length===0"><td colspan="8"><div class="empty-state"><div class="empty-state-icon">馃枼锔</div><div class="empty-state-title">鏆傛棤鑺傜偣</div><div class="empty-state-text">娣诲姞鎮ㄧ殑绗竴涓唬鐞嗚妭鐐逛互寮€濮嬩娇鐢</div><button class="btn btn-primary" @click="showCreateNode=true">+ 娣诲姞鑺傜偣</button></div></td></tr>
+                <tr v-if="nodes.length===0"><td colspan="8"><div class="empty-state"><div class="empty-state-icon">🖥️</div><div class="empty-state-title">暂无节点</div><div class="empty-state-text">添加您的第一个代理节点以开始使用</div><button class="btn btn-primary" @click="showCreateNode=true">+ 添加节点</button></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -841,13 +841,13 @@ onMounted(() => { if (adminKey.value) login() })
         <div v-if="isPage('templates')" class="animate-fade-in">
           <div class="page-header">
             <div class="page-header-row">
-              <div><h1 class="page-title">妯℃澘绠＄悊</h1><p class="page-subtitle">鍗忚閰嶇疆妯℃澘</p></div>
-              <button class="btn btn-primary" @click="openCreateTemplate">+ 娣诲姞妯℃澘</button>
+              <div><h1 class="page-title">模板管理</h1><p class="page-subtitle">协议配置模板</p></div>
+              <button class="btn btn-primary" @click="openCreateTemplate">+ 添加模板</button>
             </div>
           </div>
           <div class="table-wrapper">
             <table class="data-table">
-              <thead><tr><th>鍚嶇О</th><th>寮曟搸</th><th>鍗忚</th><th>浼犺緭</th><th>TLS</th><th>WARP</th><th>鏇存柊鏃堕棿</th></tr></thead>
+              <thead><tr><th>名称</th><th>引擎</th><th>协议</th><th>传输</th><th>TLS</th><th>WARP</th><th>更新时间</th></tr></thead>
               <tbody>
                 <tr v-for="t in templates" :key="t.id">
                   <td style="font-weight:600;color:var(--color-text-primary)">{{ t.name }}</td>
@@ -858,7 +858,7 @@ onMounted(() => { if (adminKey.value) login() })
                   <td><span class="tag" :class="{accent:t.warpExit}">{{ t.warpExit ? `on/${t.warpRouteMode}` : 'off' }}</span></td>
                   <td class="text-muted">{{ timeAgo(t.updatedAt) }}</td>
                 </tr>
-                <tr v-if="templates.length===0"><td colspan="7"><div class="empty-state"><div class="empty-state-icon">馃搵</div><div class="empty-state-title">鏆傛棤妯℃澘</div><div class="empty-state-text">鍒涘缓鍗忚妯℃澘鏉ラ厤缃偍鐨勮妭鐐</div><button class="btn btn-primary" @click="openCreateTemplate">+ 娣诲姞妯℃澘</button></div></td></tr>
+                <tr v-if="templates.length===0"><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-title">暂无模板</div><div class="empty-state-text">创建协议模板来配置您的节点</div><button class="btn btn-primary" @click="openCreateTemplate">+ 添加模板</button></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -868,30 +868,30 @@ onMounted(() => { if (adminKey.value) login() })
         <div v-if="isPage('subscriptions')" class="animate-fade-in">
           <div class="page-header">
             <div class="page-header-row">
-              <div><h1 class="page-title">璁㈤槄绠＄悊</h1><p class="page-subtitle">绠＄悊璁㈤槄绔偣</p></div>
-              <button class="btn btn-primary" @click="showCreateSub=true">+ 娣诲姞璁㈤槄</button>
+              <div><h1 class="page-title">订阅管理</h1><p class="page-subtitle">管理订阅端点</p></div>
+              <button class="btn btn-primary" @click="showCreateSub=true">+ 添加订阅</button>
             </div>
           </div>
           <div class="table-wrapper">
             <table class="data-table">
-              <thead><tr><th>鍚嶇О</th><th>浠ょ墝</th><th>鐘舵€</th><th>鍙鑺傜偣</th><th>鍒涘缓鏃堕棿</th><th>璁㈤槄鍦板潃</th></tr></thead>
+              <thead><tr><th>名称</th><th>令牌</th><th>状态</th><th>可见节点</th><th>创建时间</th><th>订阅地址</th></tr></thead>
               <tbody>
                 <tr v-for="s in subscriptions" :key="s.id">
                   <td style="font-weight:600;color:var(--color-text-primary)">{{ s.name }}</td>
                   <td class="text-mono truncate">{{ s.token }}</td>
                   <td><span class="status-badge" :class="s.enabled?'online':'offline'"><span class="status-dot"></span>{{ s.enabled ? 'Enabled' : 'Disabled' }}</span></td>
-                  <td>{{ s.visibleNodeIds.length || '鍏ㄩ儴' }}</td>
+                  <td>{{ s.visibleNodeIds.length || '全部' }}</td>
                   <td class="text-muted">{{ timeAgo(s.createdAt) }}</td>
                   <td>
                     <div class="sub-url-actions">
-                      <button class="btn btn-xs btn-secondary" @click="copyToClipboard(getSubscriptionUrl(s.token,'v2ray'))" title="V2Ray 璁㈤槄 (Base64)">V2Ray</button>
-                      <button class="btn btn-xs btn-secondary" @click="copyToClipboard(getSubscriptionUrl(s.token,'clash'))" title="Clash 璁㈤槄 (YAML)">Clash</button>
-                      <button class="btn btn-xs btn-secondary" @click="copyToClipboard(getSubscriptionUrl(s.token,'singbox'))" title="Sing-Box 璁㈤槄 (JSON)">SingBox</button>
-                      <button class="btn btn-xs btn-ghost" @click="copyToClipboard(getSubscriptionUrl(s.token,'plain'))" title="閫氱敤璁㈤槄 (鏄庢枃)">閫氱敤</button>
+                      <button class="btn btn-xs btn-secondary" @click="copyToClipboard(getSubscriptionUrl(s.token,'v2ray'))" title="V2Ray 订阅 (Base64)">V2Ray</button>
+                      <button class="btn btn-xs btn-secondary" @click="copyToClipboard(getSubscriptionUrl(s.token,'clash'))" title="Clash 订阅 (YAML)">Clash</button>
+                      <button class="btn btn-xs btn-secondary" @click="copyToClipboard(getSubscriptionUrl(s.token,'singbox'))" title="Sing-Box 订阅 (JSON)">SingBox</button>
+                      <button class="btn btn-xs btn-ghost" @click="copyToClipboard(getSubscriptionUrl(s.token,'plain'))" title="通用订阅 (明文)">通用</button>
                     </div>
                   </td>
                 </tr>
-                <tr v-if="subscriptions.length===0"><td colspan="6"><div class="empty-state"><div class="empty-state-icon">馃敆</div><div class="empty-state-title">鏆傛棤璁㈤槄</div><div class="empty-state-text">鍒涘缓璁㈤槄浠ヤ緵瀹㈡埛绔闂</div><button class="btn btn-primary" @click="showCreateSub=true">+ 娣诲姞璁㈤槄</button></div></td></tr>
+                <tr v-if="subscriptions.length===0"><td colspan="6"><div class="empty-state"><div class="empty-state-icon">🔗</div><div class="empty-state-title">暂无订阅</div><div class="empty-state-text">创建订阅以供客户端访问</div><button class="btn btn-primary" @click="showCreateSub=true">+ 添加订阅</button></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -905,21 +905,21 @@ onMounted(() => { if (adminKey.value) login() })
       <aside class="detail-panel">
         <div class="detail-panel-header">
           <h2 style="font-size:16px;font-weight:700">{{ selectedNode.name }}</h2>
-          <button class="modal-close-btn" @click="selectedNode=null">鉁</button>
+          <button class="modal-close-btn" @click="selectedNode=null">×</button>
         </div>
         <div class="detail-panel-body">
           <div class="detail-section">
-            <div class="detail-section-title">鍩烘湰淇℃伅</div>
+            <div class="detail-section-title">基本信息</div>
             <div class="detail-row"><span class="detail-label">ID</span><span class="detail-value text-mono">{{ selectedNode.id }}</span></div>
-            <div class="detail-row"><span class="detail-label">绫诲瀷</span><span class="detail-value"><span class="tag" :class="{accent:selectedNode.nodeType==='edge'}">{{ selectedNode.nodeType }}</span></span></div>
-            <div class="detail-row"><span class="detail-label">鍦板尯</span><span class="detail-value">{{ selectedNode.region || '-' }}</span></div>
-            <div class="detail-row"><span class="detail-label">缃戠粶绫诲瀷</span><span class="detail-value"><span class="tag" :class="{accent:selectedNode.networkType==='noPublicIp'}">{{ selectedNode.networkType === 'noPublicIp' ? '鏃犲叕缃慖P (Argo)' : '鏈夊叕缃慖P' }}</span></span></div>
-            <div class="detail-row"><span class="detail-label">涓诲煙鍚</span><span class="detail-value text-mono">{{ selectedNode.primaryDomain || '-' }}</span></div>
-            <div class="detail-row" v-if="selectedNode.backupDomain"><span class="detail-label">澶囧煙鍚</span><span class="detail-value text-mono">{{ selectedNode.backupDomain }}</span></div>
-            <div class="detail-row"><span class="detail-label">鍏ュ彛 IP</span><span class="detail-value text-mono">{{ selectedNode.entryIp || '-' }}</span></div>
-            <div class="detail-row" v-if="selectedNode.argoTunnelDomain"><span class="detail-label">Argo 鍩熷悕</span><span class="detail-value text-mono">{{ selectedNode.argoTunnelDomain }}</span></div>
-            <div class="detail-row"><span class="detail-label">鐘舵€</span><span class="detail-value"><span class="status-badge" :class="isOnline(selectedNode)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(selectedNode)?'鍦ㄧ嚎':'绂荤嚎' }}</span></span></div>
-            <div class="detail-row"><span class="detail-label">鏈€鍚庡湪绾</span><span class="detail-value">{{ timeAgo(selectedNode.lastSeenAt) }}</span></div>
+            <div class="detail-row"><span class="detail-label">类型</span><span class="detail-value"><span class="tag" :class="{accent:selectedNode.nodeType==='edge'}">{{ selectedNode.nodeType }}</span></span></div>
+            <div class="detail-row"><span class="detail-label">地区</span><span class="detail-value">{{ selectedNode.region || '-' }}</span></div>
+            <div class="detail-row"><span class="detail-label">网络类型</span><span class="detail-value"><span class="tag" :class="{accent:selectedNode.networkType==='noPublicIp'}">{{ selectedNode.networkType === 'noPublicIp' ? '无公网IP (Argo)' : '有公网IP' }}</span></span></div>
+            <div class="detail-row"><span class="detail-label">主域名</span><span class="detail-value text-mono">{{ selectedNode.primaryDomain || '-' }}</span></div>
+            <div class="detail-row" v-if="selectedNode.backupDomain"><span class="detail-label">备域名</span><span class="detail-value text-mono">{{ selectedNode.backupDomain }}</span></div>
+            <div class="detail-row"><span class="detail-label">入口 IP</span><span class="detail-value text-mono">{{ selectedNode.entryIp || '-' }}</span></div>
+            <div class="detail-row" v-if="selectedNode.argoTunnelDomain"><span class="detail-label">Argo 域名</span><span class="detail-value text-mono">{{ selectedNode.argoTunnelDomain }}</span></div>
+            <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value"><span class="status-badge" :class="isOnline(selectedNode)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(selectedNode)?'在线':'离线' }}</span></span></div>
+            <div class="detail-row"><span class="detail-label">最后在线</span><span class="detail-value">{{ timeAgo(selectedNode.lastSeenAt) }}</span></div>
             <div class="detail-row"><span class="detail-label">Runtime</span><span class="detail-value text-mono">{{ getRuntimeVersion(selectedNode) }}</span></div>
             <div class="detail-row">
               <span class="detail-label">WARP</span>
@@ -939,41 +939,41 @@ onMounted(() => { if (adminKey.value) login() })
             <div class="detail-row"><span class="detail-label">Storage</span><span class="detail-value">{{ getStorageUsage(selectedNode) }}</span></div>
           </div>
           <div class="detail-section">
-            <div class="detail-section-title">璧勬簮鐩戞帶</div>
+            <div class="detail-section-title">资源监控</div>
             <div class="detail-row"><span class="detail-label">CPU</span><span class="detail-value">{{ selectedNode.cpuUsagePercent !== null ? selectedNode.cpuUsagePercent + '%' : '-' }}</span></div>
             <div v-if="selectedNode.cpuUsagePercent!==null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="selectedNode.cpuUsagePercent>80?'danger':selectedNode.cpuUsagePercent>50?'warning':'success'" :style="{width:selectedNode.cpuUsagePercent+'%'}"></div></div>
-            <div class="detail-row"><span class="detail-label">鍐呭瓨</span><span class="detail-value">{{ selectedNode.memoryUsagePercent !== null ? selectedNode.memoryUsagePercent + '%' : '-' }}</span></div>
+            <div class="detail-row"><span class="detail-label">内存</span><span class="detail-value">{{ selectedNode.memoryUsagePercent !== null ? selectedNode.memoryUsagePercent + '%' : '-' }}</span></div>
             <div v-if="selectedNode.memoryUsagePercent!==null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="selectedNode.memoryUsagePercent>80?'danger':selectedNode.memoryUsagePercent>50?'warning':'success'" :style="{width:selectedNode.memoryUsagePercent+'%'}"></div></div>
-            <div class="detail-row"><span class="detail-label">杩炴帴鏁</span><span class="detail-value">{{ selectedNode.currentConnections }}</span></div>
-            <div class="detail-row"><span class="detail-label">鍏ョ珯娴侀噺</span><span class="detail-value">{{ formatBytes(selectedNode.bytesInTotal) }}</span></div>
-            <div class="detail-row"><span class="detail-label">鍑虹珯娴侀噺</span><span class="detail-value">{{ formatBytes(selectedNode.bytesOutTotal) }}</span></div>
+            <div class="detail-row"><span class="detail-label">连接数</span><span class="detail-value">{{ selectedNode.currentConnections }}</span></div>
+            <div class="detail-row"><span class="detail-label">入站流量</span><span class="detail-value">{{ formatBytes(selectedNode.bytesInTotal) }}</span></div>
+            <div class="detail-row"><span class="detail-label">出站流量</span><span class="detail-value">{{ formatBytes(selectedNode.bytesOutTotal) }}</span></div>
           </div>
           <div class="detail-section">
-            <div class="detail-section-title">鍙戝竷璁板綍 ({{ nodeReleases.length }})</div>
+            <div class="detail-section-title">发布记录 ({{ nodeReleases.length }})</div>
             <div v-for="r in nodeReleases.slice(0,5)" :key="r.id" class="card mb-md" style="padding:12px">
               <div class="flex items-center justify-between gap-sm">
-                <span style="font-weight:600;font-size:13px">鐗堟湰 #{{ r.revision }}</span>
+                <span style="font-weight:600;font-size:13px">版本 #{{ r.revision }}</span>
                 <span class="status-badge" :class="r.status">{{ r.status }}</span>
               </div>
-              <div class="text-muted" style="font-size:11px;margin-top:4px">{{ r.kind }} 路 {{ timeAgo(r.createdAt) }}</div>
+              <div class="text-muted" style="font-size:11px;margin-top:4px">{{ r.kind }} · {{ timeAgo(r.createdAt) }}</div>
               <div v-if="r.summary" style="font-size:12px;margin-top:4px;color:var(--color-text-secondary)">{{ r.summary }}</div>
             </div>
-            <div v-if="nodeReleases.length===0" class="text-muted text-center" style="padding:16px;font-size:12px">鏆傛棤鍙戝竷璁板綍</div>
+            <div v-if="nodeReleases.length===0" class="text-muted text-center" style="padding:16px;font-size:12px">暂无发布记录</div>
           </div>
           <div class="detail-section">
-            <div class="detail-section-title">閮ㄧ讲鍛戒护</div>
-            <button v-if="!deployCommand" class="btn btn-secondary btn-sm w-full" @click="loadDeployCommand">鐢熸垚閮ㄧ讲鍛戒护</button>
+            <div class="detail-section-title">部署命令</div>
+            <button v-if="!deployCommand" class="btn btn-secondary btn-sm w-full" @click="loadDeployCommand">生成部署命令</button>
             <div v-else>
               <div class="code-block" style="max-height:120px;overflow-y:auto;font-size:11px;word-break:break-all">{{ deployCommand }}</div>
-              <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(deployCommand)">馃搵 澶嶅埗閮ㄧ讲鍛戒护</button>
+              <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(deployCommand)">📋 复制部署命令</button>
             </div>
           </div>
           <div class="detail-section">
-            <div class="detail-section-title">涓€閿嵏杞</div>
-            <button v-if="!uninstallCommand" class="btn btn-danger btn-sm w-full" style="--btn-bg:var(--color-danger);--btn-hover:var(--color-danger)" @click="loadUninstallCommand">鐢熸垚鍗歌浇鍛戒护</button>
+            <div class="detail-section-title">一键卸载</div>
+            <button v-if="!uninstallCommand" class="btn btn-danger btn-sm w-full" style="--btn-bg:var(--color-danger);--btn-hover:var(--color-danger)" @click="loadUninstallCommand">生成卸载命令</button>
             <div v-else>
               <div class="code-block" style="max-height:120px;overflow-y:auto;font-size:11px;word-break:break-all">{{ uninstallCommand }}</div>
-              <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(uninstallCommand)">馃搵 澶嶅埗鍗歌浇鍛戒护</button>
+              <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(uninstallCommand)">📋 复制卸载命令</button>
             </div>
           </div>
         </div>
@@ -984,19 +984,19 @@ onMounted(() => { if (adminKey.value) login() })
     <div v-if="showPublishRelease" class="modal-overlay" @click.self="closePublishRelease">
       <div class="modal-content" style="max-width:640px">
         <div class="modal-header">
-          <h3 class="modal-title">鍙戝竷鑺傜偣鐗堟湰</h3>
-          <button class="modal-close-btn" @click="closePublishRelease">鉁</button>
+          <h3 class="modal-title">发布节点版本</h3>
+          <button class="modal-close-btn" @click="closePublishRelease">×</button>
         </div>
         <div class="modal-body" style="display:grid;gap:16px">
           <template v-if="publishNode">
             <div class="card" style="padding:14px">
               <div style="font-size:15px;font-weight:700">{{ publishNode.name }}</div>
               <div class="text-muted text-mono" style="margin-top:4px">{{ publishNode.id }}</div>
-              <div class="text-muted" style="margin-top:8px;font-size:12px">閫夋嫨鍙戝竷绫诲瀷鍜屾ā鏉匡紝鑺傜偣浼氬湪涓嬩竴娆?reconcile 鏃惰嚜鍔ㄦ媺鍙栥€</div>
+              <div class="text-muted" style="margin-top:8px;font-size:12px">选择发布类型和模板，节点会在下一次 reconcile 时自动拉取。</div>
             </div>
 
             <div class="form-group">
-              <label class="form-label">鍙戝竷绫诲瀷</label>
+              <label class="form-label">发布类型</label>
               <select class="form-select" v-model="publishKind">
                 <option value="runtime">Runtime</option>
                 <option value="bootstrap">Bootstrap</option>
@@ -1004,10 +1004,10 @@ onMounted(() => { if (adminKey.value) login() })
             </div>
 
             <div class="form-group">
-              <label class="form-label">妯℃澘閫夋嫨</label>
+              <label class="form-label">模板选择</label>
               <div v-if="templates.length===0" class="empty-state" style="padding:20px 12px">
-                <div class="empty-state-title">鏆傛棤妯℃澘</div>
-                <div class="empty-state-text" style="margin-bottom:0">璇峰厛鍒涘缓鍗忚妯℃澘銆</div>
+                <div class="empty-state-title">暂无模板</div>
+                <div class="empty-state-text" style="margin-bottom:0">请先创建协议模板。</div>
               </div>
               <div v-else class="publish-template-list">
                 <label
@@ -1030,38 +1030,38 @@ onMounted(() => { if (adminKey.value) login() })
                 </label>
               </div>
               <div class="text-muted" style="margin-top:8px;font-size:12px">
-                <span>鏀寔鍚屾椂閫夋嫨澶氱鍗忚鍜屽涓唴鏍革紝棰勮浼氭寜鍐呮牳鍒嗙粍鐢熸垚銆</span>
+                <span>支持同时选择多种协议和多个内核，预览会按内核分组生成。</span>
                 
               </div>
             </div>
 
             <div class="form-group">
-              <label class="form-label">鍙戝竷澶囨敞</label>
-              <textarea class="form-textarea" v-model="publishMessage" placeholder="鍙€夛紝渚嬪锛氬垏鎹㈠埌 sing-box 妯℃澘缁勫悎" />
+              <label class="form-label">发布备注</label>
+              <textarea class="form-textarea" v-model="publishMessage" placeholder="可选，例如：切换到 sing-box 模板组合" />
             </div>
             <div class="form-group">
-              <label class="form-label">閰嶇疆棰勮</label>
+              <label class="form-label">配置预览</label>
               <div class="publish-preview">
-                <div v-if="publishPreviewLoading" class="text-muted">棰勮鐢熸垚涓?..</div>
+                <div v-if="publishPreviewLoading" class="text-muted">预览生成中...</div>
                 <div v-else-if="publishPreviewError" class="publish-preview-error">{{ publishPreviewError }}</div>
                 <div v-else-if="publishPreview">
                   <div v-for="runtime in publishPreview.runtimePlans" :key="runtime.engine" class="publish-preview-file">
-                    <div class="publish-preview-meta">鍐呮牳 {{ runtime.engine }} / 鍏ュ彛 {{ runtime.entryConfigPath }}</div>
+                    <div class="publish-preview-meta">内核 {{ runtime.engine }} / 入口 {{ runtime.entryConfigPath }}</div>
                     <div v-for="file in runtime.files" :key="`${runtime.engine}:${file.path}`" class="publish-preview-file">
                       <div class="publish-preview-file-head">{{ file.path }}</div>
                       <pre class="code-block publish-preview-code">{{ file.content }}</pre>
                     </div>
                   </div>
                 </div>
-                <div v-else class="text-muted">閫夋嫨妯℃澘鍚庤嚜鍔ㄧ敓鎴愰瑙</div>
+                <div v-else class="text-muted">选择模板后自动生成预览</div>
               </div>
             </div>
           </template>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" @click="closePublishRelease">鍙栨秷</button>
+          <button class="btn btn-secondary" @click="closePublishRelease">取消</button>
           <button class="btn btn-primary" :disabled="publishingRelease || publishBlocked" @click="publishSelectedRelease">
-            {{ publishingRelease ? '鍙戝竷涓?..' : '纭鍙戝竷' }}
+            {{ publishingRelease ? '发布中...' : '确认发布' }}
           </button>
         </div>
       </div>
@@ -1070,53 +1070,53 @@ onMounted(() => { if (adminKey.value) login() })
     <!-- Create Node Modal -->
     <div v-if="showCreateNode" class="modal-overlay" @click.self="showCreateNode=false">
       <div class="modal-content" style="max-width:600px">
-        <div class="modal-header"><h3 class="modal-title">鏂板缓鑺傜偣</h3><button class="modal-close-btn" @click="showCreateNode=false">鉁</button></div>
+        <div class="modal-header"><h3 class="modal-title">新建节点</h3><button class="modal-close-btn" @click="showCreateNode=false">×</button></div>
         <div class="modal-body" style="max-height:60vh;overflow-y:auto">
-          <div class="form-group"><label class="form-label">鍚嶇О *</label><input class="form-input" v-model="newNode.name" placeholder="渚嬪 US-West-01" /></div>
+          <div class="form-group"><label class="form-label">名称 *</label><input class="form-input" v-model="newNode.name" placeholder="例如 US-West-01" /></div>
           <div class="form-row">
-            <div class="form-group"><label class="form-label">绫诲瀷</label><select class="form-select" v-model="newNode.nodeType"><option value="vps">VPS</option><option value="edge">Edge</option></select></div>
-            <div class="form-group"><label class="form-label">鍦板尯</label><input class="form-input" v-model="newNode.region" placeholder="渚嬪 us-west" /></div>
+            <div class="form-group"><label class="form-label">类型</label><select class="form-select" v-model="newNode.nodeType"><option value="vps">VPS</option><option value="edge">Edge</option></select></div>
+            <div class="form-group"><label class="form-label">地区</label><input class="form-input" v-model="newNode.region" placeholder="例如 us-west" /></div>
           </div>
 
           <!-- GitHub Mirror -->
-          <div class="form-section-divider">鎵╁睍閫夐」</div>
+          <div class="form-section-divider">扩展选项</div>
           <div class="form-checkbox-group mb-md">
             <input type="checkbox" class="form-checkbox" v-model="newNode.useGithubMirror" id="github-mirror">
-            <label for="github-mirror" class="form-label" style="margin:0">浣跨敤 GitHub 闀滃儚</label>
+            <label for="github-mirror" class="form-label" style="margin:0">使用 GitHub 镜像</label>
           </div>
           <div v-if="newNode.useGithubMirror" class="form-group">
-            <label class="form-label">GitHub 闀滃儚鍦板潃</label>
+            <label class="form-label">GitHub 镜像地址</label>
             <input class="form-input" v-model="newNode.githubMirrorUrl" placeholder="https://ghproxy.com/https://github.com" />
           </div>
 
           <!-- Install WARP -->
           <div class="form-checkbox-group mb-md">
             <input type="checkbox" class="form-checkbox" v-model="newNode.installWarp" id="warp">
-            <label for="warp" class="form-label" style="margin:0">瀹夎 WARP</label>
+            <label for="warp" class="form-label" style="margin:0">安装 WARP</label>
           </div>
           <div v-if="newNode.installWarp" class="form-group">
-            <label class="form-label">WARP 鍗囩骇瀵嗛挜锛堝彲閫夛紝鐢ㄤ簬鍗囩骇 WARP+ 璐﹀彿锛</label>
+            <label class="form-label">WARP 升级密钥（可选，用于升级 WARP+ 账号）</label>
             <input class="form-input" v-model="newNode.warpLicenseKey" placeholder="WARP+ License Key" />
           </div>
 
           <!-- Network Type -->
-          <div class="form-section-divider">鏈嶅姟鍣ㄧ綉缁</div>
+          <div class="form-section-divider">服务器网络</div>
           <div class="form-group">
-            <label class="form-label">缃戠粶绫诲瀷</label>
+            <label class="form-label">网络类型</label>
             <select class="form-select" v-model="newNode.networkType">
-              <option value="public">鏈夊叕缃?IP</option>
-              <option value="noPublicIp">鏃犲叕缃?IP (Argo 闅ч亾)</option>
+              <option value="public">有公网 IP</option>
+              <option value="noPublicIp">无公网 IP (Argo 隧道)</option>
             </select>
           </div>
 
           <!-- Public IP options -->
           <template v-if="newNode.networkType==='public'">
-            <div class="form-group"><label class="form-label">涓诲煙鍚</label><input class="form-input" v-model="newNode.primaryDomain" placeholder="node.example.com" /></div>
-            <div class="form-group"><label class="form-label">澶囧煙鍚</label><input class="form-input" v-model="newNode.backupDomain" placeholder="node2.example.com锛堝彲閫夛級" /></div>
-            <div class="form-group"><label class="form-label">鍏ュ彛 IP</label><input class="form-input" v-model="newNode.entryIp" placeholder="1.2.3.4" /></div>
+            <div class="form-group"><label class="form-label">主域名</label><input class="form-input" v-model="newNode.primaryDomain" placeholder="node.example.com" /></div>
+            <div class="form-group"><label class="form-label">备域名</label><input class="form-input" v-model="newNode.backupDomain" placeholder="node2.example.com（可选）" /></div>
+            <div class="form-group"><label class="form-label">入口 IP</label><input class="form-input" v-model="newNode.entryIp" placeholder="1.2.3.4" /></div>
             <div class="form-checkbox-group mb-md">
               <input type="checkbox" class="form-checkbox" v-model="newNode.useCfDnsToken" id="cf-dns">
-              <label for="cf-dns" class="form-label" style="margin:0">CF-DNS-TOKEN (鑷姩 DNS 绠＄悊)</label>
+              <label for="cf-dns" class="form-label" style="margin:0">CF-DNS-TOKEN (自动 DNS 管理)</label>
             </div>
             <div v-if="newNode.useCfDnsToken" class="form-group">
               <label class="form-label">Cloudflare DNS API Token</label>
@@ -1136,52 +1136,52 @@ onMounted(() => { if (adminKey.value) login() })
             </div>
             <div class="form-checkbox-group mb-md">
               <input type="checkbox" class="form-checkbox" v-model="newNode.useArgoTunnelDomain" id="argo-domain">
-              <label for="argo-domain" class="form-label" style="margin:0">鍥哄畾闅ч亾鍩熷悕</label>
+              <label for="argo-domain" class="form-label" style="margin:0">固定隧道域名</label>
             </div>
             <div v-if="newNode.useArgoTunnelDomain" class="form-group">
-              <label class="form-label">闅ч亾鍩熷悕</label>
+              <label class="form-label">隧道域名</label>
               <input class="form-input" v-model="newNode.argoTunnelDomain" placeholder="tunnel.example.com" />
             </div>
             <div class="form-checkbox-group mb-md">
               <input type="checkbox" class="form-checkbox" v-model="newNode.useArgoTunnelPort" id="argo-port">
-              <label for="argo-port" class="form-label" style="margin:0">闅ч亾鍥炴簮绔彛锛堥粯璁?2053锛</label>
+              <label for="argo-port" class="form-label" style="margin:0">隧道回源端口（默认 2053）</label>
             </div>
             <div v-if="newNode.useArgoTunnelPort" class="form-group">
-              <label class="form-label">鍥炴簮绔彛</label>
+              <label class="form-label">回源端口</label>
               <input class="form-input" type="number" v-model.number="newNode.argoTunnelPort" placeholder="2053" />
             </div>
           </template>
         </div>
-        <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateNode=false">鍙栨秷</button><button class="btn btn-primary" @click="createNode">鍒涘缓</button></div>
+        <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateNode=false">取消</button><button class="btn btn-primary" @click="createNode">创建</button></div>
       </div>
     </div>
 
     <!-- Create Template Modal -->
     <div v-if="showCreateTemplate" class="modal-overlay" @click.self="showCreateTemplate=false">
       <div class="modal-content" style="max-width:640px">
-        <div class="modal-header"><h3 class="modal-title">鏂板缓妯℃澘</h3><button class="modal-close-btn" @click="showCreateTemplate=false">鉁</button></div>
+        <div class="modal-header"><h3 class="modal-title">新建模板</h3><button class="modal-close-btn" @click="showCreateTemplate=false">×</button></div>
         <div class="modal-body" style="max-height:60vh;overflow-y:auto">
           <!-- Presets -->
           <div v-if="catalogPresets.length" class="mb-lg">
-            <label class="form-label">浠庨璁惧揩閫熷垱寤</label>
+            <label class="form-label">从预设快速创建</label>
             <div class="preset-grid">
               <button v-for="p in catalogPresets" :key="p.id" class="preset-btn" @click="applyPreset(p)" :title="p.notes">
                 <span class="preset-btn-name">{{ p.name }}</span>
-                <span class="preset-btn-meta">{{ p.engine }} 路 {{ p.protocol }}</span>
+                <span class="preset-btn-meta">{{ p.engine }} · {{ p.protocol }}</span>
               </button>
             </div>
           </div>
-          <div class="form-group"><label class="form-label">鍚嶇О *</label><input class="form-input" v-model="newTemplate.name" placeholder="渚嬪 VLESS-WS-TLS" /></div>
+          <div class="form-group"><label class="form-label">名称 *</label><input class="form-input" v-model="newTemplate.name" placeholder="例如 VLESS-WS-TLS" /></div>
           <div class="form-row">
             <div class="form-group">
-              <label class="form-label">寮曟搸</label>
+              <label class="form-label">引擎</label>
               <select class="form-select" v-model="newTemplate.engine">
                 <option value="xray">Xray</option>
                 <option value="sing-box">Sing-Box</option>
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">鍗忚</label>
+              <label class="form-label">协议</label>
               <select class="form-select" v-model="newTemplate.protocol">
                 <option v-for="o in protocolOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
               </select>
@@ -1189,26 +1189,26 @@ onMounted(() => { if (adminKey.value) login() })
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label class="form-label">浼犺緭鏂瑰紡</label>
+              <label class="form-label">传输方式</label>
               <select class="form-select" v-model="newTemplate.transport">
                 <option v-for="o in transportOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">TLS 妯″紡</label>
+              <label class="form-label">TLS 模式</label>
               <select class="form-select" v-model="newTemplate.tlsMode">
                 <option v-for="o in tlsOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
               </select>
             </div>
           </div>
-          <div class="form-section-divider">WARP 鍑哄彛</div>
+          <div class="form-section-divider">WARP 出口</div>
           <div class="form-checkbox-group mb-md">
             <input type="checkbox" class="form-checkbox" v-model="newTemplate.warpExit" id="template-warp-exit">
-            <label for="template-warp-exit" class="form-label" style="margin:0">鍚敤模板 WARP 鍑哄彛</label>
+            <label for="template-warp-exit" class="form-label" style="margin:0">启用模板 WARP 出口</label>
           </div>
           <div v-if="newTemplate.warpExit" class="form-row">
             <div class="form-group">
-              <label class="form-label">WARP 璺敱妯″紡</label>
+              <label class="form-label">WARP 路由模式</label>
               <select class="form-select" v-model="newTemplate.warpRouteMode">
                 <option value="all">All (IPv4 + IPv6)</option>
                 <option value="ipv4">IPv4 only</option>
@@ -1216,7 +1216,7 @@ onMounted(() => { if (adminKey.value) login() })
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">鍙傛暟鏉ユ簮鑺傜偣</label>
+              <label class="form-label">参数来源节点</label>
               <select class="form-select" v-model="warpSourceNodeId">
                 <option value="">Auto select</option>
                 <option v-for="n in warpSourceNodes" :key="n.id" :value="n.id">{{ n.name }}</option>
@@ -1224,14 +1224,14 @@ onMounted(() => { if (adminKey.value) login() })
             </div>
           </div>
           <div v-if="newTemplate.warpExit" class="form-group">
-            <button type="button" class="btn btn-secondary btn-sm" @click="fillWarpDefaultsFromNode">鑾峰彇涓婃姤 WARP 鍙傛暟</button>
+            <button type="button" class="btn btn-secondary btn-sm" @click="fillWarpDefaultsFromNode">获取上报 WARP 参数</button>
             <div class="text-muted" style="margin-top:8px;font-size:12px">
-              鎸夎妭鐐逛笂鎶ユ暟鎹～鍏?private key / endpoint / IPv6 / reserved 鍒?defaults銆
+              按节点上报数据填入 private key / endpoint / IPv6 / reserved 到 defaults。
             </div>
           </div>
 
           <!-- Dynamic default fields -->
-          <div class="form-section-divider">鍗忚鍙傛暟</div>
+          <div class="form-section-divider">协议参数</div>
           <datalist id="reality-sni-list">
             <option value="www.microsoft.com"></option>
             <option value="www.yahoo.com"></option>
@@ -1257,21 +1257,21 @@ onMounted(() => { if (adminKey.value) login() })
             />
           </div>
 
-          <div class="form-group"><label class="form-label">澶囨敞</label><textarea class="form-textarea" v-model="newTemplate.notes" placeholder="鍙€夊娉ㄤ俊鎭?.."></textarea></div>
+          <div class="form-group"><label class="form-label">备注</label><textarea class="form-textarea" v-model="newTemplate.notes" placeholder="可选备注信息..."></textarea></div>
         </div>
-        <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateTemplate=false">鍙栨秷</button><button class="btn btn-primary" @click="createTemplate">鍒涘缓</button></div>
+        <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateTemplate=false">取消</button><button class="btn btn-primary" @click="createTemplate">创建</button></div>
       </div>
     </div>
 
     <!-- Create Subscription Modal -->
     <div v-if="showCreateSub" class="modal-overlay" @click.self="showCreateSub=false">
       <div class="modal-content">
-        <div class="modal-header"><h3 class="modal-title">鏂板缓璁㈤槄</h3><button class="modal-close-btn" @click="showCreateSub=false">鉁</button></div>
+        <div class="modal-header"><h3 class="modal-title">新建订阅</h3><button class="modal-close-btn" @click="showCreateSub=false">×</button></div>
         <div class="modal-body">
-          <div class="form-group"><label class="form-label">鍚嶇О *</label><input class="form-input" v-model="newSub.name" placeholder="e.g. Primary Subscription" /></div>
-          <div class="form-checkbox-group mb-md"><input type="checkbox" class="form-checkbox" v-model="newSub.enabled" id="sub-en"><label for="sub-en" class="form-label" style="margin:0">鍚敤</label></div>
+          <div class="form-group"><label class="form-label">名称 *</label><input class="form-input" v-model="newSub.name" placeholder="e.g. Primary Subscription" /></div>
+          <div class="form-checkbox-group mb-md"><input type="checkbox" class="form-checkbox" v-model="newSub.enabled" id="sub-en"><label for="sub-en" class="form-label" style="margin:0">启用</label></div>
           <div class="form-group" v-if="nodes.length">
-            <label class="form-label">鍙鑺傜偣锛堢暀绌鸿〃绀哄叏閮級</label>
+            <label class="form-label">可见节点（留空表示全部）</label>
             <div style="max-height:150px;overflow-y:auto;border:1px solid var(--glass-border);border-radius:var(--radius-md);padding:8px">
               <label v-for="n in nodes" :key="n.id" class="form-checkbox-group mb-md" style="cursor:pointer">
                 <input type="checkbox" class="form-checkbox" :value="n.id" v-model="newSub.visibleNodeIds" />
@@ -1280,12 +1280,13 @@ onMounted(() => { if (adminKey.value) login() })
             </div>
           </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateSub=false">鍙栨秷</button><button class="btn btn-primary" @click="createSub">鍒涘缓</button></div>
+        <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateSub=false">取消</button><button class="btn btn-primary" @click="createSub">创建</button></div>
       </div>
     </div>
   </div>
 
 </template>
+
 
 
 

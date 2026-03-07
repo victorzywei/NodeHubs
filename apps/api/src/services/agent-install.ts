@@ -36,7 +36,7 @@ export function buildDeployCommand(input: {
 }
 
 export function buildUninstallCommand(): string {
-  return `systemctl stop nodehubsapi-agent.service nodehubsapi-runtime.service nodehubsapi-runtime-sing-box.service nodehubsapi-runtime-xray.service 2>/dev/null; systemctl disable nodehubsapi-agent.service nodehubsapi-runtime.service nodehubsapi-runtime-sing-box.service nodehubsapi-runtime-xray.service 2>/dev/null; rm -f /etc/systemd/system/nodehubsapi-agent.service /etc/systemd/system/nodehubsapi-runtime.service /etc/systemd/system/nodehubsapi-runtime-sing-box.service /etc/systemd/system/nodehubsapi-runtime-xray.service; systemctl daemon-reload; rm -f /usr/local/bin/nodehubsapi-agent /usr/local/bin/xray /usr/local/bin/sing-box; rm -rf /etc/nodehubsapi /opt/nodehubsapi; echo 'âœ?NodeHub agent uninstalled.'`
+  return `systemctl stop nodehubsapi-agent.service nodehubsapi-runtime.service nodehubsapi-runtime-sing-box.service nodehubsapi-runtime-xray.service 2>/dev/null; systemctl disable nodehubsapi-agent.service nodehubsapi-runtime.service nodehubsapi-runtime-sing-box.service nodehubsapi-runtime-xray.service 2>/dev/null; rm -f /etc/systemd/system/nodehubsapi-agent.service /etc/systemd/system/nodehubsapi-runtime.service /etc/systemd/system/nodehubsapi-runtime-sing-box.service /etc/systemd/system/nodehubsapi-runtime-xray.service; systemctl daemon-reload; rm -f /usr/local/bin/nodehubsapi-agent /usr/local/bin/xray /usr/local/bin/sing-box; rm -rf /etc/nodehubsapi /opt/nodehubsapi; echo 'NodeHub agent uninstalled.'`
 }
 
 function buildRuntimeFileBlocks(artifact: ReleaseArtifact): string {
