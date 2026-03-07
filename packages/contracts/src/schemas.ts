@@ -121,7 +121,7 @@ export const updateNodeSchema = createNodeSchema.partial().extend({
   lastSeenAt: z.string().datetime().nullable().optional(),
 })
 
-export const createTemplateSchema = z.object({
+const templateSchemaBase = z.object({
   name: z.string().trim().min(1).max(120),
   engine: z.enum(['sing-box', 'xray']),
   protocol: z.string().trim().min(1).max(80),
@@ -129,9 +129,11 @@ export const createTemplateSchema = z.object({
   tlsMode: z.enum(['none', 'tls', 'reality']),
   defaults: z.record(z.string(), z.unknown()).default({}),
   notes: z.string().trim().max(1000).default(''),
-}).superRefine(validateTemplateCombination)
+})
 
-export const updateTemplateSchema = createTemplateSchema.partial().superRefine(validateTemplateCombination)
+export const createTemplateSchema = templateSchemaBase.superRefine(validateTemplateCombination)
+
+export const updateTemplateSchema = templateSchemaBase.partial().superRefine(validateTemplateCombination)
 
 export const createSubscriptionSchema = z.object({
   name: z.string().trim().min(1).max(120),
