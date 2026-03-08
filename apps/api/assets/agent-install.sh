@@ -399,7 +399,7 @@ issue_standalone_certificate() {
   mkdir -p "$certs_dir"
   issue_log="$certs_dir/issue-standalone.log"
   : > "$issue_log"
-  local args=(--accept-tos --path "$certs_dir" --email "$email" --http --http.port 80)
+  local args=(--accept-tos --path "$certs_dir" --email "$email" --http --http.port :80)
   while IFS= read -r domain; do
     [ -n "$domain" ] || continue
     args+=(--domains "$domain")

@@ -108,6 +108,7 @@ describe('agent install scripts', () => {
     expect(script).toContain('log_stderr() {')
     expect(script).toContain('log_stderr "Reusing existing lego binary: $target"')
     expect(script).toContain('log_stderr "Reusing existing cloudflared binary: $target"')
+    expect(script).toContain('--http.port :80')
     expect(script).toContain('HEARTBEAT_INTERVAL_SECONDS=15')
     expect(script).toContain('VERSION_PULL_INTERVAL_SECONDS=15')
     expect(script).toContain("cat >\"$AGENT_BIN\" <<'NODESHUB_AGENT_BIN_EOF'")

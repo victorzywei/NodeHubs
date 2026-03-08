@@ -672,7 +672,7 @@ issue_standalone_certificate() {
   fi
   email="$(guess_acme_email "$primary_domain")"
   mkdir -p "$certs_dir"
-  local args=(--accept-tos --path "$certs_dir" --email "$email" --http --http.port 80)
+  local args=(--accept-tos --path "$certs_dir" --email "$email" --http --http.port :80)
   while IFS= read -r domain; do
     [ -n "$domain" ] || continue
     args+=(--domains "$domain")
