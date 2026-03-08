@@ -909,7 +909,7 @@ function buildRuntimeConfig(
           ],
           reserved: warp.reserved,
           mtu: warp.mtu,
-          kernelMode: warp.systemInterface,
+          noKernelTun: !warp.systemInterface,
           domainStrategy: 'ForceIPv6v4',
         },
       })

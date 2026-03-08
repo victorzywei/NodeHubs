@@ -780,10 +780,55 @@ normalize_warp_v6() {
   printf '%s' "$value"
 }
 
+has_ipv6_default_route() {
+  if ! command -v ip >/dev/null 2>&1; then
+    return 1
+  fi
+  ip -6 route show default 2>/dev/null | grep -q .
+}
+
+resolve_host_ipv4() {
+  local host="$1"
+  local candidate=""
+  if [ -z "$host" ]; then
+    return 1
+  fi
+  if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf '%s' "$host"
+    return 0
+  fi
+  if command -v getent >/dev/null 2>&1; then
+    candidate="$(getent ahostsv4 "$host" 2>/dev/null | awk 'NR == 1 { print $1 }')"
+  fi
+  if [ -z "$candidate" ] && command -v python3 >/dev/null 2>&1; then
+    candidate="$(python3 - "$host" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+try:
+    infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_DGRAM)
+except OSError:
+    infos = []
+
+seen = set()
+for info in infos:
+    addr = info[4][0]
+    if addr not in seen:
+        print(addr)
+        break
+    seen.add(addr)
+PY
+)"
+  fi
+  [ -n "$candidate" ] || return 1
+  printf '%s' "$candidate"
+}
+
 normalize_warp_endpoint() {
   local host_raw="$1"
   local port_raw="$2"
-  local host port
+  local host port ipv4_host
   host="$(printf '%s' "$host_raw" | tr -d '[:space:]')"
   port="$(printf '%s' "$port_raw" | tr -d '[:space:]')"
   if [[ "$host" =~ ^\[(.+)\]:([0-9]+)$ ]]; then
@@ -796,6 +841,13 @@ normalize_warp_endpoint() {
   [ -n "$host" ] || host="engage.cloudflareclient.com"
   if [[ -z "$port" || ! "$port" =~ ^[0-9]+$ || "$port" -lt 1 || "$port" -gt 65535 ]]; then
     port="2408"
+  fi
+  if [[ "$host" != *:* ]] && ! [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && ! has_ipv6_default_route; then
+    ipv4_host="$(resolve_host_ipv4 "$host" || true)"
+    if [ -n "$ipv4_host" ]; then
+      log "No IPv6 default route detected; using IPv4 WARP endpoint ${ipv4_host}:${port} instead of ${host}:${port}."
+      host="$ipv4_host"
+    fi
   fi
   printf '%s:%s' "$host" "$port"
 }
@@ -811,6 +863,26 @@ save_warp_runtime() {
   printf '%s\n' "$ipv6" > "$warp_dir/v6"
   printf '%s\n' "$reserved" > "$warp_dir/reserved"
   printf '%s\n' "$endpoint" > "$warp_dir/endpoint"
+}
+
+update_saved_warp_endpoint() {
+  local warp_dir="$1"
+  local config_file="$warp_dir/warp.conf"
+  local current_endpoint normalized_endpoint tmp_file
+  [ -s "$config_file" ] || return 0
+  current_endpoint="$(sed -n 's/^Endpoint = //p' "$config_file" | head -n1)"
+  [ -n "$current_endpoint" ] || return 0
+  normalized_endpoint="$(normalize_warp_endpoint "$current_endpoint" "" || true)"
+  [ -n "$normalized_endpoint" ] || return 0
+  [ "$normalized_endpoint" = "$current_endpoint" ] && return 0
+  tmp_file="$(mktemp)"
+  awk -v endpoint="$normalized_endpoint" '
+    index($0, "Endpoint = ") == 1 { print "Endpoint = " endpoint; next }
+    { print }
+  ' "$config_file" > "$tmp_file"
+  mv "$tmp_file" "$config_file"
+  printf '%s\n' "$normalized_endpoint" > "$warp_dir/endpoint"
+  log "Updated saved WARP endpoint to ${normalized_endpoint}."
 }
 
 ensure_sing_box_binary_for_warp() {
@@ -866,6 +938,7 @@ register_warp_via_api() {
   local peer_public_key system_interface local_address_ipv4
   mkdir -p "$warp_dir"
   if [ -s "$config_file" ] && [ -s "$warp_dir/private_key" ] && [ -s "$warp_dir/v6" ]; then
+    update_saved_warp_endpoint "$warp_dir"
     return 0
   fi
   ensure_command curl curl ca-certificates || return 1

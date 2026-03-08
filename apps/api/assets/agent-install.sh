@@ -25,6 +25,7 @@ AGENT_ENV_FILE=""
 RUNTIME_BIN_DIR=""
 CLOUDFLARED_BIN_PATH=""
 USER_AUTOSTART_SCRIPT=""
+AUTOSTART_STATUS=""
 SYSTEMCTL_USER_FLAG=""
 SYSTEMD_WANTED_BY="multi-user.target"
 SYSTEMD_DIR=""
@@ -80,6 +81,7 @@ run_systemctl() {
 }
 
 detect_install_context() {
+  AUTOSTART_STATUS="manual restart required"
   if is_root; then
     INSTALL_MODE="system"
     STATE_DIR="/opt/nodehubsapi"
@@ -1260,12 +1262,15 @@ EOF
 
   systemctl $SYSTEMCTL_USER_FLAG daemon-reload
   systemctl $SYSTEMCTL_USER_FLAG enable --now nodehubsapi-agent.service
+  AUTOSTART_STATUS="systemd service: nodehubsapi-agent.service"
 }
 
 start_agent_background() {
   local pid_file="$STATE_DIR/agent.pid"
   local log_file="$STATE_DIR/agent.log"
   local old_pid=""
+  mkdir -p "$STATE_DIR"
+  : > "$log_file"
   if [ -f "$pid_file" ]; then
     old_pid="$(cat "$pid_file" 2>/dev/null || true)"
     if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
@@ -1277,8 +1282,7 @@ start_agent_background() {
   echo "$!" > "$pid_file"
 }
 
-write_user_autostart_launcher() {
-  [ "$INSTALL_MODE" = "user" ] || return 0
+write_background_autostart_launcher() {
   mkdir -p "$(dirname "$USER_AUTOSTART_SCRIPT")"
   cat >"$USER_AUTOSTART_SCRIPT" <<EOF
 #!/usr/bin/env bash
@@ -1338,11 +1342,51 @@ EOF
 install_user_login_autostart() {
   [ "$INSTALL_MODE" = "user" ] || return 0
   [ "$USE_SYSTEMD" = "1" ] && return 0
-  write_user_autostart_launcher
+  write_background_autostart_launcher
   ensure_profile_hook "$HOME/.profile"
   ensure_profile_hook "$HOME/.bash_profile"
   ensure_profile_hook "$HOME/.bash_login"
   ensure_profile_hook "$HOME/.zprofile"
+  AUTOSTART_STATUS="$USER_AUTOSTART_SCRIPT (triggered from login shell profiles)"
+}
+
+ensure_rc_local_hook() {
+  local rc_local="$1"
+  local marker_begin="# >>> nodehubsapi autostart >>>"
+  local marker_end="# <<< nodehubsapi autostart <<<"
+  [ -n "$rc_local" ] || return 1
+  if [ ! -f "$rc_local" ]; then
+    return 1
+  fi
+  if grep -F "$marker_begin" "$rc_local" >/dev/null 2>&1; then
+    chmod +x "$rc_local" >/dev/null 2>&1 || true
+    return 0
+  fi
+  cat >>"$rc_local" <<EOF
+
+$marker_begin
+if [ -x "$USER_AUTOSTART_SCRIPT" ]; then
+  "$USER_AUTOSTART_SCRIPT" >/dev/null 2>&1 || true
+fi
+$marker_end
+EOF
+  chmod +x "$rc_local" >/dev/null 2>&1 || true
+}
+
+install_system_boot_autostart() {
+  [ "$INSTALL_MODE" = "system" ] || return 0
+  [ "$USE_SYSTEMD" = "1" ] && return 0
+  write_background_autostart_launcher
+  if ensure_rc_local_hook "/etc/rc.local"; then
+    AUTOSTART_STATUS="$USER_AUTOSTART_SCRIPT via /etc/rc.local"
+    return 0
+  fi
+  if ensure_rc_local_hook "/etc/rc.d/rc.local"; then
+    AUTOSTART_STATUS="$USER_AUTOSTART_SCRIPT via /etc/rc.d/rc.local"
+    return 0
+  fi
+  warn "No supported boot autostart hook detected for system install without systemd; manual restart will be required after reboot."
+  AUTOSTART_STATUS="manual restart required (no systemd boot hook detected)"
 }
 
 print_summary() {
@@ -1359,8 +1403,8 @@ nodehubsapi agent installed.
 - Version pull interval: $VERSION_PULL_INTERVAL_SECONDS s
 - Mandatory bootstrap:
 $([ "$NODE_NETWORK_TYPE" = "public" ] && printf '%s' "TLS certificate -> $BOOTSTRAP_CERT_PATH (CF DNS token uses lego DNS challenge; otherwise lego standalone challenge)" || printf '%s' "Argo -> $STATE_DIR/argo/domain")
-- User autostart:
-$([ "$INSTALL_MODE" = "user" ] && [ "$USE_SYSTEMD" != "1" ] && printf '%s' "$USER_AUTOSTART_SCRIPT (triggered from login shell profiles)" || printf '%s' "not required")
+- Autostart:
+$AUTOSTART_STATUS
 - Hook directories:
   $ETC_DIR/hooks/pre-apply.d
   $ETC_DIR/hooks/post-apply.d
@@ -1375,6 +1419,7 @@ write_agent_binary
 run_network_bootstrap
 if ! write_service; then
   install_user_login_autostart
+  install_system_boot_autostart
   start_agent_background
 fi
 cleanup_tmp_dir

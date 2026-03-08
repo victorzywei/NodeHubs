@@ -579,7 +579,7 @@ describe('release renderer', () => {
         address: ['172.16.0.2/32', '2606:4700:d0::a29f:c006/128'],
         reserved: [7, 8, 9],
         mtu: 1280,
-        kernelMode: false,
+        noKernelTun: true,
         domainStrategy: 'ForceIPv6v4',
       },
     })
