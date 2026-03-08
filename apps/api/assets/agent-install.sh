@@ -940,23 +940,128 @@ connection_count() {
 }
 
 runtime_version() {
-  if [ -x "$RUNTIME_BIN_DIR/sing-box" ]; then
-    "$RUNTIME_BIN_DIR/sing-box" version 2>/dev/null | head -n 1 | tr -d '\r'
+  local sing_box_version xray_version
+  sing_box_version="$(runtime_version_for "sing-box")"
+  if [ -n "$sing_box_version" ]; then
+    printf '%s' "$sing_box_version"
     return 0
   fi
-  if [ -x "$RUNTIME_BIN_DIR/xray" ]; then
-    "$RUNTIME_BIN_DIR/xray" version 2>/dev/null | head -n 1 | tr -d '\r'
+  xray_version="$(runtime_version_for "xray")"
+  if [ -n "$xray_version" ]; then
+    printf '%s' "$xray_version"
     return 0
   fi
   printf ''
 }
 
+permission_mode() {
+  if [ "${INSTALL_MODE:-}" = "system" ] || is_root; then
+    printf 'root'
+    return 0
+  fi
+  printf 'user'
+}
+
+runtime_binary_path() {
+  case "$1" in
+    sing-box) printf '%s' "$RUNTIME_BIN_DIR/sing-box" ;;
+    xray) printf '%s' "$RUNTIME_BIN_DIR/xray" ;;
+    *) printf '' ;;
+  esac
+}
+
+runtime_config_path() {
+  case "$1" in
+    sing-box) printf '%s' "$ETC_DIR/runtime/sing-box.json" ;;
+    xray) printf '%s' "$ETC_DIR/runtime/xray.json" ;;
+    *) printf '' ;;
+  esac
+}
+
+runtime_service_name() {
+  case "$1" in
+    sing-box) printf 'nodehubsapi-runtime-sing-box.service' ;;
+    xray) printf 'nodehubsapi-runtime-xray.service' ;;
+    *) printf '' ;;
+  esac
+}
+
+runtime_version_for() {
+  local binary
+  binary="$(runtime_binary_path "$1")"
+  [ -x "$binary" ] || {
+    printf ''
+    return 0
+  }
+  "$binary" version 2>/dev/null | head -n 1 | tr -d '\r'
+}
+
+runtime_status_for() {
+  local engine="$1"
+  local binary config service pid_file
+  binary="$(runtime_binary_path "$engine")"
+  config="$(runtime_config_path "$engine")"
+  service="$(runtime_service_name "$engine")"
+  pid_file="$STATE_DIR/runtime/${engine}.pid"
+
+  if [ "${USE_SYSTEMD:-0}" = "1" ] && [ -n "$service" ] && command -v systemctl >/dev/null 2>&1 \
+    && systemctl ${SYSTEMCTL_USER_FLAG:-} is-active --quiet "$service" 2>/dev/null; then
+    printf 'running'
+    return 0
+  fi
+  if pid_file_running "$pid_file"; then
+    printf 'running'
+    return 0
+  fi
+  if [ -x "$binary" ] || [ -f "$config" ]; then
+    printf 'stopping'
+    return 0
+  fi
+  printf 'not_installed'
+}
+
+capture_warp_cli() {
+  command -v warp-cli >/dev/null 2>&1 || return 127
+  warp-cli --accept-tos "$@" 2>/dev/null && return 0
+  warp-cli "$@" 2>/dev/null || true
+}
+
+warp_cli_registration_show() {
+  capture_warp_cli registration show | tr -d '\r'
+}
+
+warp_cli_tunnel_stats() {
+  capture_warp_cli tunnel stats | tr -d '\r'
+}
+
+warp_ipv4() {
+  local value=""
+  if command -v ip >/dev/null 2>&1; then
+    value="$(ip -o -4 addr show dev CloudflareWARP scope global 2>/dev/null | awk '{print $4}' | head -n 1 || true)"
+  fi
+  if [ -z "$value" ] && command -v ifconfig >/dev/null 2>&1; then
+    value="$(ifconfig CloudflareWARP 2>/dev/null | sed -nE 's/.*inet[[:space:]]+([0-9.]+).*/\1/p' | head -n 1 || true)"
+  fi
+  if [ -z "$value" ]; then
+    value="$(cat "$STATE_DIR/warp/v4" 2>/dev/null || true)"
+  fi
+  value="${value%%/*}"
+  printf '%s' "$value"
+}
+
 warp_ipv6() {
-  local value
-  value="$(cat "$STATE_DIR/warp/v6" 2>/dev/null || true)"
+  local value=""
+  if command -v ip >/dev/null 2>&1; then
+    value="$(ip -o -6 addr show dev CloudflareWARP scope global 2>/dev/null | awk '{print $4}' | head -n 1 || true)"
+  fi
+  if [ -z "$value" ] && command -v ifconfig >/dev/null 2>&1; then
+    value="$(ifconfig CloudflareWARP 2>/dev/null | sed -nE 's/.*inet6[[:space:]]+([0-9a-fA-F:]+).*/\1/p' | head -n 1 || true)"
+  fi
+  if [ -z "$value" ]; then
+    value="$(cat "$STATE_DIR/warp/v6" 2>/dev/null || true)"
+  fi
   if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
     value="$(grep -E '^(Address|Address6)[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}')"
-    # value might be "172.16.0.2/32, 2606:.../128"
     value="$(printf '%s' "$value" | tr ',' '\n' | grep ':' | tr -d '[:space:]' | head -n 1 || true)"
   fi
   value="${value%%/*}"
@@ -964,12 +1069,32 @@ warp_ipv6() {
 }
 
 warp_endpoint() {
-  local value
-  value="$(cat "$STATE_DIR/warp/endpoint" 2>/dev/null || true)"
+  local value="" stats_output=""
+  stats_output="$(warp_cli_tunnel_stats)"
+  if [ -n "$stats_output" ]; then
+    value="$(printf '%s\n' "$stats_output" | sed -nE 's/^[[:space:]]*(Endpoint|Remote)[[:space:]]*:[[:space:]]*(.+)$/\2/ip' | head -n 1 || true)"
+  fi
+  if [ -z "$value" ]; then
+    value="$(cat "$STATE_DIR/warp/endpoint" 2>/dev/null || true)"
+  fi
   if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
     value="$(grep -E '^Endpoint[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' || true)"
   fi
   value="$(printf '%s' "$value" | tr -d ' \t\n\r')"
+  printf '%s' "$value"
+}
+
+warp_account_type() {
+  local registration_output value
+  registration_output="$(warp_cli_registration_show)"
+  value="$(printf '%s\n' "$registration_output" | sed -nE 's/^[[:space:]]*Account[[:space:]]+type[[:space:]]*:[[:space:]]*(.+)$/\1/ip' | head -n 1 || true)"
+  printf '%s' "$value"
+}
+
+warp_tunnel_protocol() {
+  local stats_output value
+  stats_output="$(warp_cli_tunnel_stats)"
+  value="$(printf '%s\n' "$stats_output" | sed -nE 's/^[[:space:]]*(Tunnel[[:space:]]+protocol|Protocol)[[:space:]]*:[[:space:]]*(.+)$/\2/ip' | head -n 1 || true)"
   printf '%s' "$value"
 }
 
@@ -999,7 +1124,18 @@ warp_reserved_json() {
 }
 
 warp_status() {
-  if [ -f "$STATE_DIR/warp/v6" ] || [ -f "$STATE_DIR/warp/warp.conf" ] || [ -f "$STATE_DIR/warp/private_key" ]; then
+  if command -v warp-cli >/dev/null 2>&1; then
+    local status_raw status_lower
+    status_raw="$(capture_warp_cli status | tr -d '\r' | tail -n 1 || true)"
+    status_lower="$(printf '%s' "$status_raw" | tr '[:upper:]' '[:lower:]')"
+    if printf '%s' "$status_lower" | grep -q 'connected'; then
+      printf 'running'
+      return 0
+    fi
+    printf 'installed'
+    return 0
+  fi
+  if [ -f "$STATE_DIR/warp/v4" ] || [ -f "$STATE_DIR/warp/v6" ] || [ -f "$STATE_DIR/warp/warp.conf" ] || [ -f "$STATE_DIR/warp/private_key" ]; then
     printf 'installed'
     return 0
   fi
@@ -1123,8 +1259,10 @@ self_heal_background_services() {
 heartbeat() {
   local bytes_in bytes_out memory cpu cpu_cores connections version
   local memory_total memory_used
-  local warp_ipv6_value warp_status_value warp_endpoint_value warp_private_key_value warp_reserved_value
+  local warp_ipv4_value warp_ipv6_value warp_status_value warp_endpoint_value warp_account_type_value warp_tunnel_protocol_value
+  local warp_private_key_value warp_reserved_value
   local argo_status_value argo_domain_value
+  local permission_mode_value sing_box_version_value sing_box_status_value xray_version_value xray_status_value
   local storage_total storage_used storage_percent
   local payload
   read -r bytes_in bytes_out <<EOF_NET
@@ -1138,9 +1276,17 @@ $(memory_usage_bytes)
 EOF_MEM
   connections="$(connection_count)"
   version="$(runtime_version)"
+  permission_mode_value="$(permission_mode)"
+  sing_box_version_value="$(runtime_version_for "sing-box")"
+  sing_box_status_value="$(runtime_status_for "sing-box")"
+  xray_version_value="$(runtime_version_for "xray")"
+  xray_status_value="$(runtime_status_for "xray")"
+  warp_ipv4_value="$(warp_ipv4)"
   warp_ipv6_value="$(warp_ipv6)"
   warp_status_value="$(warp_status)"
   warp_endpoint_value="$(warp_endpoint)"
+  warp_account_type_value="$(warp_account_type)"
+  warp_tunnel_protocol_value="$(warp_tunnel_protocol)"
   warp_private_key_value="$(warp_private_key)"
   warp_reserved_value="$(warp_reserved_json)"
   argo_status_value="$(argo_status)"
@@ -1162,12 +1308,20 @@ EOF_STORAGE
   "heartbeatIntervalSeconds": ${HEARTBEAT_INTERVAL_SECONDS:-15},
   "versionPullIntervalSeconds": ${VERSION_PULL_INTERVAL_SECONDS:-15},
   "warpStatus": $(json_escape "$warp_status_value"),
+  "warpIpv4": $(json_escape "$warp_ipv4_value"),
   "warpIpv6": $(json_escape "$warp_ipv6_value"),
   "warpEndpoint": $(json_escape "$warp_endpoint_value"),
+  "warpAccountType": $(json_escape "$warp_account_type_value"),
+  "warpTunnelProtocol": $(json_escape "$warp_tunnel_protocol_value"),
   "warpPrivateKey": $(json_escape "$warp_private_key_value"),
   "warpReserved": ${warp_reserved_value},
   "argoStatus": $(json_escape "$argo_status_value"),
   "argoDomain": $(json_escape "$argo_domain_value"),
+  "permissionMode": $(json_escape "$permission_mode_value"),
+  "singBoxVersion": $(json_escape "$sing_box_version_value"),
+  "singBoxStatus": $(json_escape "$sing_box_status_value"),
+  "xrayVersion": $(json_escape "$xray_version_value"),
+  "xrayStatus": $(json_escape "$xray_status_value"),
   "storageTotalBytes": ${storage_total:-0},
   "storageUsedBytes": ${storage_used:-0},
   "storageUsagePercent": ${storage_percent:-null},

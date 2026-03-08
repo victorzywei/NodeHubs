@@ -1,0 +1,3 @@
+ALTER TABLE nodes ADD COLUMN warp_ipv4 TEXT NOT NULL DEFAULT '';
+ALTER TABLE nodes ADD COLUMN warp_account_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE nodes ADD COLUMN warp_tunnel_protocol TEXT NOT NULL DEFAULT '';

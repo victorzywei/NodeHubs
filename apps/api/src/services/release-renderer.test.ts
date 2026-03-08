@@ -39,6 +39,17 @@ function createNode(): NodeRecord {
   }
 }
 
+function createNoPublicIpNode(): NodeRecord {
+  return {
+    ...createNode(),
+    networkType: 'noPublicIp',
+    primaryDomain: '',
+    backupDomain: '',
+    entryIp: '',
+    argoTunnelDomain: 'tunnel.example.com',
+  }
+}
+
 function createTemplate(): TemplateRecord {
   return {
     id: 'tpl_1',
@@ -97,6 +108,76 @@ describe('release renderer', () => {
       schema: 'nodehubsapi-release-v2',
       releaseId: 'rel_1',
     })
+  })
+
+  it('omits sing-box inbound tls config on no-public-ip nodes', () => {
+    const runtimeCatalog = buildRuntimeCatalog()
+    const artifact = renderReleaseArtifact({
+      releaseId: 'rel_argo_sb',
+      revision: 3,
+      kind: 'runtime',
+      configRevision: 3,
+      bootstrapRevision: 1,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: 'argo sing-box',
+      summary: 'runtime update',
+      node: createNoPublicIpNode(),
+      templates: [createTemplate()],
+      bootstrapOptions: {
+        installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
+        installSingBox: false,
+        installXray: false,
+      },
+    }, runtimeCatalog)
+
+    const runtimeConfig = JSON.parse(artifact.runtimes[0]?.files[0]?.content || '{}') as {
+      inbounds?: Array<Record<string, unknown>>
+    }
+    const inbound = runtimeConfig.inbounds?.[0]
+
+    expect(artifact.subscriptionEndpoints[0]?.tlsMode).toBe('tls')
+    expect(inbound?.tls).toBeUndefined()
+  })
+
+  it('omits xray inbound tls config on no-public-ip nodes', () => {
+    const runtimeCatalog = buildRuntimeCatalog()
+    const artifact = renderReleaseArtifact({
+      releaseId: 'rel_argo_xray',
+      revision: 4,
+      kind: 'runtime',
+      configRevision: 4,
+      bootstrapRevision: 1,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: 'argo xray',
+      summary: 'runtime update',
+      node: createNoPublicIpNode(),
+      templates: [
+        {
+          ...createTemplate(),
+          engine: 'xray',
+        },
+      ],
+      bootstrapOptions: {
+        installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
+        installSingBox: false,
+        installXray: false,
+      },
+    }, runtimeCatalog)
+
+    const runtimeConfig = JSON.parse(artifact.runtimes[0]?.files[0]?.content || '{}') as {
+      inbounds?: Array<{ streamSettings?: Record<string, unknown> }>
+    }
+    const streamSettings = runtimeConfig.inbounds?.[0]?.streamSettings || {}
+
+    expect(artifact.subscriptionEndpoints[0]?.tlsMode).toBe('tls')
+    expect(streamSettings.security).toBeUndefined()
+    expect(streamSettings.tlsSettings).toBeUndefined()
   })
 
   it('renders base64 and plain subscription documents', () => {
@@ -336,7 +417,7 @@ describe('release renderer', () => {
     expect(engines).toEqual(['sing-box', 'xray'])
   })
 
-  it('injects warp outbound routing when warp exit is enabled on a template', () => {
+  it('binds sing-box warp exit traffic to the CloudflareWARP interface', () => {
     const runtimeCatalog = buildRuntimeCatalog()
     const artifact = renderReleaseArtifact({
       releaseId: 'rel_warp',
@@ -353,18 +434,6 @@ describe('release renderer', () => {
           ...createTemplate(),
           warpExit: true,
           warpRouteMode: 'ipv4',
-          defaults: {
-            ...createTemplate().defaults,
-            warp_server: 'engage.cloudflareclient.com',
-            warp_server_port: 2408,
-            warp_local_address_ipv4: '172.16.0.2/32',
-            warp_local_address_ipv6: '2606:4700:110:8d8d:1845:c39f:2dd5:a03a/128',
-            warp_private_key: 'template-private-key',
-            warp_peer_public_key: 'template-peer-key',
-            warp_system_interface: 'false',
-            warp_mtu: 1280,
-            reserved: '7,8,9',
-          },
         },
       ],
       bootstrapOptions: {
@@ -386,16 +455,8 @@ describe('release renderer', () => {
     expect(tags).toContain('warp-out')
     expect(runtimeConfig.route?.rules?.some((rule) => JSON.stringify(rule).includes('0.0.0.0/0'))).toBe(true)
     expect(warpOutbound).toMatchObject({
-      type: 'wireguard',
-      system: false,
-      mtu: 1280,
-      address: ['172.16.0.2/32', '2606:4700:110:8d8d:1845:c39f:2dd5:a03a/128'],
-    })
-    expect((warpOutbound?.peers as Array<Record<string, unknown>> | undefined)?.[0]).toMatchObject({
-      address: 'engage.cloudflareclient.com',
-      port: 2408,
-      public_key: 'template-peer-key',
-      reserved: [7, 8, 9],
+      type: 'direct',
+      bind_interface: 'CloudflareWARP',
     })
   })
 
@@ -513,13 +574,14 @@ describe('release renderer', () => {
     expect(artifact.bootstrap.installSingBox).toBe(true)
     expect(artifact.bootstrap.installXray).toBe(true)
     expect(artifact.bootstrap.runtimeBinaries.map((item) => item.engine).sort()).toEqual(['sing-box', 'xray'])
-    expect(artifact.bootstrap.notes.some((note) => note.includes('uses sing-box to generate the WireGuard keypair'))).toBe(true)
+    expect(artifact.bootstrap.notes.some((note) => note.includes('official warp-cli client'))).toBe(true)
+    expect(artifact.bootstrap.notes.some((note) => note.includes('root-mode node permissions'))).toBe(true)
     expect(artifact.runtimes).toEqual([])
     expect(artifact.templates).toEqual([])
     expect(artifact.subscriptionEndpoints).toEqual([])
   })
 
-  it('renders xray warp exit as a direct wireguard outbound', () => {
+  it('binds xray warp exit traffic to the CloudflareWARP interface', () => {
     const runtimeCatalog = buildRuntimeCatalog()
     const artifact = renderReleaseArtifact({
       releaseId: 'rel_xray_warp',
@@ -530,13 +592,7 @@ describe('release renderer', () => {
       createdAt: '2026-03-06T00:00:00.000Z',
       message: 'xray warp enabled',
       summary: 'runtime update',
-      node: {
-        ...createNode(),
-        warpEndpoint: 'engage.cloudflareclient.com:2408',
-        warpIpv6: '2606:4700:d0::a29f:c006',
-        warpPrivateKey: 'template-private-key',
-        warpReserved: [7, 8, 9],
-      },
+      node: createNode(),
       templates: [
         {
           ...createTemplate(),
@@ -544,16 +600,6 @@ describe('release renderer', () => {
           engine: 'xray',
           warpExit: true,
           warpRouteMode: 'all',
-          defaults: {
-            ...createTemplate().defaults,
-            warp_server: 'engage.cloudflareclient.com',
-            warp_server_port: 2408,
-            warp_private_key: 'template-private-key',
-            warp_peer_public_key: 'template-peer-key',
-            warp_system_interface: 'false',
-            warp_mtu: 1280,
-            reserved: '7,8,9',
-          },
         },
       ],
       bootstrapOptions: {
@@ -576,22 +622,14 @@ describe('release renderer', () => {
     expect(outbounds.some((item) => String(item.tag || '') === 'x-warp-out')).toBe(false)
     expect(warpOutbound).toMatchObject({
       tag: 'warp-out',
-      protocol: 'wireguard',
-      settings: {
-        secretKey: 'template-private-key',
-        address: ['172.16.0.2/32', '2606:4700:d0::a29f:c006/128'],
-        reserved: [7, 8, 9],
-        mtu: 1280,
-        noKernelTun: true,
-        domainStrategy: 'ForceIPv6v4',
+      protocol: 'freedom',
+      streamSettings: {
+        sockopt: {
+          interface: 'CloudflareWARP',
+        },
       },
     })
-    expect((warpOutbound?.settings as { peers?: Array<Record<string, unknown>> } | undefined)?.peers?.[0]).toMatchObject({
-      publicKey: 'template-peer-key',
-      endpoint: 'engage.cloudflareclient.com:2408',
-      allowedIPs: ['0.0.0.0/0', '::/0'],
-    })
-    expect(runtimeConfig.routing?.domainStrategy).toBe('IPOnDemand')
+    expect(runtimeConfig.routing?.domainStrategy).toBe('AsIs')
     expect(runtimeConfig.routing?.rules?.some((rule) => JSON.stringify(rule).includes('"outboundTag":"warp-out"'))).toBe(true)
   })
 

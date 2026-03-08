@@ -443,13 +443,19 @@ describe('heartbeat persistence', () => {
       memoryUsedBytes: 4 * 1024 * 1024 * 1024,
       memoryUsagePercent: 20,
       warpStatus: 'installed',
+      warpIpv4: '172.16.0.2/32',
       warpIpv6: '2606:4700:110:8d8d:1845:c39f:2dd5:a03a',
       warpEndpoint: 'engage.cloudflareclient.com:2408',
+      warpAccountType: 'Unlimited',
+      warpTunnelProtocol: 'MASQUE',
       warpPrivateKey: 'private-key',
       warpReserved: [1, 2, 3],
       protocolRuntimeVersion: 'sing-box 1.13.0',
     })
 
+    expect(updated?.warpIpv4).toBe('172.16.0.2/32')
+    expect(updated?.warpAccountType).toBe('Unlimited')
+    expect(updated?.warpTunnelProtocol).toBe('MASQUE')
     expect(updated?.warpPrivateKey).toBe('private-key')
     expect(updated?.warpReserved).toEqual([1, 2, 3])
     expect(updated?.cpuCoreCount).toBe(8)

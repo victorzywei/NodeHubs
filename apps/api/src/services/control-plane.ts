@@ -63,12 +63,20 @@ type NodeRow = {
   bytes_out_total: number
   current_connections: number
   warp_status?: string
+  warp_ipv4?: string
   warp_ipv6?: string
   warp_endpoint?: string
+  warp_account_type?: string
+  warp_tunnel_protocol?: string
   warp_private_key?: string
   warp_reserved_json?: string
   argo_status?: string
   argo_domain?: string
+  permission_mode?: string
+  sing_box_version?: string
+  sing_box_status?: string
+  xray_version?: string
+  xray_status?: string
   storage_total_bytes?: number
   storage_used_bytes?: number
   storage_usage_percent?: number | null
@@ -186,12 +194,20 @@ function toNodeRecord(row: NodeRow): NodeRecord {
     bytesOutTotal: Number(row.bytes_out_total || 0),
     currentConnections: Number(row.current_connections || 0),
     warpStatus: row.warp_status || '',
+    warpIpv4: row.warp_ipv4 || '',
     warpIpv6: row.warp_ipv6 || '',
     warpEndpoint: row.warp_endpoint || '',
+    warpAccountType: row.warp_account_type || '',
+    warpTunnelProtocol: row.warp_tunnel_protocol || '',
     warpPrivateKey: row.warp_private_key || '',
     warpReserved: parseJsonObject<number[]>(row.warp_reserved_json || '[]', []),
     argoStatus: row.argo_status || '',
     argoDomain: row.argo_domain || '',
+    permissionMode: row.permission_mode === 'root' || row.permission_mode === 'user' ? row.permission_mode : undefined,
+    singBoxVersion: row.sing_box_version || '',
+    singBoxStatus: row.sing_box_status || '',
+    xrayVersion: row.xray_version || '',
+    xrayStatus: row.xray_status || '',
     storageTotalBytes: Number(row.storage_total_bytes || 0),
     storageUsedBytes: Number(row.storage_used_bytes || 0),
     storageUsagePercent: row.storage_usage_percent === null || row.storage_usage_percent === undefined
@@ -256,6 +272,10 @@ function hasBootstrapWork(
     || bootstrapOptions.installXray
     || bootstrapOptions.heartbeatIntervalSeconds !== Number(node.heartbeatIntervalSeconds || 15)
     || bootstrapOptions.versionPullIntervalSeconds !== Number(node.versionPullIntervalSeconds || 15)
+}
+
+function canInstallWarpBootstrap(node: Pick<NodeRecord, 'permissionMode'>): boolean {
+  return node.permissionMode !== 'user'
 }
 
 function toTemplateRecord(row: TemplateRow): TemplateRecord {
@@ -558,8 +578,8 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
      SET name = ?, node_type = ?, region = ?, tags_json = ?, network_type = ?, primary_domain = ?, backup_domain = ?, entry_ip = ?,
          github_mirror_url = ?, warp_license_key = ?, cf_dns_token = ?, argo_tunnel_token = ?, argo_tunnel_domain = ?, argo_tunnel_port = ?,
          install_warp = ?, install_argo = ?, bytes_in_total = ?, bytes_out_total = ?, current_connections = ?,
-         cpu_usage_percent = ?, memory_usage_percent = ?, warp_status = ?, warp_ipv6 = ?, warp_endpoint = ?,
-         warp_private_key = ?, warp_reserved_json = ?,
+         cpu_usage_percent = ?, memory_usage_percent = ?, warp_status = ?, warp_ipv4 = ?, warp_ipv6 = ?, warp_endpoint = ?,
+         warp_account_type = ?, warp_tunnel_protocol = ?, warp_private_key = ?, warp_reserved_json = ?,
          argo_status = ?, argo_domain = ?, storage_total_bytes = ?, storage_used_bytes = ?, storage_usage_percent = ?,
          cpu_core_count = ?, memory_total_bytes = ?, memory_used_bytes = ?,
          protocol_runtime_version = ?, last_seen_at = ?, heartbeat_interval_seconds = ?, version_pull_interval_seconds = ?,
@@ -588,8 +608,11 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       input.cpuUsagePercent ?? current.cpu_usage_percent,
       input.memoryUsagePercent ?? current.memory_usage_percent,
       input.warpStatus ?? current.warp_status ?? '',
+      input.warpIpv4 ?? current.warp_ipv4 ?? '',
       input.warpIpv6 ?? current.warp_ipv6 ?? '',
       input.warpEndpoint ?? current.warp_endpoint ?? '',
+      input.warpAccountType ?? current.warp_account_type ?? '',
+      input.warpTunnelProtocol ?? current.warp_tunnel_protocol ?? '',
       input.warpPrivateKey ?? current.warp_private_key ?? '',
       JSON.stringify(input.warpReserved ?? parseJsonObject<number[]>(current.warp_reserved_json || '[]', [])),
       input.argoStatus ?? current.argo_status ?? '',
@@ -829,6 +852,9 @@ export async function publishNodeRelease(
   if (kind === 'runtime' && templateRows.length === 0) {
     throw new Error('Runtime releases require at least one protocol template')
   }
+  if (kind === 'bootstrap' && bootstrapOptions.installWarp && !canInstallWarpBootstrap(node)) {
+    throw new Error('Bootstrap WARP installation requires root-mode node permissions')
+  }
   if (kind === 'bootstrap' && !hasBootstrapWork(node, bootstrapOptions)) {
     throw new Error('Bootstrap releases require at least one selected action or a schedule change')
   }
@@ -929,6 +955,9 @@ export async function previewNodeRelease(
   if (kind === 'runtime' && templateRows.length === 0) {
     throw new Error('Runtime releases require at least one protocol template')
   }
+  if (kind === 'bootstrap' && bootstrapOptions.installWarp && !canInstallWarpBootstrap(node)) {
+    throw new Error('Bootstrap WARP installation requires root-mode node permissions')
+  }
   if (kind === 'bootstrap' && !hasBootstrapWork(node, bootstrapOptions)) {
     throw new Error('Bootstrap releases require at least one selected action or a schedule change')
   }
@@ -992,12 +1021,20 @@ export async function getNodeReleaseLog(
 export async function recordHeartbeat(services: AppServices, input: HeartbeatInput): Promise<NodeRecord | null> {
   const now = nowIso()
   const nextWarpStatus = input.warpStatus === undefined ? null : input.warpStatus
+  const nextWarpIpv4 = input.warpIpv4 === undefined ? null : input.warpIpv4
   const nextWarpIpv6 = input.warpIpv6 === undefined ? null : input.warpIpv6
   const nextWarpEndpoint = input.warpEndpoint === undefined ? null : input.warpEndpoint
+  const nextWarpAccountType = input.warpAccountType === undefined ? null : input.warpAccountType
+  const nextWarpTunnelProtocol = input.warpTunnelProtocol === undefined ? null : input.warpTunnelProtocol
   const nextWarpPrivateKey = input.warpPrivateKey === undefined ? null : input.warpPrivateKey
   const nextWarpReservedJson = input.warpReserved === undefined ? null : JSON.stringify(input.warpReserved)
   const nextArgoStatus = input.argoStatus === undefined ? null : input.argoStatus
   const nextArgoDomain = input.argoDomain === undefined ? null : input.argoDomain
+  const nextPermissionMode = input.permissionMode === undefined ? null : input.permissionMode
+  const nextSingBoxVersion = input.singBoxVersion === undefined ? null : input.singBoxVersion
+  const nextSingBoxStatus = input.singBoxStatus === undefined ? null : input.singBoxStatus
+  const nextXrayVersion = input.xrayVersion === undefined ? null : input.xrayVersion
+  const nextXrayStatus = input.xrayStatus === undefined ? null : input.xrayStatus
   const nextStorageTotalBytes = input.storageTotalBytes === undefined ? null : input.storageTotalBytes
   const nextStorageUsedBytes = input.storageUsedBytes === undefined ? null : input.storageUsedBytes
   const nextStorageUsagePercent = input.storageUsagePercent === undefined ? null : input.storageUsagePercent
@@ -1009,9 +1046,14 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
   await services.db.run(
     `UPDATE nodes
      SET bytes_in_total = ?, bytes_out_total = ?, current_connections = ?, cpu_usage_percent = ?, memory_usage_percent = ?,
-         warp_status = coalesce(?, warp_status), warp_ipv6 = coalesce(?, warp_ipv6), warp_endpoint = coalesce(?, warp_endpoint),
-         warp_private_key = coalesce(?, warp_private_key), warp_reserved_json = coalesce(?, warp_reserved_json),
+         warp_status = coalesce(?, warp_status), warp_ipv4 = coalesce(?, warp_ipv4), warp_ipv6 = coalesce(?, warp_ipv6),
+         warp_endpoint = coalesce(?, warp_endpoint), warp_account_type = coalesce(?, warp_account_type),
+         warp_tunnel_protocol = coalesce(?, warp_tunnel_protocol), warp_private_key = coalesce(?, warp_private_key),
+         warp_reserved_json = coalesce(?, warp_reserved_json),
          argo_status = coalesce(?, argo_status), argo_domain = coalesce(?, argo_domain),
+         permission_mode = coalesce(?, permission_mode),
+         sing_box_version = coalesce(?, sing_box_version), sing_box_status = coalesce(?, sing_box_status),
+         xray_version = coalesce(?, xray_version), xray_status = coalesce(?, xray_status),
          storage_total_bytes = coalesce(?, storage_total_bytes), storage_used_bytes = coalesce(?, storage_used_bytes),
          storage_usage_percent = coalesce(?, storage_usage_percent),
          cpu_core_count = coalesce(?, cpu_core_count),
@@ -1028,12 +1070,20 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
       input.cpuUsagePercent,
       input.memoryUsagePercent,
       nextWarpStatus,
+      nextWarpIpv4,
       nextWarpIpv6,
       nextWarpEndpoint,
+      nextWarpAccountType,
+      nextWarpTunnelProtocol,
       nextWarpPrivateKey,
       nextWarpReservedJson,
       nextArgoStatus,
       nextArgoDomain,
+      nextPermissionMode,
+      nextSingBoxVersion,
+      nextSingBoxStatus,
+      nextXrayVersion,
+      nextXrayStatus,
       nextStorageTotalBytes,
       nextStorageUsedBytes,
       nextStorageUsagePercent,

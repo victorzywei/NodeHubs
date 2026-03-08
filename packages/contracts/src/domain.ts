@@ -30,12 +30,20 @@ export interface NodeRecord {
   argoTunnelDomain: string
   argoTunnelPort: number
   warpStatus?: string
+  warpIpv4?: string
   warpIpv6?: string
   warpEndpoint?: string
+  warpAccountType?: string
+  warpTunnelProtocol?: string
   warpPrivateKey?: string
   warpReserved?: number[]
   argoStatus?: string
   argoDomain?: string
+  permissionMode?: 'root' | 'user'
+  singBoxVersion?: string
+  singBoxStatus?: string
+  xrayVersion?: string
+  xrayStatus?: string
   storageTotalBytes?: number
   storageUsedBytes?: number
   storageUsagePercent?: number | null

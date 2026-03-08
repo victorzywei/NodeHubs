@@ -766,238 +766,171 @@ json_get_number() {
   return 0
 }
 
-normalize_warp_v6() {
-  local raw="$1"
-  local value
-  value="$(printf '%s' "$raw" | tr -d '[:space:]')"
-  value="${value%%/*}"
-  if [[ "$value" =~ ^\[([0-9A-Fa-f:]+)\](:[0-9]+)?$ ]]; then
-    printf '%s' "${BASH_REMATCH[1]}"
-    return 0
+resolve_warp_apt_codename() {
+  local codename="${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}"
+  if [ -z "$codename" ] && [ -r /etc/os-release ]; then
+    codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}")"
   fi
-  if [[ "$value" == \[*\]:* ]]; then
-    value="${value#\[}"
-    value="${value%%\]:*}"
+  if [ -z "$codename" ] && command -v lsb_release >/dev/null 2>&1; then
+    codename="$(lsb_release -cs 2>/dev/null || true)"
   fi
-  printf '%s' "$value"
+  printf '%s' "$codename"
 }
 
-has_ipv6_default_route() {
-  if ! command -v ip >/dev/null 2>&1; then
-    return 1
+install_warp_cli_debian() {
+  local codename keyring repo_file
+  ensure_command curl curl ca-certificates || return 1
+  if ! command -v gpg >/dev/null 2>&1; then
+    package_install gnupg >/dev/null 2>&1 || package_install gnupg2 >/dev/null 2>&1 || return 1
   fi
-  ip -6 route show default 2>/dev/null | grep -q .
-}
-
-resolve_host_ipv4() {
-  local host="$1"
-  local candidate=""
-  if [ -z "$host" ]; then
-    return 1
-  fi
-  if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    printf '%s' "$host"
-    return 0
-  fi
-  if command -v getent >/dev/null 2>&1; then
-    candidate="$(getent ahostsv4 "$host" 2>/dev/null | awk 'NR == 1 { print $1 }')"
-  fi
-  if [ -z "$candidate" ] && command -v python3 >/dev/null 2>&1; then
-    candidate="$(python3 - "$host" <<'PY'
-import socket
-import sys
-
-host = sys.argv[1]
-try:
-    infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_DGRAM)
-except OSError:
-    infos = []
-
-seen = set()
-for info in infos:
-    addr = info[4][0]
-    if addr not in seen:
-        print(addr)
-        break
-    seen.add(addr)
-PY
-)"
-  fi
-  [ -n "$candidate" ] || return 1
-  printf '%s' "$candidate"
-}
-
-normalize_warp_endpoint() {
-  local host_raw="$1"
-  local port_raw="$2"
-  local host port ipv4_host
-  host="$(printf '%s' "$host_raw" | tr -d '[:space:]')"
-  port="$(printf '%s' "$port_raw" | tr -d '[:space:]')"
-  if [[ "$host" =~ ^\[(.+)\]:([0-9]+)$ ]]; then
-    host="${BASH_REMATCH[1]}"
-    [ -z "$port" ] && port="${BASH_REMATCH[2]}"
-  elif [[ "$host" =~ ^(.+):([0-9]+)$ ]] && [[ "$host" != *:*:* ]]; then
-    host="${BASH_REMATCH[1]}"
-    [ -z "$port" ] && port="${BASH_REMATCH[2]}"
-  fi
-  [ -n "$host" ] || host="engage.cloudflareclient.com"
-  if [[ -z "$port" || ! "$port" =~ ^[0-9]+$ || "$port" -lt 1 || "$port" -gt 65535 ]]; then
-    port="2408"
-  fi
-  if [[ "$host" != *:* ]] && ! [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && ! has_ipv6_default_route; then
-    ipv4_host="$(resolve_host_ipv4 "$host" || true)"
-    if [ -n "$ipv4_host" ]; then
-      log "No IPv6 default route detected; using IPv4 WARP endpoint ${ipv4_host}:${port} instead of ${host}:${port}." >&2
-      host="$ipv4_host"
-    fi
-  fi
-  printf '%s:%s' "$host" "$port"
-}
-
-save_warp_runtime() {
-  local warp_dir="$1"
-  local private_key="$2"
-  local ipv6="$3"
-  local reserved="$4"
-  local endpoint="$5"
-  mkdir -p "$warp_dir"
-  printf '%s\n' "$private_key" > "$warp_dir/private_key"
-  printf '%s\n' "$ipv6" > "$warp_dir/v6"
-  printf '%s\n' "$reserved" > "$warp_dir/reserved"
-  printf '%s\n' "$endpoint" > "$warp_dir/endpoint"
-}
-
-update_saved_warp_endpoint() {
-  local warp_dir="$1"
-  local config_file="$warp_dir/warp.conf"
-  local current_endpoint normalized_endpoint tmp_file
-  [ -s "$config_file" ] || return 0
-  current_endpoint="$(sed -n 's/^Endpoint = //p' "$config_file" | head -n1)"
-  [ -n "$current_endpoint" ] || return 0
-  normalized_endpoint="$(normalize_warp_endpoint "$current_endpoint" "" || true)"
-  [ -n "$normalized_endpoint" ] || return 0
-  [ "$normalized_endpoint" = "$current_endpoint" ] && return 0
-  tmp_file="$(mktemp)"
-  awk -v endpoint="$normalized_endpoint" '
-    index($0, "Endpoint = ") == 1 { print "Endpoint = " endpoint; next }
-    { print }
-  ' "$config_file" > "$tmp_file"
-  mv "$tmp_file" "$config_file"
-  printf '%s\n' "$normalized_endpoint" > "$warp_dir/endpoint"
-  log "Updated saved WARP endpoint to ${normalized_endpoint}."
-}
-
-ensure_sing_box_binary_for_warp() {
-  local existing_bin="$RUNTIME_BIN_DIR/sing-box"
-  if [ -x "$existing_bin" ]; then
-    printf '%s' "$existing_bin"
-    return 0
-  fi
-  if command -v sing-box >/dev/null 2>&1; then
-    command -v sing-box
-    return 0
-  fi
-
-  warn "sing-box is missing; installing it to generate the WARP WireGuard keypair."
-  local RUNTIME_ENGINE="sing-box"
-  local RUNTIME_VERSION=""
-  local RUNTIME_BINARY_NAME="sing-box"
-  local RUNTIME_INSTALL_PATH_DEFAULT="/usr/local/bin/sing-box"
-  local RUNTIME_ARCHIVE_FORMAT="tar.gz"
-  local RUNTIME_INSTALL_PATH=""
-  resolve_runtime_install_path
-  install_runtime_binary || return 1
-  printf '%s' "$RUNTIME_INSTALL_PATH"
-}
-
-generate_warp_keypair_with_sing_box() {
-  local sing_box_bin key_output private_key public_key fallback_keys
-  sing_box_bin="$(ensure_sing_box_binary_for_warp)" || return 1
-  key_output="$("$sing_box_bin" generate wg-keypair 2>/dev/null || true)"
-  [ -n "$key_output" ] || {
-    warn "sing-box failed to generate a WARP WireGuard keypair."
+  codename="$(resolve_warp_apt_codename)"
+  [ -n "$codename" ] || {
+    warn "Failed to detect Debian/Ubuntu codename for Cloudflare WARP repository."
     return 1
   }
-
-  private_key="$(printf '%s\n' "$key_output" | grep -i 'private' | grep -oE '[A-Za-z0-9+/=]{43,}' | head -n1 || true)"
-  public_key="$(printf '%s\n' "$key_output" | grep -i 'public' | grep -oE '[A-Za-z0-9+/=]{43,}' | head -n1 || true)"
-  if [ -z "$private_key" ] || [ -z "$public_key" ]; then
-    fallback_keys="$(printf '%s\n' "$key_output" | grep -oE '[A-Za-z0-9+/=]{43,}' | head -n2 || true)"
-    private_key="$(printf '%s\n' "$fallback_keys" | sed -n '1p')"
-    public_key="$(printf '%s\n' "$fallback_keys" | sed -n '2p')"
-  fi
-
-  [ -n "$private_key" ] || return 1
-  [ -n "$public_key" ] || return 1
-  printf '%s\n%s\n' "$private_key" "$public_key"
+  keyring="/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg"
+  repo_file="/etc/apt/sources.list.d/cloudflare-client.list"
+  mkdir -p "$(dirname "$keyring")" "$(dirname "$repo_file")"
+  curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o "$keyring"
+  cat >"$repo_file" <<EOF
+deb [signed-by=${keyring}] https://pkg.cloudflareclient.com/ ${codename} main
+EOF
+  DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || return 1
+  DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflare-warp >/dev/null 2>&1 || return 1
 }
 
-register_warp_via_api() {
-  local warp_dir="$STATE_DIR/warp"
-  local config_file="$warp_dir/warp.conf"
-  local keypair_output reg_api reg_payload response private_key public_key tos serial
-  local device_id access_token ipv6 host port client_id_b64 reserved endpoint bytes b1 b2 b3
-  local peer_public_key system_interface local_address_ipv4
-  mkdir -p "$warp_dir"
-  if [ -s "$config_file" ] && [ -s "$warp_dir/private_key" ] && [ -s "$warp_dir/v6" ]; then
-    update_saved_warp_endpoint "$warp_dir"
+resolve_warp_rpm_basearch() {
+  case "$(uname -m 2>/dev/null || true)" in
+    x86_64|amd64) printf 'x86_64' ;;
+    aarch64|arm64) printf 'aarch64' ;;
+    *) return 1 ;;
+  esac
+}
+
+install_warp_cli_rpm() {
+  local basearch repo_file
+  ensure_command curl curl ca-certificates || return 1
+  basearch="$(resolve_warp_rpm_basearch)" || {
+    warn "Cloudflare WARP RPM packages are not available for this architecture."
+    return 1
+  }
+  repo_file="/etc/yum.repos.d/cloudflare-warp.repo"
+  rpm --import https://pkg.cloudflareclient.com/pubkey.gpg >/dev/null 2>&1 || return 1
+  mkdir -p "$(dirname "$repo_file")"
+  cat >"$repo_file" <<EOF
+[cloudflare-warp]
+name=cloudflare-warp
+baseurl=https://pkg.cloudflareclient.com/rpm/${basearch}
+enabled=1
+gpgcheck=1
+gpgkey=https://pkg.cloudflareclient.com/pubkey.gpg
+repo_gpgcheck=0
+EOF
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y cloudflare-warp >/dev/null 2>&1 || return 1
     return 0
   fi
-  ensure_command curl curl ca-certificates || return 1
-  reg_api="https://api.cloudflareclient.com/v0a4005/reg"
-  keypair_output="$(generate_warp_keypair_with_sing_box)" || return 1
-  private_key="$(printf '%s\n' "$keypair_output" | sed -n '1p')"
-  public_key="$(printf '%s\n' "$keypair_output" | sed -n '2p')"
-  [ -n "$private_key" ] || return 1
-  [ -n "$public_key" ] || return 1
-  tos="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
-  serial="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)"
-  [ -n "$serial" ] || serial="$(date +%s)-$RANDOM"
-  reg_payload="$(printf '{"key":"%s","install_id":"","fcm_token":"","tos":"%s","model":"PC","serial_number":"%s","locale":"en_US","warp_enabled":true}' "$public_key" "$tos" "$serial")"
-  response="$(curl -fsS "$reg_api" -X POST -H "Content-Type: application/json; charset=UTF-8" -H "Accept: application/json" -H "User-Agent: okhttp/3.12.1" -H "CF-Client-Version: a-6.30-3596" --data "$reg_payload" 2>/dev/null || true)"
-  [ -n "$response" ] || return 1
-  device_id="$(json_get_string "$response" "id")"
-  access_token="$(json_get_string "$response" "token")"
-  ipv6="$(normalize_warp_v6 "$(json_get_string "$response" "v6")")"
-  host="$(json_get_string "$response" "host")"
-  port="$(json_get_number "$response" "port")"
-  client_id_b64="$(json_get_string "$response" "client_id")"
-  [ -n "$device_id" ] && [ -n "$access_token" ] || return 1
-  if [ -n "$NODE_WARP_LICENSE_KEY" ]; then
-    curl -fsS "${reg_api}/${device_id}/account" -X PUT -H "Content-Type: application/json; charset=UTF-8" -H "Accept: application/json" -H "Authorization: Bearer ${access_token}" --data "$(printf '{"license":"%s"}' "$NODE_WARP_LICENSE_KEY")" >/dev/null 2>&1 || true
+  yum install -y cloudflare-warp >/dev/null 2>&1 || return 1
+}
+
+install_warp_cli() {
+  if command -v warp-cli >/dev/null 2>&1; then
+    log "Reusing existing warp-cli installation."
+    return 0
   fi
-  peer_public_key="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
-  system_interface="false"
-  local_address_ipv4="172.16.0.2/32"
-  endpoint="$(normalize_warp_endpoint "$host" "$port")"
-  reserved="0,0,0"
-  if [ -n "$client_id_b64" ] && command -v od >/dev/null 2>&1 && command -v base64 >/dev/null 2>&1; then
-    bytes="$(decode_base64_flexible "$client_id_b64" | od -An -t u1 2>/dev/null | tr -s ' ' | sed 's/^ //')"
-    b1="$(echo "$bytes" | awk '{print $1}')"
-    b2="$(echo "$bytes" | awk '{print $2}')"
-    b3="$(echo "$bytes" | awk '{print $3}')"
-    if [ -n "$b1" ] && [ -n "$b2" ] && [ -n "$b3" ]; then
-      reserved="${b1},${b2},${b3}"
+  is_root || {
+    warn "Official warp-cli installation requires root-mode permissions."
+    return 1
+  }
+  if command -v apt-get >/dev/null 2>&1; then
+    install_warp_cli_debian
+    return $?
+  fi
+  if command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+    install_warp_cli_rpm
+    return $?
+  fi
+  warn "Unsupported package manager for official warp-cli installation."
+  return 1
+}
+
+run_warp_cli() {
+  command -v warp-cli >/dev/null 2>&1 || return 127
+  warp-cli --accept-tos "$@" >/dev/null 2>&1 && return 0
+  warp-cli "$@" >/dev/null 2>&1
+}
+
+capture_warp_cli() {
+  command -v warp-cli >/dev/null 2>&1 || return 127
+  warp-cli --accept-tos "$@" 2>/dev/null && return 0
+  warp-cli "$@" 2>/dev/null || true
+}
+
+warp_cli_registration_show() {
+  capture_warp_cli registration show | tr -d '\r'
+}
+
+warp_cli_account_type() {
+  local registration_output
+  registration_output="$(warp_cli_registration_show)"
+  printf '%s\n' "$registration_output" | sed -nE 's/^[[:space:]]*Account[[:space:]]+type[[:space:]]*:[[:space:]]*(.+)$/\1/ip' | head -n 1
+}
+
+wait_for_warp_connected() {
+  local status_output status_lower attempt=0
+  while [ "$attempt" -lt 15 ]; do
+    status_output="$(capture_warp_cli status | tr -d '\r' || true)"
+    status_lower="$(printf '%s' "$status_output" | tr '[:upper:]' '[:lower:]')"
+    if printf '%s' "$status_lower" | grep -q 'connected'; then
+      log "warp-cli connected successfully."
+      return 0
     fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+  warn "warp-cli failed to reach connected state: $(printf '%s' "$status_output" | tail -n 1)"
+  return 1
+}
+
+ensure_warp_service() {
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl enable --now warp-svc >/dev/null 2>&1 || true
   fi
-  cat >"$config_file" <<EOF
-PrivateKey = ${private_key}
-Address4 = ${local_address_ipv4}
-Address6 = ${ipv6}/128
-Endpoint = ${endpoint}
-PeerPublicKey = ${peer_public_key}
-SystemInterface = ${system_interface}
-Reserved = ${reserved}
-DeviceID = ${device_id}
-Token = ${access_token}
-AllowedIPs = 0.0.0.0/0, ::/0
-EOF
-  save_warp_runtime "$warp_dir" "$private_key" "$ipv6" "$reserved" "$endpoint"
+}
+
+configure_warp_cli() {
+  local account_type
+  command -v warp-cli >/dev/null 2>&1 || {
+    warn "warp-cli is not available after installation."
+    return 1
+  }
+  run_warp_cli registration new || true
+  if [ -n "$NODE_WARP_LICENSE_KEY" ]; then
+    run_warp_cli registration license "$NODE_WARP_LICENSE_KEY" || {
+      warn "Failed to apply the provided WARP License Key."
+      return 1
+    }
+  fi
+  account_type="$(warp_cli_account_type)"
+  if [ -n "$account_type" ]; then
+    log "warp-cli account type: $account_type"
+  fi
+  run_warp_cli connect || {
+    warn "warp-cli connect command failed."
+    return 1
+  }
+  wait_for_warp_connected
 }
 
 ensure_warp_bootstrap() {
-  register_warp_via_api
-  log "WARP registration completed."
+  is_root || {
+    warn "Official warp-cli bootstrap requires root-mode permissions."
+    return 1
+  }
+  install_warp_cli || return 1
+  ensure_warp_service
+  configure_warp_cli || return 1
+  log "Official warp-cli bootstrap completed."
 }
 
 install_cloudflared_binary() {

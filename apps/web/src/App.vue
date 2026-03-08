@@ -81,37 +81,6 @@ function logout() {
 }
 
 // ---- Data Loading ----
-function hasImportableWarpSourceData(node: NodeRecord) {
-  return Boolean((node.warpPrivateKey || '').trim())
-    && Boolean((node.warpEndpoint || '').trim())
-    && Boolean((node.warpIpv6 || '').trim())
-    && Array.isArray(node.warpReserved)
-    && node.warpReserved.length === 3
-}
-
-function hasWarpSourceData(node: NodeRecord) {
-  return Boolean((node.warpPrivateKey || '').trim())
-    || Boolean((node.warpEndpoint || '').trim())
-    || Boolean((node.warpIpv6 || '').trim())
-    || (Array.isArray(node.warpReserved) && node.warpReserved.length === 3)
-    || Boolean((node.warpStatus || '').trim())
-}
-
-function getDefaultWarpSourceNodeId(nodeList: NodeRecord[]) {
-  const selectedNodeId = selectedNode.value?.id
-  if (selectedNodeId) {
-    const selected = findNodeById(nodeList, selectedNodeId)
-    if (selected && hasWarpSourceData(selected)) return selected.id
-  }
-  return nodeList.find(hasImportableWarpSourceData)?.id || nodeList.find(hasWarpSourceData)?.id || ''
-}
-
-function getWarpSourceNodeLabel(node: NodeRecord) {
-  return hasImportableWarpSourceData(node)
-    ? node.name
-    : `${node.name}（参数未完整上报）`
-}
-
 function findNodeById(nodeList: NodeRecord[], nodeId: string | null | undefined) {
   if (!nodeId) return null
   return nodeList.find((node) => node.id === nodeId) || null
@@ -121,9 +90,6 @@ function syncNodeSelections(nextNodes: NodeRecord[]) {
   if (selectedNode.value) selectedNode.value = findNodeById(nextNodes, selectedNode.value.id)
   if (selectedReleaseLogNode.value) selectedReleaseLogNode.value = findNodeById(nextNodes, selectedReleaseLogNode.value.id)
   if (publishNode.value) publishNode.value = findNodeById(nextNodes, publishNode.value.id)
-  if (warpSourceNodeId.value && !findNodeById(nextNodes, warpSourceNodeId.value)) {
-    warpSourceNodeId.value = getDefaultWarpSourceNodeId(nextNodes)
-  }
 }
 
 async function refreshNodesData() {
@@ -311,14 +277,40 @@ show_service_logs nodehubsapi-agent.service "$STATE_DIR/agent.log"`,
     },
     {
       title: 'WARP 全量排查',
-      description: '查看 WARP 参数文件、目录状态，以及承载 WARP 的 runtime 日志。',
+      description: '查看官方 warp-cli 的注册、连接状态、WARP 网卡和相关 runtime 日志。',
       command: `${prelude}
-echo '== WARP files =='
-show_dir "$STATE_DIR/warp"
-[ -f "$STATE_DIR/warp/warp.conf" ] && sed -n '1,200p' "$STATE_DIR/warp/warp.conf"
-[ -f "$STATE_DIR/warp/private_key" ] && sed -n '1,2p' "$STATE_DIR/warp/private_key"
-[ -f "$STATE_DIR/warp/reserved" ] && cat "$STATE_DIR/warp/reserved"
-[ -f "$STATE_DIR/warp/endpoint" ] && cat "$STATE_DIR/warp/endpoint"
+echo '== warp-svc status =='
+show_service_status warp-svc.service || show_process warp-svc
+echo
+echo '== warp-cli registration =='
+if command -v warp-cli >/dev/null 2>&1; then
+  warp-cli --accept-tos registration show 2>/dev/null || warp-cli registration show 2>/dev/null || true
+else
+  echo 'warp-cli not installed'
+fi
+echo
+echo '== warp-cli status =='
+if command -v warp-cli >/dev/null 2>&1; then
+  warp-cli --accept-tos status 2>/dev/null || warp-cli status 2>/dev/null || true
+else
+  echo 'warp-cli not installed'
+fi
+echo
+echo '== warp-cli tunnel stats =='
+if command -v warp-cli >/dev/null 2>&1; then
+  warp-cli --accept-tos tunnel stats 2>/dev/null || warp-cli tunnel stats 2>/dev/null || true
+else
+  echo 'warp-cli not installed'
+fi
+echo
+echo '== CloudflareWARP interface =='
+if command -v ip >/dev/null 2>&1; then
+  ip addr show dev CloudflareWARP 2>/dev/null || echo 'interface not found: CloudflareWARP'
+elif command -v ifconfig >/dev/null 2>&1; then
+  ifconfig CloudflareWARP 2>/dev/null || echo 'interface not found: CloudflareWARP'
+else
+  echo 'missing ip/ifconfig'
+fi
 echo
 echo '== sing-box runtime =='
 show_service_status nodehubsapi-runtime-sing-box.service || show_process sing-box
@@ -425,7 +417,6 @@ async function deleteNodeById(nodeId: string, nodeName: string) {
 
 // ---- Template Actions ----
 const catalogPresets = ref<any[]>([])
-const warpSourceNodeId = ref('')
 const editingTemplateId = ref('')
 
 function createEmptyTemplate() {
@@ -449,16 +440,6 @@ const realityFingerprintOptions = [
 ]
 const defaultRealityFingerprint = 'chrome'
 const defaultRealityFlow = 'xtls-rprx-vision'
-const defaultWarpServer = 'engage.cloudflareclient.com'
-const defaultWarpServerPort = 2408
-const defaultWarpLocalAddressIpv4 = '172.16.0.2/32'
-const defaultWarpPeerPublicKey = 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo='
-const defaultWarpMtu = 1280
-const defaultWarpReserved = '0,0,0'
-const warpSystemInterfaceOptions = [
-  { value: 'false', label: 'false' },
-  { value: 'true', label: 'true' },
-]
 
 type TemplateDefaultField = {
   key: string
@@ -500,15 +481,12 @@ function resetTemplateForm() {
   editingTemplateId.value = ''
   newTemplate.value = createEmptyTemplate()
   realitySniMode.value = 'random'
-  warpSourceNodeId.value = getDefaultWarpSourceNodeId(nodes.value)
 }
 
 function closeTemplateModal() {
   showCreateTemplate.value = false
   resetTemplateForm()
 }
-
-const warpSourceNodes = computed(() => nodes.value.filter(hasWarpSourceData))
 
 // Protocol options based on engine
 const protocolOptions = computed(() => {
@@ -617,90 +595,6 @@ const templateDefaultFields = computed(() => {
   return fields
 })
 
-const warpDefaultFields = computed<TemplateDefaultField[]>(() => [
-  { key:'warp_server', label:'Server', placeholder: defaultWarpServer },
-  { key:'warp_server_port', label:'Server Port', placeholder: String(defaultWarpServerPort), type:'number' },
-  { key:'warp_local_address_ipv4', label:'Local Address IPv4', placeholder: defaultWarpLocalAddressIpv4 },
-  { key:'warp_local_address_ipv6', label:'Local Address IPv6', placeholder:'留空自动使用节点上报 IPv6/128' },
-  { key:'warp_private_key', label:'Private Key', placeholder:'填写 WARP Private Key' },
-  { key:'warp_peer_public_key', label:'Peer Public Key', placeholder: defaultWarpPeerPublicKey },
-  { key:'warp_system_interface', label:'System Interface', placeholder:'false', type:'boolean', options: warpSystemInterfaceOptions },
-  { key:'warp_mtu', label:'MTU', placeholder: String(defaultWarpMtu), type:'number' },
-  { key:'warp_reserved', label:'Reserved', placeholder: defaultWarpReserved },
-])
-
-function hasTextValue(value: unknown) {
-  if (typeof value === 'string') return value.trim().length > 0
-  if (typeof value === 'number') return Number.isFinite(value)
-  if (typeof value === 'boolean') return true
-  if (Array.isArray(value)) return value.length > 0
-  return false
-}
-
-function isValidPortValue(value: unknown) {
-  if (typeof value === 'number') return Number.isInteger(value) && value >= 1 && value <= 65535
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number(value)
-    return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535
-  }
-  return false
-}
-
-function isValidBooleanValue(value: unknown) {
-  if (typeof value === 'boolean') return true
-  if (typeof value !== 'string') return false
-  return ['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(value.trim().toLowerCase())
-}
-
-function isValidMtuValue(value: unknown) {
-  if (typeof value === 'number') return Number.isInteger(value) && value >= 576 && value <= 65535
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number(value)
-    return Number.isInteger(parsed) && parsed >= 576 && parsed <= 65535
-  }
-  return false
-}
-
-function isValidWarpReservedValue(value: unknown) {
-  if (Array.isArray(value)) {
-    return value.length === 3 && value.every((item) => Number.isFinite(Number(item)))
-  }
-  if (typeof value !== 'string' || !value.trim()) return false
-  const parts = value.split(',').map((item) => item.trim())
-  return parts.length === 3 && parts.every((item) => /^\d+$/.test(item))
-}
-
-function hydrateWarpTemplateDefaults(targetDefaults: Record<string, unknown>, mode: 'repair' | 'force' = 'repair') {
-  if (!newTemplate.value.warpExit) return targetDefaults
-
-  const shouldWrite = (key: string, validator: (value: unknown) => boolean) =>
-    mode === 'force' || !validator(targetDefaults[key])
-
-  if (shouldWrite('warp_server', hasTextValue)) {
-    targetDefaults['warp_server'] = defaultWarpServer
-  }
-  if (shouldWrite('warp_server_port', isValidPortValue)) {
-    targetDefaults['warp_server_port'] = defaultWarpServerPort
-  }
-  if (shouldWrite('warp_local_address_ipv4', hasTextValue)) {
-    targetDefaults['warp_local_address_ipv4'] = defaultWarpLocalAddressIpv4
-  }
-  if (shouldWrite('warp_peer_public_key', hasTextValue)) {
-    targetDefaults['warp_peer_public_key'] = defaultWarpPeerPublicKey
-  }
-  if (shouldWrite('warp_system_interface', isValidBooleanValue)) {
-    targetDefaults['warp_system_interface'] = false
-  }
-  if (shouldWrite('warp_mtu', isValidMtuValue)) {
-    targetDefaults['warp_mtu'] = defaultWarpMtu
-  }
-  if (shouldWrite('warp_reserved', isValidWarpReservedValue)) {
-    targetDefaults['warp_reserved'] = defaultWarpReserved
-  }
-
-  return targetDefaults
-}
-
 function getTemplateDefaultDisplayValue(key: string) {
   const value = (newTemplate.value.defaults as Record<string, unknown>)[key]
   if (Array.isArray(value)) return value.join(',')
@@ -740,14 +634,6 @@ watch(
   () => `${newTemplate.value.transport}:${newTemplate.value.tlsMode}:${String(newTemplate.value.defaults['method'] || '')}`,
   () => {
     void hydrateTemplateDefaults('repair')
-  },
-)
-
-watch(
-  () => newTemplate.value.warpExit,
-  (enabled) => {
-    if (!enabled) return
-    newTemplate.value.defaults = hydrateWarpTemplateDefaults({ ...newTemplate.value.defaults }, 'repair')
   },
 )
 
@@ -922,7 +808,7 @@ async function hydrateTemplateDefaults(mode: 'repair' | 'force' = 'repair') {
     }
   }
 
-  newTemplate.value.defaults = hydrateWarpTemplateDefaults(nextDefaults, mode)
+  newTemplate.value.defaults = nextDefaults
 }
 
 async function generateRealityKeys(targetDefaults = newTemplate.value.defaults) {
@@ -958,7 +844,6 @@ function handleGenerate(type: string) {
 
 async function openEditTemplate(template: TemplateRecord) {
   editingTemplateId.value = template.id
-  warpSourceNodeId.value = getDefaultWarpSourceNodeId(nodes.value)
   newTemplate.value = {
     name: template.name,
     engine: template.engine,
@@ -1187,85 +1072,6 @@ async function loadPublishPreview() {
   }
 }
 
-function ensureIpv6Cidr(value: string) {
-  const raw = value.trim()
-  if (!raw) return ''
-  return raw.includes('/') ? raw : `${raw}/128`
-}
-
-function parseWarpEndpoint(value: string): { host: string; port: number } | null {
-  const raw = value.trim()
-  if (!raw) return null
-  const bracketMatch = raw.match(/^\[(.+)\]:(\d+)$/)
-  if (bracketMatch) {
-    return {
-      host: bracketMatch[1],
-      port: Number(bracketMatch[2]) || 2408,
-    }
-  }
-  const separator = raw.lastIndexOf(':')
-  if (separator > 0 && separator < raw.length - 1 && /^\d+$/.test(raw.slice(separator + 1)) && !raw.slice(0, separator).includes(':')) {
-    return {
-      host: raw.slice(0, separator),
-      port: Number(raw.slice(separator + 1)) || 2408,
-    }
-  }
-  return {
-    host: raw,
-    port: 2408,
-  }
-}
-
-async function fillWarpDefaultsFromNode() {
-  let latestNodes = nodes.value
-  try {
-    latestNodes = await refreshNodesData()
-  } catch (e:any) {
-    toast('error', e.message || '刷新节点数据失败')
-    return
-  }
-
-  const sourceNode =
-    findNodeById(latestNodes, warpSourceNodeId.value)
-    || findNodeById(latestNodes, selectedNode.value?.id)
-    || latestNodes.find(hasImportableWarpSourceData)
-    || null
-  if (!sourceNode) {
-    toast('error', 'No node with WARP report data available')
-    return
-  }
-
-  const nextDefaults = { ...newTemplate.value.defaults }
-  const privateKey = (sourceNode.warpPrivateKey || '').trim()
-  const ipv6 = (sourceNode.warpIpv6 || '').trim()
-  const reservedValues = Array.isArray(sourceNode.warpReserved) && sourceNode.warpReserved.length === 3
-    ? sourceNode.warpReserved
-    : null
-  const hasNodeReserved = Array.isArray(reservedValues)
-  const endpoint = parseWarpEndpoint(sourceNode.warpEndpoint || '')
-  const missingFields = [
-    privateKey ? '' : 'PrivateKey',
-    ipv6 ? '' : 'IPv6',
-    endpoint ? '' : 'Endpoint',
-    hasNodeReserved ? '' : 'Reserved',
-  ].filter(Boolean)
-  if (missingFields.length > 0) {
-    toast('error', `Node ${sourceNode.name} 缺少统一 WARP 上报字段: ${missingFields.join(', ')}`)
-    return
-  }
-
-  const resolvedReserved = reservedValues as number[]
-  const resolvedEndpoint = endpoint as { host: string; port: number }
-  nextDefaults['warp_private_key'] = privateKey
-  nextDefaults['warp_local_address_ipv6'] = ensureIpv6Cidr(ipv6)
-  nextDefaults['warp_reserved'] = resolvedReserved.map((value) => Number(value)).join(',')
-  nextDefaults['warp_server'] = resolvedEndpoint.host
-  nextDefaults['warp_server_port'] = resolvedEndpoint.port
-  newTemplate.value.warpExit = true
-  newTemplate.value.defaults = hydrateWarpTemplateDefaults(nextDefaults, 'repair')
-  toast('success', `Imported WARP params from ${sourceNode.name}`)
-}
-
 async function publishSelectedRelease() {
   if (!publishNode.value) return
   if (publishKind.value === 'runtime' && publishTemplateIds.value.length === 0) {
@@ -1390,19 +1196,46 @@ function getWarpStatusText(n: NodeRecord) {
   return 'Not Installed'
 }
 
-function getWarpPrivateKeyText(n: NodeRecord) {
-  return (n.warpPrivateKey || '').trim() || '-'
+function getWarpAccountTypeText(n: NodeRecord) {
+  return (n.warpAccountType || '').trim() || '-'
 }
 
-function getWarpReservedText(n: NodeRecord) {
-  if (Array.isArray(n.warpReserved) && n.warpReserved.length === 3) {
-    return n.warpReserved.map((value) => Number(value)).join(',')
-  }
-  return '-'
+function getWarpTunnelProtocolText(n: NodeRecord) {
+  return (n.warpTunnelProtocol || '').trim() || '-'
 }
 
-function getRuntimeVersion(n: NodeRecord) {
-  return (n.protocolRuntimeVersion || '').trim() || '-'
+function getNodePermissionText(n: NodeRecord) {
+  if (n.permissionMode === 'root') return 'root'
+  if (n.permissionMode === 'user') return '用户态'
+  return '未上报'
+}
+
+function extractRuntimeVersion(value: string | null | undefined) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const versionMatch = raw.match(/\b\d+\.\d+\.\d+(?:[.-][0-9A-Za-z]+)*\b/)
+  if (versionMatch) return `version ${versionMatch[0]}`
+  return raw
+}
+
+function getRuntimeKernelStatusText(status: string | null | undefined) {
+  const normalized = String(status || '').trim().toLowerCase()
+  if (!normalized) return '未上报'
+  if (normalized.includes('running')) return 'running'
+  if (normalized.includes('stopping')) return 'stopping'
+  if (normalized.includes('not_installed')) return '未安装'
+  return normalized
+}
+
+function getRuntimeKernelText(n: NodeRecord, engine: 'sing-box' | 'xray') {
+  const version = engine === 'sing-box'
+    ? extractRuntimeVersion(n.singBoxVersion)
+    : extractRuntimeVersion(n.xrayVersion)
+  const rawStatus = engine === 'sing-box' ? n.singBoxStatus : n.xrayStatus
+  const status = getRuntimeKernelStatusText(rawStatus)
+  if (version && rawStatus) return `${version} ${status}`
+  if (version) return version
+  return status
 }
 
 function getReleaseStatusText(status: string | null | undefined) {
@@ -1462,10 +1295,14 @@ function getNodeVersionPullInterval(node: NodeRecord | null) {
   return normalizeBootstrapIntervalSeconds(node?.versionPullIntervalSeconds, 15)
 }
 
+const canInstallWarpOnSelectedNode = computed(() => publishNode.value?.permissionMode !== 'user')
+
 function buildBootstrapOptionsPayload() {
+  const installWarp = canInstallWarpOnSelectedNode.value && publishBootstrap.value.installWarp
   return {
     ...publishBootstrap.value,
-    warpLicenseKey: publishBootstrap.value.installWarp ? publishBootstrap.value.warpLicenseKey.trim() : '',
+    installWarp,
+    warpLicenseKey: installWarp ? publishBootstrap.value.warpLicenseKey.trim() : '',
     heartbeatIntervalSeconds: normalizeBootstrapIntervalSeconds(
       publishBootstrap.value.heartbeatIntervalSeconds,
       getNodeHeartbeatInterval(publishNode.value),
@@ -1494,9 +1331,23 @@ const publishBlocked = computed(() => {
   return !bootstrapHasWork()
 })
 
+watch(
+  [publishKind, () => publishNode.value?.permissionMode || ''],
+  ([kind, permissionMode]) => {
+    if (kind !== 'bootstrap' || permissionMode !== 'user') return
+    if (!publishBootstrap.value.installWarp && !publishBootstrap.value.warpLicenseKey.trim()) return
+    publishBootstrap.value.installWarp = false
+    publishBootstrap.value.warpLicenseKey = ''
+  },
+)
+
 function getWarpLabel(n: NodeRecord) {
+  const warpIpv4 = (n.warpIpv4 || '').trim()
+  if (warpIpv4) return warpIpv4
   const warpIpv6 = (n.warpIpv6 || '').trim()
   if (warpIpv6) return warpIpv6
+  const accountType = (n.warpAccountType || '').trim()
+  if (accountType) return accountType
   return '---'
 }
 
@@ -1842,7 +1693,9 @@ onMounted(() => { if (adminKey.value) login() })
           </div>
           <div class="detail-section">
             <div class="detail-section-title">运行与网络</div>
-            <div class="detail-row"><span class="detail-label">Runtime</span><span class="detail-value text-mono">{{ getRuntimeVersion(selectedNode) }}</span></div>
+            <div class="detail-row"><span class="detail-label">权限</span><span class="detail-value">{{ getNodePermissionText(selectedNode) }}</span></div>
+            <div class="detail-row"><span class="detail-label">sing-box</span><span class="detail-value text-mono">{{ getRuntimeKernelText(selectedNode, 'sing-box') }}</span></div>
+            <div class="detail-row"><span class="detail-label">xray</span><span class="detail-value text-mono">{{ getRuntimeKernelText(selectedNode, 'xray') }}</span></div>
             <div class="detail-row"><span class="detail-label">心跳间隔</span><span class="detail-value">{{ getNodeHeartbeatInterval(selectedNode) }} 秒</span></div>
             <div class="detail-row"><span class="detail-label">拉取版本间隔</span><span class="detail-value">{{ getNodeVersionPullInterval(selectedNode) }} 秒</span></div>
             <div class="detail-row">
@@ -1851,10 +1704,11 @@ onMounted(() => { if (adminKey.value) login() })
                 <span class="warp-badge" :class="isWarpRunning(selectedNode) ? 'online' : 'offline'">{{ getWarpStatusText(selectedNode) }}</span>
               </span>
             </div>
+            <div class="detail-row"><span class="detail-label">WARP IPv4</span><span class="detail-value text-mono">{{ selectedNode.warpIpv4 || '-' }}</span></div>
             <div class="detail-row"><span class="detail-label">WARP IPv6</span><span class="detail-value text-mono">{{ selectedNode.warpIpv6 || '-' }}</span></div>
             <div class="detail-row"><span class="detail-label">WARP Endpoint</span><span class="detail-value text-mono">{{ selectedNode.warpEndpoint || '-' }}</span></div>
-            <div class="detail-row"><span class="detail-label">WARP Private Key</span><span class="detail-value text-mono">{{ getWarpPrivateKeyText(selectedNode) }}</span></div>
-            <div class="detail-row"><span class="detail-label">WARP Reserved</span><span class="detail-value text-mono">{{ getWarpReservedText(selectedNode) }}</span></div>
+            <div class="detail-row"><span class="detail-label">WARP Account</span><span class="detail-value">{{ getWarpAccountTypeText(selectedNode) }}</span></div>
+            <div class="detail-row"><span class="detail-label">WARP Tunnel</span><span class="detail-value">{{ getWarpTunnelProtocolText(selectedNode) }}</span></div>
             <div class="detail-row">
               <span class="detail-label">Argo</span>
               <span class="detail-value">
@@ -2037,12 +1891,15 @@ onMounted(() => { if (adminKey.value) login() })
               </div>
               <div class="publish-template-list">
                 <label class="publish-template-row">
-                  <input type="checkbox" class="form-checkbox" v-model="publishBootstrap.installWarp" />
+                  <input type="checkbox" class="form-checkbox" v-model="publishBootstrap.installWarp" :disabled="!canInstallWarpOnSelectedNode" />
                   <div class="publish-template-copy">
-                    <div class="publish-template-name">注册 WARP</div>
-                    <div class="publish-template-meta">可选填写本次 bootstrap 使用的 WARP License Key；注册时使用 sing-box 生成 WireGuard 密钥，缺失时会自动拉取 sing-box。</div>
+                    <div class="publish-template-name">安装 WARP</div>
+                    <div class="publish-template-meta">使用官方 warp-cli 完成安装和注册；可选填写本次 bootstrap 使用的 WARP License Key。</div>
                   </div>
                 </label>
+                <div v-if="!canInstallWarpOnSelectedNode" class="text-muted" style="margin:8px 0 0;font-size:12px">
+                  当前节点为用户态权限，不能安装官方 warp-cli。
+                </div>
                 <div v-if="publishBootstrap.installWarp" class="form-group" style="margin:8px 0 0">
                   <label class="form-label">WARP License Key</label>
                   <input class="form-input" v-model="publishBootstrap.warpLicenseKey" placeholder="可选，仅作用于本次 bootstrap 发布" />
@@ -2079,7 +1936,7 @@ onMounted(() => { if (adminKey.value) login() })
                 <div v-else-if="publishPreview">
                   <div v-if="publishKind === 'bootstrap'" class="publish-preview-file">
                     <div class="publish-preview-meta">Bootstrap 计划 / {{ publishPreview.bootstrap.mode }}</div>
-                    <div class="detail-row"><span class="detail-label">注册 WARP</span><span class="detail-value">{{ publishPreview.bootstrap.installWarp ? '是' : '否' }}</span></div>
+                    <div class="detail-row"><span class="detail-label">安装 WARP</span><span class="detail-value">{{ publishPreview.bootstrap.installWarp ? '是' : '否' }}</span></div>
                     <div class="detail-row"><span class="detail-label">WARP License Key</span><span class="detail-value">{{ publishPreview.bootstrap.warpLicenseKey ? '已提供' : '未提供' }}</span></div>
                     <div class="detail-row"><span class="detail-label">心跳间隔</span><span class="detail-value">{{ publishPreview.bootstrap.heartbeatIntervalSeconds }} 秒</span></div>
                     <div class="detail-row"><span class="detail-label">拉取版本间隔</span><span class="detail-value">{{ publishPreview.bootstrap.versionPullIntervalSeconds }} 秒</span></div>
@@ -2267,16 +2124,6 @@ onMounted(() => { if (adminKey.value) login() })
           </div>
           <div v-if="newTemplate.warpExit" class="form-row">
             <div class="form-group">
-              <label class="form-label">读取节点 WARP 参数</label>
-              <div style="display:flex;gap:8px;align-items:center">
-                <select class="form-select" v-model="warpSourceNodeId" style="flex:1">
-                  <option value="">请选择节点</option>
-                  <option v-for="n in warpSourceNodes" :key="n.id" :value="n.id">{{ getWarpSourceNodeLabel(n) }}</option>
-                </select>
-                <button type="button" class="btn btn-secondary" @click="fillWarpDefaultsFromNode">获取</button>
-              </div>
-            </div>
-            <div class="form-group">
               <label class="form-label">路由模式</label>
               <select class="form-select" v-model="newTemplate.warpRouteMode">
                 <option value="all">全部流量 (IPv4+IPv6)</option>
@@ -2285,30 +2132,9 @@ onMounted(() => { if (adminKey.value) login() })
               </select>
             </div>
           </div>
-          <template v-if="newTemplate.warpExit">
-            <div v-for="field in warpDefaultFields" :key="field.key" class="form-group">
-              <label class="form-label">{{ field.label }}</label>
-              <select
-                v-if="field.options?.length"
-                class="form-select"
-                :value="getTemplateDefaultDisplayValue(field.key)"
-                @change="(e:any) => setTemplateDefaultValue(field.key, e.target.value, field.type)"
-              >
-                <option v-for="option in field.options" :key="option.value" :value="option.value">{{ option.label }}</option>
-              </select>
-              <input
-                v-else
-                class="form-input"
-                :type="field.type === 'number' ? 'number' : 'text'"
-                :placeholder="field.placeholder"
-                :value="getTemplateDefaultDisplayValue(field.key)"
-                @input="(e:any) => setTemplateDefaultValue(field.key, e.target.value, field.type)"
-              />
-            </div>
-          </template>
           <div v-if="newTemplate.warpExit" class="form-group">
             <div class="text-muted" style="margin-top:8px;font-size:12px">
-              字段格式按常见 WARP WireGuard 出口写法处理；IPv6 留空时会优先使用节点上报值。
+              勾选后，该模板命中的流量会绑定到节点上的 `CloudflareWARP` 系统网卡；不再需要填写 WARP 私钥、Endpoint 或 Reserved。
             </div>
           </div>
         </div>

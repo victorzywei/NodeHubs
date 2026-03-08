@@ -345,7 +345,11 @@ export function buildReleaseApplyScript(artifact: ReleaseArtifact): string {
   const runtimePlanCount = artifact.runtimes.length
   const bootstrapBinaryCount = artifact.bootstrap.runtimeBinaries.length
   const bootstrapTemplates = buildBootstrapTemplateData(artifact)
-  const tlsTemplates = bootstrapTemplates.filter((template) => template.tlsMode === 'tls' || template.protocol === 'hysteria2')
+  const tlsTemplates = bootstrapTemplates.filter((template) => {
+    if (template.protocol === 'hysteria2') return true
+    if (template.tlsMode !== 'tls') return false
+    return artifact.node.networkType === 'public'
+  })
   const tlsDomains = uniqueValues(
     [
       ...tlsTemplates.flatMap((template) => [template.server, template.sni]),

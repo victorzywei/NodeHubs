@@ -61,11 +61,7 @@ type NormalizedTemplate = {
 
 const SUPPORTED_PROTOCOLS = new Set(['vless', 'trojan', 'shadowsocks', 'vmess', 'hysteria2'])
 const SUPPORTED_TRANSPORTS = new Set(['ws', 'grpc', 'tcp', 'h2', 'hysteria2', 'xhttp'])
-const DEFAULT_WARP_SERVER = 'engage.cloudflareclient.com'
-const DEFAULT_WARP_SERVER_PORT = 2408
-const DEFAULT_WARP_PEER_PUBLIC_KEY = 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo='
-const DEFAULT_WARP_LOCAL_ADDRESS_IPV4 = '172.16.0.2/32'
-const DEFAULT_WARP_LOCAL_ADDRESS_IPV6 = '2606:4700:110:8d8d:1845:c39f:2dd5:a03a/128'
+const WARP_INTERFACE_NAME = 'CloudflareWARP'
 const DEFAULT_REALITY_FLOW = 'xtls-rprx-vision'
 const DEFAULT_REALITY_FINGERPRINT = 'chrome'
 
@@ -224,39 +220,6 @@ function normalizePath(value: string): string {
   return value.startsWith('/') ? value : `/${value}`
 }
 
-type ResolvedWarpRoute = {
-  ipCidrs: string[]
-  server: string
-  serverPort: number
-  localAddress: string[]
-  privateKey: string
-  peerPublicKey: string
-  systemInterface: boolean
-  mtu: number
-  reserved: number[]
-}
-
-function readStringByKeys(source: Record<string, unknown>, keys: string[], fallback = ''): string {
-  for (const key of keys) {
-    const value = source[key]
-    if (typeof value === 'string' && value.trim()) return value.trim()
-    if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  }
-  return fallback
-}
-
-function readNumberByKeys(source: Record<string, unknown>, keys: string[], fallback: number): number {
-  for (const key of keys) {
-    const value = source[key]
-    if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value)
-    if (typeof value === 'string' && value.trim()) {
-      const parsed = Number(value)
-      if (Number.isFinite(parsed)) return Math.trunc(parsed)
-    }
-  }
-  return fallback
-}
-
 function readBoolean(value: unknown, fallback = false): boolean {
   if (typeof value === 'boolean') return value
   if (typeof value === 'number') return value !== 0
@@ -268,106 +231,10 @@ function readBoolean(value: unknown, fallback = false): boolean {
   return fallback
 }
 
-function readBooleanByKeys(source: Record<string, unknown>, keys: string[], fallback = false): boolean {
-  for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(source, key)) {
-      return readBoolean(source[key], fallback)
-    }
-  }
-  return fallback
-}
-
-function toPortNumber(value: unknown, fallback: number): number {
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return fallback
-  const port = Math.trunc(parsed)
-  if (port < 1 || port > 65535) return fallback
-  return port
-}
-
-function normalizeV6Cidr(value: string, fallback: string): string {
-  const raw = value.trim()
-  if (!raw) return fallback
-  return raw.includes('/') ? raw : `${raw}/128`
-}
-
-function parseHostPort(value: string, fallbackHost: string, fallbackPort: number): { host: string; port: number } {
-  const raw = value.trim()
-  if (!raw) return { host: fallbackHost, port: fallbackPort }
-
-  const bracketMatch = raw.match(/^\[(.+)\]:(\d+)$/)
-  if (bracketMatch) {
-    return {
-      host: bracketMatch[1] || fallbackHost,
-      port: toPortNumber(bracketMatch[2], fallbackPort),
-    }
-  }
-
-  const separator = raw.lastIndexOf(':')
-  if (separator <= 0 || separator >= raw.length - 1) {
-    return { host: raw, port: fallbackPort }
-  }
-
-  const host = raw.slice(0, separator)
-  const portText = raw.slice(separator + 1)
-  if (!host || !/^\d+$/.test(portText)) {
-    return { host: raw, port: fallbackPort }
-  }
-
-  return { host, port: toPortNumber(portText, fallbackPort) }
-}
-
-function normalizeReserved(value: unknown, fallback: number[]): number[] {
-  const normalizeArray = (input: unknown[]): number[] | null => {
-    if (input.length !== 3) return null
-    const output = input.map((item) => Number(item))
-    if (!output.every((item) => Number.isFinite(item))) return null
-    return output.map((item) => Math.max(0, Math.min(255, Math.trunc(item))))
-  }
-
-  if (Array.isArray(value)) {
-    const normalized = normalizeArray(value)
-    if (normalized) return normalized
-  }
-
-  if (typeof value === 'string' && value.trim()) {
-    const normalized = normalizeArray(value.split(',').map((item) => item.trim()))
-    if (normalized) return normalized
-  }
-
-  return fallback
-}
-
 function resolveWarpRouteCidrs(mode: TemplateRecord['warpRouteMode']): string[] {
   if (mode === 'ipv4') return ['0.0.0.0/0']
   if (mode === 'ipv6') return ['::/0']
   return ['0.0.0.0/0', '::/0']
-}
-
-function isIpv4Address(value: string): boolean {
-  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(value)) return false
-  return value.split('.').every((part) => {
-    const parsed = Number(part)
-    return Number.isInteger(parsed) && parsed >= 0 && parsed <= 255
-  })
-}
-
-function isIpv6Address(value: string): boolean {
-  return value.includes(':') && /^[0-9a-fA-F:]+$/.test(value)
-}
-
-function buildSingBoxWarpEndpointBypassRule(server: string): Record<string, unknown> | null {
-  if (!server) return null
-  if (isIpv4Address(server)) return { ip_cidr: [`${server}/32`], outbound: 'direct' }
-  if (isIpv6Address(server)) return { ip_cidr: [`${server}/128`], outbound: 'direct' }
-  return { domain: [server], outbound: 'direct' }
-}
-
-function buildXrayWarpEndpointBypassRule(server: string): Record<string, unknown> | null {
-  if (!server) return null
-  if (isIpv4Address(server)) return { type: 'field', ip: [`${server}/32`], outboundTag: 'direct' }
-  if (isIpv6Address(server)) return { type: 'field', ip: [`${server}/128`], outboundTag: 'direct' }
-  return { type: 'field', domain: [`full:${server}`], outboundTag: 'direct' }
 }
 
 function resolveInboundTagsByWarp(templates: NormalizedTemplate[]): { warpTags: string[]; directTags: string[] } {
@@ -385,49 +252,19 @@ function resolveInboundTagsByWarp(templates: NormalizedTemplate[]): { warpTags: 
   )
 }
 
-function resolveWarpRoute(node: NodeRecord, templates: NormalizedTemplate[]): ResolvedWarpRoute | null {
+type ResolvedWarpRoute = {
+  routeMode: TemplateRecord['warpRouteMode']
+  ipCidrs: string[]
+  interfaceName: string
+}
+
+function resolveWarpRoute(templates: NormalizedTemplate[]): ResolvedWarpRoute | null {
   const primaryTemplate = templates.find((template) => template.warpExit)
   if (!primaryTemplate) return null
-  const defaults = primaryTemplate.defaults || {}
-
-  const endpointFallback = parseHostPort(node.warpEndpoint || '', DEFAULT_WARP_SERVER, DEFAULT_WARP_SERVER_PORT)
-  const fallbackReserved = normalizeReserved(node.warpReserved, [0, 0, 0])
-  const nodeV6 = normalizeV6Cidr(node.warpIpv6 || '', DEFAULT_WARP_LOCAL_ADDRESS_IPV6)
-
-  const privateKey = readStringByKeys(defaults, ['warp_private_key', 'private_key'], node.warpPrivateKey || '')
-  if (!privateKey) {
-    throw new Error(`Template ${primaryTemplate.name} enabled WARP exit but no WARP private key is available`)
-  }
-
-  const server = readStringByKeys(defaults, ['warp_server', 'server'], endpointFallback.host || DEFAULT_WARP_SERVER)
-  const serverPort = toPortNumber(
-    readNumberByKeys(defaults, ['warp_server_port', 'server_port'], endpointFallback.port || DEFAULT_WARP_SERVER_PORT),
-    endpointFallback.port || DEFAULT_WARP_SERVER_PORT,
-  )
-  const peerPublicKey = readStringByKeys(defaults, ['warp_peer_public_key', 'peer_public_key'], DEFAULT_WARP_PEER_PUBLIC_KEY)
-  const systemInterface = readBooleanByKeys(defaults, ['warp_system_interface', 'system_interface'], false)
-  const mtu = Math.max(576, Math.min(65535, Math.trunc(readNumberByKeys(defaults, ['warp_mtu', 'mtu'], 1280))))
-  const reserved = normalizeReserved(
-    Object.prototype.hasOwnProperty.call(defaults, 'warp_reserved') ? defaults.warp_reserved : defaults.reserved,
-    fallbackReserved,
-  )
-
-  const localAddressV4 = readStringByKeys(defaults, ['warp_local_address_ipv4', 'local_address_ipv4'], DEFAULT_WARP_LOCAL_ADDRESS_IPV4)
-  const localAddressV6 = normalizeV6Cidr(
-    readStringByKeys(defaults, ['warp_local_address_ipv6', 'local_address_ipv6'], nodeV6),
-    DEFAULT_WARP_LOCAL_ADDRESS_IPV6,
-  )
-
   return {
+    routeMode: primaryTemplate.warpRouteMode,
     ipCidrs: resolveWarpRouteCidrs(primaryTemplate.warpRouteMode),
-    server,
-    serverPort,
-    localAddress: [localAddressV4, localAddressV6].filter(Boolean),
-    privateKey,
-    peerPublicKey,
-    systemInterface,
-    mtu,
-    reserved,
+    interfaceName: WARP_INTERFACE_NAME,
   }
 }
 
@@ -587,7 +424,11 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
   return normalized
 }
 
-function buildSingBoxInbound(template: NormalizedTemplate, index: number) {
+function shouldIgnoreNodeInboundTls(node: NodeRecord, template: NormalizedTemplate): boolean {
+  return node.networkType === 'noPublicIp' && template.tlsMode === 'tls'
+}
+
+function buildSingBoxInbound(node: NodeRecord, template: NormalizedTemplate, index: number) {
   const protocol = template.protocol === 'shadowsocks' ? 'shadowsocks' : template.protocol
   const inbound: Record<string, unknown> = {
     type: protocol,
@@ -648,6 +489,8 @@ function buildSingBoxInbound(template: NormalizedTemplate, index: number) {
     }
   }
 
+  const ignoreTls = shouldIgnoreNodeInboundTls(node, template)
+
   if (template.protocol === 'hysteria2') {
     inbound.tls = {
       enabled: true,
@@ -655,7 +498,7 @@ function buildSingBoxInbound(template: NormalizedTemplate, index: number) {
       certificate_path: template.certPath,
       key_path: template.keyPath,
     }
-  } else if (template.tlsMode === 'tls') {
+  } else if (template.tlsMode === 'tls' && !ignoreTls) {
     inbound.tls = {
       enabled: true,
       server_name: template.sni || template.server,
@@ -677,7 +520,7 @@ function buildSingBoxInbound(template: NormalizedTemplate, index: number) {
   return inbound
 }
 
-function buildXrayInbound(template: NormalizedTemplate, index: number) {
+function buildXrayInbound(node: NodeRecord, template: NormalizedTemplate, index: number) {
   if (template.protocol === 'hysteria2') {
     throw new Error(`Template ${template.name} cannot be rendered with the xray engine`)
   }
@@ -727,6 +570,7 @@ function buildXrayInbound(template: NormalizedTemplate, index: number) {
   const streamSettings: Record<string, unknown> = {
     network: template.transport,
   }
+  const ignoreTls = shouldIgnoreNodeInboundTls(node, template)
 
   if (template.transport === 'ws') {
     streamSettings.wsSettings = {
@@ -745,7 +589,7 @@ function buildXrayInbound(template: NormalizedTemplate, index: number) {
     }
   }
 
-  if (template.tlsMode === 'tls') {
+  if (template.tlsMode === 'tls' && !ignoreTls) {
     streamSettings.security = 'tls'
     streamSettings.tlsSettings = {
       serverName: template.sni || template.server,
@@ -887,42 +731,37 @@ function buildRuntimeConfig(
       rules: [],
     }
 
-    const warp = resolveWarpRoute(node, templates)
+    const warp = resolveWarpRoute(templates)
     if (warp) {
       const inboundTags = resolveInboundTagsByWarp(templates)
       const rules = routing.rules as Array<Record<string, unknown>>
-      const endpointBypassRule = buildXrayWarpEndpointBypassRule(warp.server)
-      if (endpointBypassRule) rules.push(endpointBypassRule)
 
       outbounds.push({
         tag: 'warp-out',
-        protocol: 'wireguard',
-        settings: {
-          secretKey: warp.privateKey,
-          address: warp.localAddress,
-          peers: [
-            {
-              publicKey: warp.peerPublicKey,
-              allowedIPs: ['0.0.0.0/0', '::/0'],
-              endpoint: `${warp.server}:${warp.serverPort}`,
-            },
-          ],
-          reserved: warp.reserved,
-          mtu: warp.mtu,
-          noKernelTun: !warp.systemInterface,
-          domainStrategy: 'ForceIPv6v4',
+        protocol: 'freedom',
+        settings: {},
+        streamSettings: {
+          sockopt: {
+            interface: warp.interfaceName,
+          },
         },
       })
-      routing.domainStrategy = 'IPOnDemand'
+      if (warp.routeMode !== 'all') {
+        routing.domainStrategy = 'IPOnDemand'
+      }
       if (inboundTags.warpTags.length > 0) {
         rules.push({
           type: 'field',
           inboundTag: inboundTags.warpTags,
-          ip: warp.ipCidrs,
-          network: 'tcp,udp',
           outboundTag: 'warp-out',
+          ...(warp.routeMode === 'all'
+            ? {}
+            : {
+                ip: warp.ipCidrs,
+                network: 'tcp,udp',
+              }),
         })
-      } else {
+      } else if (warp.routeMode !== 'all') {
         rules.push({
           type: 'field',
           ip: warp.ipCidrs,
@@ -943,7 +782,7 @@ function buildRuntimeConfig(
       log: {
         loglevel: 'warning',
       },
-      inbounds: templates.map(buildXrayInbound),
+      inbounds: templates.map((template, index) => buildXrayInbound(node, template, index)),
       outbounds,
       routing,
     }
@@ -958,38 +797,23 @@ function buildRuntimeConfig(
   const route: Record<string, unknown> = {
     final: 'direct',
   }
-  const warp = resolveWarpRoute(node, templates)
+  const warp = resolveWarpRoute(templates)
   if (warp) {
     const inboundTags = resolveInboundTagsByWarp(templates)
     const rules: Array<Record<string, unknown>> = []
-    const endpointBypassRule = buildSingBoxWarpEndpointBypassRule(warp.server)
-    if (endpointBypassRule) rules.push(endpointBypassRule)
 
     outbounds.push({
-      type: 'wireguard',
+      type: 'direct',
       tag: 'warp-out',
-      system: warp.systemInterface,
-      mtu: warp.mtu,
-      address: warp.localAddress,
-      private_key: warp.privateKey,
-      peers: [
-        {
-          address: warp.server,
-          port: warp.serverPort,
-          public_key: warp.peerPublicKey,
-          allowed_ips: ['0.0.0.0/0', '::/0'],
-          persistent_keepalive_interval: 30,
-          reserved: warp.reserved,
-        },
-      ],
+      bind_interface: warp.interfaceName,
     })
     if (inboundTags.warpTags.length > 0) {
       rules.push({
         inbound: inboundTags.warpTags,
-        ip_cidr: warp.ipCidrs,
         outbound: 'warp-out',
+        ...(warp.routeMode === 'all' ? {} : { ip_cidr: warp.ipCidrs }),
       })
-    } else {
+    } else if (warp.routeMode !== 'all') {
       rules.push({
         ip_cidr: warp.ipCidrs,
         outbound: 'warp-out',
@@ -1009,7 +833,7 @@ function buildRuntimeConfig(
       level: 'warn',
       timestamp: true,
     },
-    inbounds: templates.map(buildSingBoxInbound),
+    inbounds: templates.map((template, index) => buildSingBoxInbound(node, template, index)),
     outbounds,
     route,
   }
@@ -1049,9 +873,10 @@ function buildBootstrapNotes(node: NodeRecord, kind: ReleaseKind, bootstrapOptio
     notes.push(`Selected bootstrap actions: ${actions.join(', ')}.`)
   }
   if (bootstrapOptions.installWarp) {
-    notes.push(bootstrapOptions.warpLicenseKey ? 'Bootstrap carries an inline WARP License Key.' : 'Bootstrap registers WARP without a License Key.')
-    notes.push('WARP registration uses sing-box to generate the WireGuard keypair and fetches sing-box automatically when it is missing.')
+    notes.push(bootstrapOptions.warpLicenseKey ? 'Bootstrap carries an inline WARP License Key for the official warp-cli client.' : 'Bootstrap installs the official warp-cli client without a License Key.')
+    notes.push('WARP bootstrap requires root-mode node permissions and uses the official Cloudflare Linux client workflow.')
   }
+  notes.push(`Templates with WARP exit use the node-side ${WARP_INTERFACE_NAME} interface as the outbound egress.`)
   notes.push(`Heartbeat interval: ${bootstrapOptions.heartbeatIntervalSeconds}s.`)
   notes.push(`Version pull interval: ${bootstrapOptions.versionPullIntervalSeconds}s.`)
   if (kind === 'bootstrap') {
