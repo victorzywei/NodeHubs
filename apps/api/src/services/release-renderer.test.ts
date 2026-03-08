@@ -514,6 +514,9 @@ describe('release renderer', () => {
     expect(artifact.bootstrap.installXray).toBe(true)
     expect(artifact.bootstrap.runtimeBinaries.map((item) => item.engine).sort()).toEqual(['sing-box', 'xray'])
     expect(artifact.bootstrap.notes.some((note) => note.includes('uses sing-box to generate the WireGuard keypair'))).toBe(true)
+    expect(artifact.runtimes).toEqual([])
+    expect(artifact.templates).toEqual([])
+    expect(artifact.subscriptionEndpoints).toEqual([])
   })
 
   it('renders xray warp exit as a direct wireguard outbound', () => {

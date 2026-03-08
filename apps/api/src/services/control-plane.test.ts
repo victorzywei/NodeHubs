@@ -211,6 +211,44 @@ describe('control-plane release flow', () => {
     expect(release?.summary).toContain('heartbeat=30s,pull=90s')
   })
 
+  it('rejects bootstrap releases that include protocol templates', async () => {
+    const services = createServices()
+    const node = await createNode(services, {
+      name: 'Node B2',
+      nodeType: 'vps',
+      region: 'ap-sg',
+      tags: [],
+      networkType: 'public',
+      primaryDomain: 'edge-bootstrap.example.com',
+      backupDomain: '',
+      entryIp: '203.0.113.21',
+      githubMirrorUrl: '',
+      cfDnsToken: '',
+      argoTunnelToken: '',
+      argoTunnelDomain: '',
+      argoTunnelPort: 2053,
+    })
+    const template = await createTemplate(services, createValidTemplateInput())
+
+    await expect(
+      publishNodeRelease(
+        services,
+        node.id,
+        'bootstrap',
+        [template.id],
+        {
+          installWarp: false,
+          warpLicenseKey: '',
+          heartbeatIntervalSeconds: 30,
+          versionPullIntervalSeconds: 90,
+          installSingBox: false,
+          installXray: false,
+        },
+        'invalid bootstrap',
+      ),
+    ).rejects.toThrow(/do not accept protocol templates/i)
+  })
+
   it('stores apply logs once per status and overwrites on status transitions', async () => {
     const services = createServices()
     const node = await createNode(services, {

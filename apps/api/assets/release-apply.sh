@@ -1292,12 +1292,14 @@ main() {
   if [ "$RELEASE_KIND" = "bootstrap" ]; then
     run_hooks "$ETC_DIR/hooks/bootstrap.d"
   fi
-  prepare_runtime_plans
-  stop_runtime_kernels
-  write_runtime_files
-  ensure_tls_certificate
-  apply_runtime_plans
-  cp "$ETC_DIR/runtime/release.json" "$STATE_DIR/releases/current.json"
+  if [ "$RELEASE_KIND" = "runtime" ]; then
+    prepare_runtime_plans
+    stop_runtime_kernels
+    write_runtime_files
+    ensure_tls_certificate
+    apply_runtime_plans
+    cp "$ETC_DIR/runtime/release.json" "$STATE_DIR/releases/current.json"
+  fi
   if [ "$RELEASE_KIND" = "bootstrap" ]; then
     apply_bootstrap_runtime_binaries
   fi

@@ -30,6 +30,7 @@ export function buildUninstallCommand(): string {
 }
 
 function buildRuntimeFileBlocks(artifact: ReleaseArtifact): string {
+  if (artifact.kind !== 'runtime') return ''
   const releaseMetadata = {
     releaseId: artifact.releaseId,
     revision: artifact.revision,

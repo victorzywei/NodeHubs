@@ -819,6 +819,9 @@ export async function publishNodeRelease(
 
   const bootstrapOptions = normalizeBootstrapOptions(kind, bootstrapOptionsInput)
   const uniqueTemplateIds = uniqueIds(templateIds)
+  if (kind === 'bootstrap' && uniqueTemplateIds.length > 0) {
+    throw new Error('Bootstrap releases do not accept protocol templates')
+  }
   const templateRows = await getTemplateRows(services, uniqueTemplateIds)
   if (uniqueTemplateIds.length !== templateRows.length) {
     throw new Error('One or more selected templates do not exist')
@@ -917,6 +920,9 @@ export async function previewNodeRelease(
 
   const bootstrapOptions = normalizeBootstrapOptions(kind, bootstrapOptionsInput)
   const uniqueTemplateIds = uniqueIds(templateIds)
+  if (kind === 'bootstrap' && uniqueTemplateIds.length > 0) {
+    throw new Error('Bootstrap releases do not accept protocol templates')
+  }
   const templateRows = await getTemplateRows(services, uniqueTemplateIds)
   if (uniqueTemplateIds.length !== templateRows.length) {
     throw new Error('One or more selected templates do not exist')

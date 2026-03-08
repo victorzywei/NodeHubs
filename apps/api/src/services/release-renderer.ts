@@ -1031,8 +1031,8 @@ function buildBootstrapRuntimeBinaries(
 
 function buildBootstrapNotes(node: NodeRecord, kind: ReleaseKind, bootstrapOptions: BootstrapOptions): string[] {
   const notes = [
-    'The agent always applies files under /etc/nodehubsapi/runtime.',
-    'Runtime services use engine-scoped systemd units: nodehubsapi-runtime-sing-box.service and nodehubsapi-runtime-xray.service.',
+    'Bootstrap releases only manage agent/runtime program files and bootstrap-side services.',
+    'Runtime releases alone apply protocol templates and runtime config files under /etc/nodehubsapi/runtime.',
     'Deploy commands always install the agent and perform mandatory network bootstrap based on the node network type.',
   ]
   if (node.networkType === 'public') {
@@ -1085,27 +1085,31 @@ function groupTemplatesByEngine(templates: NormalizedTemplate[]): Record<Templat
 }
 
 export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: RuntimeCatalog): ReleaseArtifact {
-  const normalizedTemplates = context.templates.map((template) => normalizeTemplate(context.node, template))
+  const isRuntimeRelease = context.kind === 'runtime'
+  const runtimeTemplates = isRuntimeRelease ? context.templates : []
+  const normalizedTemplates = runtimeTemplates.map((template) => normalizeTemplate(context.node, template))
   const groupedTemplates = groupTemplatesByEngine(normalizedTemplates)
   const bootstrapRuntimeBinaries = buildBootstrapRuntimeBinaries(runtimeCatalog, context.bootstrapOptions)
-  const runtimes = (Object.keys(groupedTemplates) as Array<TemplateRecord['engine']>)
-    .filter((engine) => groupedTemplates[engine].length > 0)
-    .map((engine) => {
-      const runtimeConfig = buildRuntimeConfig(engine, groupedTemplates[engine], context.node)
-      const entryConfigPath = `runtime/${engine}.json`
-      return {
-        engine,
-        binary: cloneBinaryPlan(runtimeCatalog[engine]),
-        entryConfigPath,
-        files: [
-          {
-            path: entryConfigPath,
-            contentType: 'application/json' as const,
-            content: JSON.stringify(runtimeConfig, null, 2),
-          },
-        ],
-      }
-    })
+  const runtimes = isRuntimeRelease
+    ? (Object.keys(groupedTemplates) as Array<TemplateRecord['engine']>)
+        .filter((engine) => groupedTemplates[engine].length > 0)
+        .map((engine) => {
+          const runtimeConfig = buildRuntimeConfig(engine, groupedTemplates[engine], context.node)
+          const entryConfigPath = `runtime/${engine}.json`
+          return {
+            engine,
+            binary: cloneBinaryPlan(runtimeCatalog[engine]),
+            entryConfigPath,
+            files: [
+              {
+                path: entryConfigPath,
+                contentType: 'application/json' as const,
+                content: JSON.stringify(runtimeConfig, null, 2),
+              },
+            ],
+          }
+        })
+    : []
 
   return {
     schema: 'nodehubsapi-release-v2',
@@ -1134,7 +1138,7 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
       argoTunnelDomain: context.node.argoTunnelDomain,
       argoTunnelPort: context.node.argoTunnelPort,
     },
-    templates: context.templates.map((template) => ({
+    templates: runtimeTemplates.map((template) => ({
       id: template.id,
       name: template.name,
       engine: template.engine,
@@ -1159,7 +1163,9 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
       mode: context.kind === 'bootstrap' ? 'bootstrap-required' : 'runtime-only',
       notes: buildBootstrapNotes(context.node, context.kind, context.bootstrapOptions),
     },
-    subscriptionEndpoints: normalizedTemplates.map((template) => buildSubscriptionEntry(context.node, template)),
+    subscriptionEndpoints: isRuntimeRelease
+      ? normalizedTemplates.map((template) => buildSubscriptionEntry(context.node, template))
+      : [],
   }
 }
 
