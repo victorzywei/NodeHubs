@@ -236,6 +236,8 @@ describe('agent install scripts', () => {
     expect(script).toContain('update_saved_warp_endpoint() {')
     expect(script).toContain('Updated saved WARP endpoint to ${normalized_endpoint}.')
     expect(script).toContain('No IPv6 default route detected; using IPv4 WARP endpoint')
+    expect(script).toContain('json_get_number() {')
+    expect(script).toContain('return 0\n}')
     expect(script).toContain('Issued TLS certificate via lego standalone HTTP challenge.')
     expect(script).not.toContain('BOOTSTRAP_INSTALL_ARGO')
     expect(script).not.toContain('wireguard-tools')

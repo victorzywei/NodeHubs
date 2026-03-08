@@ -756,12 +756,14 @@ json_get_string() {
   local json="$1"
   local key="$2"
   printf '%s' "$json" | tr -d '\r\n' | grep -o "\"$key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -n1 | sed 's/.*:[[:space:]]*"//; s/"$//'
+  return 0
 }
 
 json_get_number() {
   local json="$1"
   local key="$2"
   printf '%s' "$json" | tr -d '\r\n' | grep -o "\"$key\"[[:space:]]*:[[:space:]]*[0-9][0-9]*" | head -n1 | sed 's/.*:[[:space:]]*//'
+  return 0
 }
 
 normalize_warp_v6() {
