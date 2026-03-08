@@ -847,7 +847,7 @@ normalize_warp_endpoint() {
   if [[ "$host" != *:* ]] && ! [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && ! has_ipv6_default_route; then
     ipv4_host="$(resolve_host_ipv4 "$host" || true)"
     if [ -n "$ipv4_host" ]; then
-      log "No IPv6 default route detected; using IPv4 WARP endpoint ${ipv4_host}:${port} instead of ${host}:${port}."
+      log "No IPv6 default route detected; using IPv4 WARP endpoint ${ipv4_host}:${port} instead of ${host}:${port}." >&2
       host="$ipv4_host"
     fi
   fi

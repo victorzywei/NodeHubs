@@ -81,11 +81,35 @@ function logout() {
 }
 
 // ---- Data Loading ----
+function hasImportableWarpSourceData(node: NodeRecord) {
+  return Boolean((node.warpPrivateKey || '').trim())
+    && Boolean((node.warpEndpoint || '').trim())
+    && Boolean((node.warpIpv6 || '').trim())
+    && Array.isArray(node.warpReserved)
+    && node.warpReserved.length === 3
+}
+
 function hasWarpSourceData(node: NodeRecord) {
   return Boolean((node.warpPrivateKey || '').trim())
     || Boolean((node.warpEndpoint || '').trim())
     || Boolean((node.warpIpv6 || '').trim())
     || (Array.isArray(node.warpReserved) && node.warpReserved.length === 3)
+    || Boolean((node.warpStatus || '').trim())
+}
+
+function getDefaultWarpSourceNodeId(nodeList: NodeRecord[]) {
+  const selectedNodeId = selectedNode.value?.id
+  if (selectedNodeId) {
+    const selected = findNodeById(nodeList, selectedNodeId)
+    if (selected && hasWarpSourceData(selected)) return selected.id
+  }
+  return nodeList.find(hasImportableWarpSourceData)?.id || nodeList.find(hasWarpSourceData)?.id || ''
+}
+
+function getWarpSourceNodeLabel(node: NodeRecord) {
+  return hasImportableWarpSourceData(node)
+    ? node.name
+    : `${node.name}（参数未完整上报）`
 }
 
 function findNodeById(nodeList: NodeRecord[], nodeId: string | null | undefined) {
@@ -98,7 +122,7 @@ function syncNodeSelections(nextNodes: NodeRecord[]) {
   if (selectedReleaseLogNode.value) selectedReleaseLogNode.value = findNodeById(nextNodes, selectedReleaseLogNode.value.id)
   if (publishNode.value) publishNode.value = findNodeById(nextNodes, publishNode.value.id)
   if (warpSourceNodeId.value && !findNodeById(nextNodes, warpSourceNodeId.value)) {
-    warpSourceNodeId.value = selectedNode.value?.id || nextNodes.find(hasWarpSourceData)?.id || ''
+    warpSourceNodeId.value = getDefaultWarpSourceNodeId(nextNodes)
   }
 }
 
@@ -476,7 +500,7 @@ function resetTemplateForm() {
   editingTemplateId.value = ''
   newTemplate.value = createEmptyTemplate()
   realitySniMode.value = 'random'
-  warpSourceNodeId.value = selectedNode.value?.id || warpSourceNodes.value[0]?.id || ''
+  warpSourceNodeId.value = getDefaultWarpSourceNodeId(nodes.value)
 }
 
 function closeTemplateModal() {
@@ -934,7 +958,7 @@ function handleGenerate(type: string) {
 
 async function openEditTemplate(template: TemplateRecord) {
   editingTemplateId.value = template.id
-  warpSourceNodeId.value = selectedNode.value?.id || warpSourceNodes.value[0]?.id || ''
+  warpSourceNodeId.value = getDefaultWarpSourceNodeId(nodes.value)
   newTemplate.value = {
     name: template.name,
     engine: template.engine,
@@ -1204,7 +1228,7 @@ async function fillWarpDefaultsFromNode() {
   const sourceNode =
     findNodeById(latestNodes, warpSourceNodeId.value)
     || findNodeById(latestNodes, selectedNode.value?.id)
-    || latestNodes.find(hasWarpSourceData)
+    || latestNodes.find(hasImportableWarpSourceData)
     || null
   if (!sourceNode) {
     toast('error', 'No node with WARP report data available')
@@ -2247,7 +2271,7 @@ onMounted(() => { if (adminKey.value) login() })
               <div style="display:flex;gap:8px;align-items:center">
                 <select class="form-select" v-model="warpSourceNodeId" style="flex:1">
                   <option value="">请选择节点</option>
-                  <option v-for="n in warpSourceNodes" :key="n.id" :value="n.id">{{ n.name }}</option>
+                  <option v-for="n in warpSourceNodes" :key="n.id" :value="n.id">{{ getWarpSourceNodeLabel(n) }}</option>
                 </select>
                 <button type="button" class="btn btn-secondary" @click="fillWarpDefaultsFromNode">获取</button>
               </div>
