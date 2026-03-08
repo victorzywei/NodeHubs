@@ -892,10 +892,44 @@ wait_for_warp_connected() {
   return 1
 }
 
-ensure_warp_service() {
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl enable --now warp-svc >/dev/null 2>&1 || true
+warp_service_running() {
+  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemctl is-active --quiet warp-svc >/dev/null 2>&1 && return 0
   fi
+  if command -v pgrep >/dev/null 2>&1; then
+    pgrep -x warp-svc >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
+start_warp_service_background() {
+  local warp_svc_bin log_file
+  warp_svc_bin="$(command -v warp-svc 2>/dev/null || true)"
+  [ -n "$warp_svc_bin" ] || {
+    warn "warp-svc binary not found after warp-cli installation."
+    return 1
+  }
+  warp_service_running && return 0
+  mkdir -p "$STATE_DIR/warp"
+  log_file="$STATE_DIR/warp/warp-svc.log"
+  nohup "$warp_svc_bin" >"$log_file" 2>&1 &
+  sleep 2
+  warp_service_running && return 0
+  warn "warp-svc background process failed to start. Check $log_file for details."
+  return 1
+}
+
+ensure_warp_service() {
+  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemctl enable --now warp-svc >/dev/null 2>&1 || true
+    systemctl restart warp-svc >/dev/null 2>&1 || true
+  else
+    start_warp_service_background || return 1
+  fi
+  warp_service_running || {
+    warn "warp-svc is not running after bootstrap startup."
+    return 1
+  }
 }
 
 configure_warp_cli() {
