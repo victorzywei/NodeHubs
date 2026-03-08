@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildAgentInstallScript, buildAgentReconcileEnv, buildDeployCommand, buildReleaseApplyScript } from './agent-install'
+import {
+  buildAgentInstallScript,
+  buildAgentReconcileEnv,
+  buildDeployCommand,
+  buildReleaseApplyScript,
+  buildUninstallCommand,
+} from './agent-install'
 import { renderReleaseArtifact } from './release-renderer'
 import { buildRuntimeCatalog } from './runtime-catalog'
 import type { NodeRecord, TemplateRecord } from '@contracts/index'
@@ -150,6 +156,22 @@ describe('agent install scripts', () => {
     expect(body).toContain("apply_url='https://control.example.com/apply'")
     expect(body).toContain("agent_version='0.1.3'")
     expect(body).toContain("install_url='https://control.example.com/install'")
+  })
+
+  it('builds an uninstall command that stops services, clears autostart hooks, and removes all managed files', () => {
+    const command = buildUninstallCommand()
+
+    expect(command).toContain('Stopping services and background processes.')
+    expect(command).toContain('nodehubsapi-cloudflared.service')
+    expect(command).toContain('systemctl --user disable "$service"')
+    expect(command).toContain('cloudflared tunnel --url')
+    expect(command).toContain('"warp-svc"')
+    expect(command).toContain('/usr/local/bin/lego')
+    expect(command).toContain('remove_autostart_block "$HOME/.profile"')
+    expect(command).toContain('remove_autostart_block "/etc/rc.local"')
+    expect(command).toContain('rm -f /usr/local/bin/nodehubsapi-agent /usr/local/bin/sing-box /usr/local/bin/xray /usr/local/bin/cloudflared /usr/local/bin/lego')
+    expect(command).toContain('rm -rf /etc/nodehubsapi /opt/nodehubsapi "$HOME/.config/nodehubsapi" "$HOME/.local/share/nodehubsapi"')
+    expect(command).toContain('Uninstall completed. nodehubsapi files, services, and runtime artifacts were removed.')
   })
 
   it('builds runtime apply scripts that require an installed runtime binary and write config files', () => {
