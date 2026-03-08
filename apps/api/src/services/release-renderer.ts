@@ -407,7 +407,10 @@ function resolveWarpRoute(node: NodeRecord, templates: NormalizedTemplate[]): Re
   const peerPublicKey = readStringByKeys(defaults, ['warp_peer_public_key', 'peer_public_key'], DEFAULT_WARP_PEER_PUBLIC_KEY)
   const systemInterface = readBooleanByKeys(defaults, ['warp_system_interface', 'system_interface'], false)
   const mtu = Math.max(576, Math.min(65535, Math.trunc(readNumberByKeys(defaults, ['warp_mtu', 'mtu'], 1280))))
-  const reserved = normalizeReserved(defaults.warp_reserved, fallbackReserved)
+  const reserved = normalizeReserved(
+    Object.prototype.hasOwnProperty.call(defaults, 'warp_reserved') ? defaults.warp_reserved : defaults.reserved,
+    fallbackReserved,
+  )
 
   const localAddressV4 = readStringByKeys(defaults, ['warp_local_address_ipv4', 'local_address_ipv4'], DEFAULT_WARP_LOCAL_ADDRESS_IPV4)
   const localAddressV6 = normalizeV6Cidr(

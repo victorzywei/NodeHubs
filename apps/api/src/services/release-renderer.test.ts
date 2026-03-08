@@ -347,18 +347,24 @@ describe('release renderer', () => {
       createdAt: '2026-03-06T00:00:00.000Z',
       message: 'warp enabled',
       summary: 'runtime update',
-      node: {
-        ...createNode(),
-        warpPrivateKey: 'private-key-from-report',
-        warpIpv6: '2606:4700:110:8d8d:1845:c39f:2dd5:a03a',
-        warpEndpoint: 'engage.cloudflareclient.com:2408',
-        warpReserved: [1, 2, 3],
-      },
+      node: createNode(),
       templates: [
         {
           ...createTemplate(),
           warpExit: true,
           warpRouteMode: 'ipv4',
+          defaults: {
+            ...createTemplate().defaults,
+            warp_server: 'engage.cloudflareclient.com',
+            warp_server_port: 2408,
+            warp_local_address_ipv4: '172.16.0.2/32',
+            warp_local_address_ipv6: '2606:4700:110:8d8d:1845:c39f:2dd5:a03a/128',
+            warp_private_key: 'template-private-key',
+            warp_peer_public_key: 'template-peer-key',
+            warp_system_interface: 'false',
+            warp_mtu: 1280,
+            reserved: '7,8,9',
+          },
         },
       ],
       bootstrapOptions: {
@@ -376,8 +382,21 @@ describe('release renderer', () => {
       route?: { rules?: Array<Record<string, unknown>> }
     }
     const tags = (runtimeConfig.outbounds || []).map((item) => String(item.tag || ''))
+    const warpOutbound = (runtimeConfig.outbounds || []).find((item) => String(item.tag || '') === 'warp-out')
     expect(tags).toContain('warp-out')
     expect(runtimeConfig.route?.rules?.some((rule) => JSON.stringify(rule).includes('0.0.0.0/0'))).toBe(true)
+    expect(warpOutbound).toMatchObject({
+      type: 'wireguard',
+      system: false,
+      mtu: 1280,
+      address: ['172.16.0.2/32', '2606:4700:110:8d8d:1845:c39f:2dd5:a03a/128'],
+    })
+    expect((warpOutbound?.peers as Array<Record<string, unknown>> | undefined)?.[0]).toMatchObject({
+      address: 'engage.cloudflareclient.com',
+      port: 2408,
+      public_key: 'template-peer-key',
+      reserved: [7, 8, 9],
+    })
   })
 
   it('fills reality flow and fingerprint defaults in runtime and subscription outputs', () => {

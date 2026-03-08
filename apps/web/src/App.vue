@@ -363,6 +363,27 @@ const realityFingerprintOptions = [
 ]
 const defaultRealityFingerprint = 'chrome'
 const defaultRealityFlow = 'xtls-rprx-vision'
+const defaultWarpServer = 'engage.cloudflareclient.com'
+const defaultWarpServerPort = 2408
+const defaultWarpLocalAddressIpv4 = '172.16.0.2/32'
+const defaultWarpPeerPublicKey = 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo='
+const defaultWarpMtu = 1280
+const defaultWarpReserved = '0,0,0'
+const warpSystemInterfaceOptions = [
+  { value: 'false', label: 'false' },
+  { value: 'true', label: 'true' },
+]
+
+type TemplateDefaultField = {
+  key: string
+  label: string
+  placeholder: string
+  type?: 'text' | 'number' | 'boolean'
+  generator?: string
+  list?: string
+  options?: Array<{ value: string; label: string }>
+  readonly?: boolean
+}
 
 const sampleSecrets = new Set([
   'replace-me',
@@ -452,7 +473,7 @@ const templateDefaultFields = computed(() => {
   const p = newTemplate.value.protocol
   const t = newTemplate.value.transport
   const tls = newTemplate.value.tlsMode
-  const fields: Array<{key:string, label:string, placeholder:string, type?:string, generator?:string, list?:string, options?: Array<{value:string, label:string}>, readonly?:boolean}> = []
+  const fields: TemplateDefaultField[] = []
 
   // Port
   fields.push({ key:'serverPort', label:'端口', placeholder:'443', type:'number' })
@@ -516,6 +537,110 @@ const templateDefaultFields = computed(() => {
   return fields
 })
 
+const warpDefaultFields = computed<TemplateDefaultField[]>(() => [
+  { key:'warp_server', label:'Server', placeholder: defaultWarpServer },
+  { key:'warp_server_port', label:'Server Port', placeholder: String(defaultWarpServerPort), type:'number' },
+  { key:'warp_local_address_ipv4', label:'Local Address IPv4', placeholder: defaultWarpLocalAddressIpv4 },
+  { key:'warp_local_address_ipv6', label:'Local Address IPv6', placeholder:'留空自动使用节点上报 IPv6/128' },
+  { key:'warp_private_key', label:'Private Key', placeholder:'填写 WARP Private Key' },
+  { key:'warp_peer_public_key', label:'Peer Public Key', placeholder: defaultWarpPeerPublicKey },
+  { key:'warp_system_interface', label:'System Interface', placeholder:'false', type:'boolean', options: warpSystemInterfaceOptions },
+  { key:'warp_mtu', label:'MTU', placeholder: String(defaultWarpMtu), type:'number' },
+  { key:'warp_reserved', label:'Reserved', placeholder: defaultWarpReserved },
+])
+
+function hasTextValue(value: unknown) {
+  if (typeof value === 'string') return value.trim().length > 0
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'boolean') return true
+  if (Array.isArray(value)) return value.length > 0
+  return false
+}
+
+function isValidPortValue(value: unknown) {
+  if (typeof value === 'number') return Number.isInteger(value) && value >= 1 && value <= 65535
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535
+  }
+  return false
+}
+
+function isValidBooleanValue(value: unknown) {
+  if (typeof value === 'boolean') return true
+  if (typeof value !== 'string') return false
+  return ['true', 'false', '1', '0', 'yes', 'no', 'on', 'off'].includes(value.trim().toLowerCase())
+}
+
+function isValidMtuValue(value: unknown) {
+  if (typeof value === 'number') return Number.isInteger(value) && value >= 576 && value <= 65535
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isInteger(parsed) && parsed >= 576 && parsed <= 65535
+  }
+  return false
+}
+
+function isValidWarpReservedValue(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.length === 3 && value.every((item) => Number.isFinite(Number(item)))
+  }
+  if (typeof value !== 'string' || !value.trim()) return false
+  const parts = value.split(',').map((item) => item.trim())
+  return parts.length === 3 && parts.every((item) => /^\d+$/.test(item))
+}
+
+function hydrateWarpTemplateDefaults(targetDefaults: Record<string, unknown>, mode: 'repair' | 'force' = 'repair') {
+  if (!newTemplate.value.warpExit) return targetDefaults
+
+  const shouldWrite = (key: string, validator: (value: unknown) => boolean) =>
+    mode === 'force' || !validator(targetDefaults[key])
+
+  if (shouldWrite('warp_server', hasTextValue)) {
+    targetDefaults['warp_server'] = defaultWarpServer
+  }
+  if (shouldWrite('warp_server_port', isValidPortValue)) {
+    targetDefaults['warp_server_port'] = defaultWarpServerPort
+  }
+  if (shouldWrite('warp_local_address_ipv4', hasTextValue)) {
+    targetDefaults['warp_local_address_ipv4'] = defaultWarpLocalAddressIpv4
+  }
+  if (shouldWrite('warp_peer_public_key', hasTextValue)) {
+    targetDefaults['warp_peer_public_key'] = defaultWarpPeerPublicKey
+  }
+  if (shouldWrite('warp_system_interface', isValidBooleanValue)) {
+    targetDefaults['warp_system_interface'] = false
+  }
+  if (shouldWrite('warp_mtu', isValidMtuValue)) {
+    targetDefaults['warp_mtu'] = defaultWarpMtu
+  }
+  if (shouldWrite('warp_reserved', isValidWarpReservedValue)) {
+    targetDefaults['warp_reserved'] = defaultWarpReserved
+  }
+
+  return targetDefaults
+}
+
+function getTemplateDefaultDisplayValue(key: string) {
+  const value = (newTemplate.value.defaults as Record<string, unknown>)[key]
+  if (Array.isArray(value)) return value.join(',')
+  if (typeof value === 'boolean') return value ? 'true' : 'false'
+  if (value === null || value === undefined) return ''
+  return String(value)
+}
+
+function setTemplateDefaultValue(key: string, rawValue: string, type?: TemplateDefaultField['type']) {
+  if (type === 'number') {
+    ;(newTemplate.value.defaults as Record<string, unknown>)[key] = rawValue === '' ? '' : Number(rawValue)
+    return
+  }
+  if (type === 'boolean') {
+    ;(newTemplate.value.defaults as Record<string, unknown>)[key] = rawValue === 'true'
+    return
+  }
+  ;(newTemplate.value.defaults as Record<string, unknown>)[key] = rawValue
+}
+
 // Watch protocol changes and auto-fix transport/tls
 watch(() => newTemplate.value.protocol, (p) => {
   if (p === 'hysteria2') {
@@ -535,6 +660,14 @@ watch(
   () => `${newTemplate.value.transport}:${newTemplate.value.tlsMode}:${String(newTemplate.value.defaults['method'] || '')}`,
   () => {
     void hydrateTemplateDefaults('repair')
+  },
+)
+
+watch(
+  () => newTemplate.value.warpExit,
+  (enabled) => {
+    if (!enabled) return
+    newTemplate.value.defaults = hydrateWarpTemplateDefaults({ ...newTemplate.value.defaults }, 'repair')
   },
 )
 
@@ -709,7 +842,7 @@ async function hydrateTemplateDefaults(mode: 'repair' | 'force' = 'repair') {
     }
   }
 
-  newTemplate.value.defaults = nextDefaults
+  newTemplate.value.defaults = hydrateWarpTemplateDefaults(nextDefaults, mode)
 }
 
 async function generateRealityKeys(targetDefaults = newTemplate.value.defaults) {
@@ -1027,7 +1160,7 @@ function fillWarpDefaultsFromNode() {
     patched += 1
   }
   if (Array.isArray(sourceNode.warpReserved) && sourceNode.warpReserved.length === 3) {
-    nextDefaults['warp_reserved'] = sourceNode.warpReserved.map((value) => Number(value))
+    nextDefaults['warp_reserved'] = sourceNode.warpReserved.map((value) => Number(value)).join(',')
     patched += 1
   }
   const endpoint = parseWarpEndpoint(sourceNode.warpEndpoint || '')
@@ -1037,14 +1170,14 @@ function fillWarpDefaultsFromNode() {
     patched += 1
   }
   if (!nextDefaults['warp_peer_public_key']) {
-    nextDefaults['warp_peer_public_key'] = 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo='
+    nextDefaults['warp_peer_public_key'] = defaultWarpPeerPublicKey
   }
   if (patched === 0) {
     toast('error', `Node ${sourceNode.name} has no usable WARP runtime data`)
     return
   }
-  newTemplate.value.defaults = nextDefaults
   newTemplate.value.warpExit = true
+  newTemplate.value.defaults = hydrateWarpTemplateDefaults(nextDefaults, 'repair')
   toast('success', `Imported WARP params from ${sourceNode.name}`)
 }
 
@@ -1946,8 +2079,8 @@ onMounted(() => { if (adminKey.value) login() })
             <select
               v-if="field.options?.length"
               class="form-select"
-              :value="String((newTemplate.defaults as any)[field.key] ?? '')"
-              @change="(e:any) => { (newTemplate.defaults as any)[field.key] = e.target.value }"
+              :value="getTemplateDefaultDisplayValue(field.key)"
+              @change="(e:any) => setTemplateDefaultValue(field.key, e.target.value, field.type)"
             >
               <option v-for="option in field.options" :key="option.value" :value="option.value">{{ option.label }}</option>
             </select>
@@ -1958,8 +2091,8 @@ onMounted(() => { if (adminKey.value) login() })
               :placeholder="field.placeholder"
               :list="field.list"
               :readonly="field.readonly === true"
-              :value="(newTemplate.defaults as any)[field.key] ?? ''"
-              @input="(e:any) => { (newTemplate.defaults as any)[field.key] = field.type === 'number' ? Number(e.target.value) : e.target.value }"
+              :value="getTemplateDefaultDisplayValue(field.key)"
+              @input="(e:any) => setTemplateDefaultValue(field.key, e.target.value, field.type)"
             />
           </div>
 
@@ -1968,29 +2101,52 @@ onMounted(() => { if (adminKey.value) login() })
           <div class="form-section-divider">WARP 出口</div>
           <div class="form-checkbox-group mb-md">
             <input type="checkbox" class="form-checkbox" v-model="newTemplate.warpExit" id="template-warp-exit">
-            <label for="template-warp-exit" class="form-label" style="margin:0">启用模板 WARP 出口</label>
+            <label for="template-warp-exit" class="form-label" style="margin:0">使用 WARP 作为出口</label>
           </div>
           <div v-if="newTemplate.warpExit" class="form-row">
             <div class="form-group">
-              <label class="form-label">WARP 路由模式</label>
-              <select class="form-select" v-model="newTemplate.warpRouteMode">
-                <option value="all">All (IPv4 + IPv6)</option>
-                <option value="ipv4">IPv4 only</option>
-                <option value="ipv6">IPv6 only</option>
-              </select>
+              <label class="form-label">读取节点 WARP 参数</label>
+              <div style="display:flex;gap:8px;align-items:center">
+                <select class="form-select" v-model="warpSourceNodeId" style="flex:1">
+                  <option value="">请选择节点</option>
+                  <option v-for="n in warpSourceNodes" :key="n.id" :value="n.id">{{ n.name }}</option>
+                </select>
+                <button type="button" class="btn btn-secondary" @click="fillWarpDefaultsFromNode">获取</button>
+              </div>
             </div>
             <div class="form-group">
-              <label class="form-label">参数来源节点</label>
-              <select class="form-select" v-model="warpSourceNodeId">
-                <option value="">Auto select</option>
-                <option v-for="n in warpSourceNodes" :key="n.id" :value="n.id">{{ n.name }}</option>
+              <label class="form-label">路由模式</label>
+              <select class="form-select" v-model="newTemplate.warpRouteMode">
+                <option value="all">全部流量 (IPv4+IPv6)</option>
+                <option value="ipv4">仅 IPv4</option>
+                <option value="ipv6">仅 IPv6</option>
               </select>
             </div>
           </div>
+          <template v-if="newTemplate.warpExit">
+            <div v-for="field in warpDefaultFields" :key="field.key" class="form-group">
+              <label class="form-label">{{ field.label }}</label>
+              <select
+                v-if="field.options?.length"
+                class="form-select"
+                :value="getTemplateDefaultDisplayValue(field.key)"
+                @change="(e:any) => setTemplateDefaultValue(field.key, e.target.value, field.type)"
+              >
+                <option v-for="option in field.options" :key="option.value" :value="option.value">{{ option.label }}</option>
+              </select>
+              <input
+                v-else
+                class="form-input"
+                :type="field.type === 'number' ? 'number' : 'text'"
+                :placeholder="field.placeholder"
+                :value="getTemplateDefaultDisplayValue(field.key)"
+                @input="(e:any) => setTemplateDefaultValue(field.key, e.target.value, field.type)"
+              />
+            </div>
+          </template>
           <div v-if="newTemplate.warpExit" class="form-group">
-            <button type="button" class="btn btn-secondary btn-sm" @click="fillWarpDefaultsFromNode">获取上报 WARP 参数</button>
             <div class="text-muted" style="margin-top:8px;font-size:12px">
-              按节点上报数据填入 private key / endpoint / IPv6 / reserved 到 defaults。
+              字段格式按常见 WARP WireGuard 出口写法处理；IPv6 留空时会优先使用节点上报值。
             </div>
           </div>
         </div>
