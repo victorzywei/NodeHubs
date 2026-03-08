@@ -1180,7 +1180,6 @@ async function fillWarpDefaultsFromNode() {
   }
 
   const nextDefaults = { ...newTemplate.value.defaults }
-  let patched = 0
   const privateKey = (sourceNode.warpPrivateKey || '').trim()
   const ipv6 = (sourceNode.warpIpv6 || '').trim()
   const reservedValues = Array.isArray(sourceNode.warpReserved) && sourceNode.warpReserved.length === 3
@@ -1188,27 +1187,24 @@ async function fillWarpDefaultsFromNode() {
     : null
   const hasNodeReserved = Array.isArray(reservedValues)
   const endpoint = parseWarpEndpoint(sourceNode.warpEndpoint || '')
-  if (privateKey) {
-    nextDefaults['warp_private_key'] = privateKey
-    patched += 1
-  }
-  if (ipv6) {
-    nextDefaults['warp_local_address_ipv6'] = ensureIpv6Cidr(ipv6)
-    patched += 1
-  }
-  if (hasNodeReserved) {
-    nextDefaults['warp_reserved'] = reservedValues.map((value) => Number(value)).join(',')
-    patched += 1
-  }
-  if (endpoint) {
-    nextDefaults['warp_server'] = endpoint.host
-    nextDefaults['warp_server_port'] = endpoint.port
-    patched += 1
-  }
-  if (patched === 0) {
-    toast('error', `Node ${sourceNode.name} has no usable WARP runtime data`)
+  const missingFields = [
+    privateKey ? '' : 'PrivateKey',
+    ipv6 ? '' : 'IPv6',
+    endpoint ? '' : 'Endpoint',
+    hasNodeReserved ? '' : 'Reserved',
+  ].filter(Boolean)
+  if (missingFields.length > 0) {
+    toast('error', `Node ${sourceNode.name} 缺少统一 WARP 上报字段: ${missingFields.join(', ')}`)
     return
   }
+
+  const resolvedReserved = reservedValues as number[]
+  const resolvedEndpoint = endpoint as { host: string; port: number }
+  nextDefaults['warp_private_key'] = privateKey
+  nextDefaults['warp_local_address_ipv6'] = ensureIpv6Cidr(ipv6)
+  nextDefaults['warp_reserved'] = resolvedReserved.map((value) => Number(value)).join(',')
+  nextDefaults['warp_server'] = resolvedEndpoint.host
+  nextDefaults['warp_server_port'] = resolvedEndpoint.port
   newTemplate.value.warpExit = true
   newTemplate.value.defaults = hydrateWarpTemplateDefaults(nextDefaults, 'repair')
   toast('success', `Imported WARP params from ${sourceNode.name}`)
