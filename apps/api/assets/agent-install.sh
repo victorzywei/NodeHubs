@@ -1167,7 +1167,11 @@ EOF_STORAGE
 }
 EOF_JSON
 )
-  post_json "$API_BASE/api/nodes/agent/heartbeat" "$payload" || true
+  if ! post_json "$API_BASE/api/nodes/agent/heartbeat" "$payload"; then
+    warn "Heartbeat upload failed for node $NODE_ID."
+    return 1
+  fi
+  return 0
 }
 
 apply_release() {
@@ -1176,14 +1180,18 @@ apply_release() {
   local script_file
   script_file="$(mktemp)"
   if ! http_get_to_file "$apply_url" "$script_file"; then
+    warn "Release apply script download failed: release=$release_id"
     return 1
   fi
   chmod +x "$script_file"
+  log "Applying release: release=$release_id"
   export API_BASE NODE_ID AGENT_TOKEN AGENT_VERSION AGENT_INSTALL_URL ETC_DIR STATE_DIR RUNTIME_BIN_DIR INSTALL_MODE USE_SYSTEMD SYSTEMCTL_USER_FLAG
   if ! bash "$script_file"; then
+    warn "Release apply failed: release=$release_id"
     rm -f "$script_file"
     return 1
   fi
+  log "Release apply completed: release=$release_id"
   rm -f "$script_file"
   return 0
 }
@@ -1192,17 +1200,25 @@ reconcile() {
   local env_file
   env_file="$(mktemp)"
   if ! http_get "$API_BASE/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env" >"$env_file"; then
+    warn "Reconcile fetch failed for node $NODE_ID."
     rm -f "$env_file"
     return 1
   fi
   . "$env_file"
   rm -f "$env_file"
 
-  self_update_if_needed "${agent_version:-}" "${install_url:-}" || return 1
+  if ! self_update_if_needed "${agent_version:-}" "${install_url:-}"; then
+    warn "Agent self-update failed for node $NODE_ID."
+    return 1
+  fi
 
   if [ "${needs_update:-0}" = "1" ] && [ -n "${release_id:-}" ] && [ -n "${apply_url:-}" ] && { [ "${release_status:-}" = "pending" ] || [ "${release_status:-}" = "applying" ]; }; then
-    apply_release "$release_id" "$apply_url" || true
+    if ! apply_release "$release_id" "$apply_url"; then
+      warn "Reconcile apply step failed: release=$release_id status=${release_status:-unknown}"
+      return 1
+    fi
   fi
+  return 0
 }
 
 unix_now() {
@@ -1245,7 +1261,7 @@ loop() {
     fi
 
     if [ "$now" -ge "$next_heartbeat_at" ]; then
-      heartbeat
+      heartbeat || true
       next_heartbeat_at=$((now + heartbeat_interval))
     fi
     if [ "$now" -ge "$next_reconcile_at" ]; then
