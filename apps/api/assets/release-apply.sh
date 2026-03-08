@@ -413,6 +413,35 @@ install_binary_file() {
   chmod 0755 "$target"
 }
 
+runtime_binary_version_output() {
+  local binary_path="$1"
+  [ -x "$binary_path" ] || return 1
+  "$binary_path" version 2>/dev/null | head -n 1 | tr -d '\r'
+}
+
+expected_runtime_version_output() {
+  case "$RUNTIME_ENGINE" in
+    sing-box)
+      printf 'sing-box version %s' "$RUNTIME_VERSION"
+      ;;
+    xray)
+      printf 'Xray %s' "$RUNTIME_VERSION"
+      ;;
+    *)
+      printf ''
+      ;;
+  esac
+}
+
+runtime_binary_is_current() {
+  local installed_version expected_version
+  [ -x "$RUNTIME_INSTALL_PATH" ] || return 1
+  expected_version="$(expected_runtime_version_output)"
+  [ -n "$expected_version" ] || return 1
+  installed_version="$(runtime_binary_version_output "$RUNTIME_INSTALL_PATH" || true)"
+  [ "$installed_version" = "$expected_version" ]
+}
+
 extract_zip() {
   local archive="$1"
   local target_dir="$2"
@@ -473,32 +502,26 @@ extract_archive() {
 }
 
 install_runtime_binary() {
-  local arch asset_name binary_rel archive_file unpack_dir download_url fallback_url source_binary
+  local arch asset_name binary_rel archive_file unpack_dir download_url source_binary
   arch="$(resolve_runtime_arch)"
-  fallback_url=""
 
   case "$RUNTIME_ENGINE" in
     sing-box)
-      local singbox_fallback_tag singbox_tag singbox_version
-      singbox_fallback_tag="$(normalize_version_tag "$RUNTIME_VERSION" || true)"
-      [ -n "$singbox_fallback_tag" ] || singbox_fallback_tag="v1.13.0"
-      singbox_tag="$(get_latest_github_tag "SagerNet/sing-box" "$singbox_fallback_tag")"
-      [ -n "$singbox_tag" ] || singbox_tag="$singbox_fallback_tag"
+      local singbox_tag singbox_version
+      singbox_tag="$(normalize_version_tag "$RUNTIME_VERSION" || true)"
+      [ -n "$singbox_tag" ] || singbox_tag="v1.13.0"
       singbox_version="${singbox_tag#v}"
       asset_name="sing-box-${singbox_version}-linux-${arch}.tar.gz"
       binary_rel="sing-box-${singbox_version}-linux-${arch}/sing-box"
       download_url="https://github.com/SagerNet/sing-box/releases/download/${singbox_tag}/${asset_name}"
-      fallback_url="https://github.com/SagerNet/sing-box/releases/latest/download/${asset_name}"
       ;;
     xray)
-      local xray_fallback_tag
+      local xray_tag
       asset_name="Xray-linux-${arch}.zip"
       binary_rel="xray"
-      download_url="https://github.com/XTLS/Xray-core/releases/latest/download/${asset_name}"
-      xray_fallback_tag="$(normalize_version_tag "$RUNTIME_VERSION" || true)"
-      if [ -n "$xray_fallback_tag" ]; then
-        fallback_url="https://github.com/XTLS/Xray-core/releases/download/${xray_fallback_tag}/${asset_name}"
-      fi
+      xray_tag="$(normalize_version_tag "$RUNTIME_VERSION" || true)"
+      [ -n "$xray_tag" ] || xray_tag="v26.2.6"
+      download_url="https://github.com/XTLS/Xray-core/releases/download/${xray_tag}/${asset_name}"
       ;;
     *)
       asset_name="$(render_template "$RUNTIME_ASSET_TEMPLATE" "$arch")"
@@ -518,14 +541,7 @@ install_runtime_binary() {
   rm -rf "$unpack_dir"
   mkdir -p "$unpack_dir"
 
-  if ! http_download_to_file "$download_url" "$archive_file"; then
-    if [ -n "$fallback_url" ]; then
-      warn "Primary runtime download failed, retrying fallback URL."
-      http_download_to_file "$fallback_url" "$archive_file"
-    else
-      return 1
-    fi
-  fi
+  http_download_to_file "$download_url" "$archive_file"
   extract_archive "$archive_file" "$unpack_dir"
 
   source_binary="$unpack_dir/$binary_rel"
@@ -535,6 +551,24 @@ install_runtime_binary() {
   fi
 
   install_binary_file "$source_binary" "$RUNTIME_INSTALL_PATH"
+}
+
+ensure_runtime_binary_ready() {
+  resolve_runtime_install_path
+  if [ "$RELEASE_KIND" = "bootstrap" ]; then
+    if runtime_binary_is_current; then
+      log "Reusing runtime binary: $RUNTIME_INSTALL_PATH"
+      return 0
+    fi
+    log "Installing runtime binary: $RUNTIME_ENGINE $RUNTIME_VERSION"
+    install_runtime_binary
+    return 0
+  fi
+
+  if [ ! -x "$RUNTIME_INSTALL_PATH" ]; then
+    echo "Runtime binary missing for $RUNTIME_ENGINE: $RUNTIME_INSTALL_PATH. Publish a bootstrap release to install it." >&2
+    return 1
+  fi
 }
 
 resolve_lego_arch() {
@@ -1090,6 +1124,13 @@ stop_runtime_kernels() {
   pkill -x xray >/dev/null 2>&1 || true
 }
 
+prepare_runtime_plans() {
+  if [ "$RUNTIME_PLAN_COUNT" -le 0 ]; then
+    return 0
+  fi
+__RUNTIME_PREPARE_BLOCKS__
+}
+
 apply_runtime_plans() {
   if [ "$RUNTIME_PLAN_COUNT" -le 0 ]; then
     warn "No runtime plans in release artifact."
@@ -1178,6 +1219,7 @@ main() {
   if [ "$RELEASE_KIND" = "bootstrap" ]; then
     run_hooks "$ETC_DIR/hooks/bootstrap.d"
   fi
+  prepare_runtime_plans
   stop_runtime_kernels
   write_runtime_files
   ensure_tls_certificate

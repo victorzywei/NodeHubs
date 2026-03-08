@@ -64,26 +64,42 @@ function buildRuntimeFileBlocks(artifact: ReleaseArtifact): string {
     .join('\n\n')
 }
 
+function buildRuntimePlanSetupBlock(runtime: ReleaseArtifact['runtimes'][number]): string {
+  const configPath = `\${ETC_DIR}/${runtime.entryConfigPath}`
+  const serviceName = `nodehubsapi-runtime-${runtime.engine}`
+  const serviceFile = `\${SYSTEMD_DIR}/${serviceName}.service`
+  return [
+    `  RUNTIME_ENGINE=${shellQuote(runtime.engine)}`,
+    `  RUNTIME_VERSION=${shellQuote(runtime.binary.version)}`,
+    `  RUNTIME_BINARY_NAME=${shellQuote(runtime.binary.binaryName)}`,
+    `  RUNTIME_INSTALL_PATH_DEFAULT=${shellQuote(runtime.binary.installPath)}`,
+    `  RUNTIME_ASSET_TEMPLATE=${shellQuote(runtime.binary.assetNameTemplate)}`,
+    `  RUNTIME_BINARY_PATH_TEMPLATE=${shellQuote(runtime.binary.binaryPathTemplate)}`,
+    `  RUNTIME_RUN_ARGS_TEMPLATE=${shellQuote(runtime.binary.runArgsTemplate)}`,
+    `  RUNTIME_ARCHIVE_FORMAT=${shellQuote(runtime.binary.archiveFormat)}`,
+    `  RUNTIME_CONFIG_PATH="${configPath}"`,
+    `  RUNTIME_SERVICE_NAME=${shellQuote(serviceName)}`,
+    `  RUNTIME_SERVICE_FILE="${serviceFile}"`,
+  ].join('\n')
+}
+
+function buildRuntimePrepareBlocks(artifact: ReleaseArtifact): string {
+  return artifact.runtimes
+    .map((runtime) => {
+      return [
+        buildRuntimePlanSetupBlock(runtime),
+        '  ensure_runtime_binary_ready',
+      ].join('\n')
+    })
+    .join('\n')
+}
+
 function buildRuntimeApplyBlocks(artifact: ReleaseArtifact): string {
   return artifact.runtimes
     .map((runtime) => {
-      const configPath = `\${ETC_DIR}/${runtime.entryConfigPath}`
-      const serviceName = `nodehubsapi-runtime-${runtime.engine}`
-      const serviceFile = `\${SYSTEMD_DIR}/${serviceName}.service`
       return [
-        `  RUNTIME_ENGINE=${shellQuote(runtime.engine)}`,
-        `  RUNTIME_VERSION=${shellQuote(runtime.binary.version)}`,
-        `  RUNTIME_BINARY_NAME=${shellQuote(runtime.binary.binaryName)}`,
-        `  RUNTIME_INSTALL_PATH_DEFAULT=${shellQuote(runtime.binary.installPath)}`,
-        `  RUNTIME_ASSET_TEMPLATE=${shellQuote(runtime.binary.assetNameTemplate)}`,
-        `  RUNTIME_BINARY_PATH_TEMPLATE=${shellQuote(runtime.binary.binaryPathTemplate)}`,
-        `  RUNTIME_RUN_ARGS_TEMPLATE=${shellQuote(runtime.binary.runArgsTemplate)}`,
-        `  RUNTIME_ARCHIVE_FORMAT=${shellQuote(runtime.binary.archiveFormat)}`,
-        `  RUNTIME_CONFIG_PATH="${configPath}"`,
-        `  RUNTIME_SERVICE_NAME=${shellQuote(serviceName)}`,
-        `  RUNTIME_SERVICE_FILE="${serviceFile}"`,
+        buildRuntimePlanSetupBlock(runtime),
         '  resolve_runtime_install_path',
-        '  install_runtime_binary',
         '  write_runtime_service',
         '  restart_runtime_service',
       ].join('\n')
@@ -105,8 +121,7 @@ function buildBootstrapBinaryApplyBlocks(artifact: ReleaseArtifact): string {
         `  RUNTIME_RUN_ARGS_TEMPLATE=${shellQuote(binary.runArgsTemplate)}`,
         `  RUNTIME_ARCHIVE_FORMAT=${shellQuote(binary.archiveFormat)}`,
         `  RUNTIME_CONFIG_PATH="${configPath}"`,
-        '  resolve_runtime_install_path',
-        '  install_runtime_binary',
+        '  ensure_runtime_binary_ready',
       ].join('\n')
     })
     .join('\n')
@@ -235,6 +250,7 @@ function renderScriptAsset(name: string, replacements: Record<string, string>): 
 
 export function buildReleaseApplyScript(artifact: ReleaseArtifact): string {
   const runtimeFileBlocks = buildRuntimeFileBlocks(artifact)
+  const runtimePrepareBlocks = buildRuntimePrepareBlocks(artifact)
   const runtimeApplyBlocks = buildRuntimeApplyBlocks(artifact)
   const bootstrapBinaryApplyBlocks = buildBootstrapBinaryApplyBlocks(artifact)
   const primaryRuntimeServiceName = `nodehubsapi-runtime-${artifact.runtimes[0]?.engine || 'sing-box'}`
@@ -280,6 +296,7 @@ export function buildReleaseApplyScript(artifact: ReleaseArtifact): string {
     __CONTROL_PLANE_AGENT_VERSION__: shellQuote(APP_VERSION),
     __BOOTSTRAP_TLS_DOMAINS__: bootstrapTlsDomains,
     __RUNTIME_FILE_BLOCKS__: runtimeFileBlocks,
+    __RUNTIME_PREPARE_BLOCKS__: runtimePrepareBlocks,
     __RUNTIME_APPLY_BLOCKS__: runtimeApplyBlocks,
     __BOOTSTRAP_BINARY_APPLY_BLOCKS__: bootstrapBinaryApplyBlocks,
   })

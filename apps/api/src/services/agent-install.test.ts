@@ -144,7 +144,7 @@ describe('agent install scripts', () => {
     expect(body).toContain("install_url='https://control.example.com/install'")
   })
 
-  it('builds release apply scripts that install runtime binaries and write config files', () => {
+  it('builds runtime apply scripts that require an installed runtime binary and write config files', () => {
     const artifact = renderReleaseArtifact({
       releaseId: 'rel_1',
       revision: 2,
@@ -170,10 +170,16 @@ describe('agent install scripts', () => {
 
     expect(script).toContain('RUNTIME_PLAN_COUNT=')
     expect(script).toContain('resolve_runtime_arch')
+    expect(script).toContain('prepare_runtime_plans')
     expect(script).toContain('stop_runtime_kernels')
     expect(script).toContain('apply_runtime_plans')
     expect(script).toContain('systemctl stop nodehubsapi-runtime-sing-box.service nodehubsapi-runtime-xray.service')
+    expect(script).toContain('ensure_runtime_binary_ready() {')
+    expect(script).toContain('Runtime binary missing for $RUNTIME_ENGINE: $RUNTIME_INSTALL_PATH. Publish a bootstrap release to install it.')
     expect(script).toContain('RUNTIME_CONFIG_PATH="${ETC_DIR}/runtime/sing-box.json"')
+    expect(script).toContain('RUNTIME_SERVICE_FILE="${SYSTEMD_DIR}/nodehubsapi-runtime-sing-box.service"\n  ensure_runtime_binary_ready')
+    expect(script).toContain('RUNTIME_SERVICE_FILE="${SYSTEMD_DIR}/nodehubsapi-runtime-sing-box.service"\n  resolve_runtime_install_path\n  write_runtime_service\n  restart_runtime_service')
+    expect(script).not.toContain('RUNTIME_SERVICE_FILE="${SYSTEMD_DIR}/nodehubsapi-runtime-sing-box.service"\n  resolve_runtime_install_path\n  install_runtime_binary')
     expect(script).toContain('refresh_agent_installation_if_needed')
     expect(script).toContain('apply_agent_schedule_settings')
     expect(script).toContain('BOOTSTRAP_HEARTBEAT_INTERVAL_SECONDS=')
@@ -223,5 +229,10 @@ describe('agent install scripts', () => {
     expect(script).toContain("NODE_WARP_LICENSE_KEY=''")
     expect(script).toContain("RUNTIME_BINARY_NAME='sing-box'")
     expect(script).toContain("RUNTIME_BINARY_NAME='xray'")
+    expect(script).toContain('expected_runtime_version_output() {')
+    expect(script).toContain('runtime_binary_is_current() {')
+    expect(script).toContain('Installing runtime binary: $RUNTIME_ENGINE $RUNTIME_VERSION')
+    expect(script).toContain("https://github.com/XTLS/Xray-core/releases/download/${xray_tag}/${asset_name}")
+    expect(script).not.toContain('https://github.com/XTLS/Xray-core/releases/latest/download/${asset_name}')
   })
 })
