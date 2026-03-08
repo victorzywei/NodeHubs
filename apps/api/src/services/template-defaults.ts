@@ -17,11 +17,15 @@ const SAMPLE_SECRETS = new Set([
 ])
 
 const SAMPLE_REALITY_SNI = [
-  'www.cloudflare.com',
   'www.microsoft.com',
   'www.apple.com',
-  'aws.amazon.com',
+  'www.intel.com',
+  'www.oracle.com',
+  'www.ibm.com',
+  'www.nvidia.com',
 ]
+const DEFAULT_REALITY_FLOW = 'xtls-rprx-vision'
+const DEFAULT_REALITY_FINGERPRINT = 'chrome'
 
 type TemplateLike = Pick<TemplateRecord, 'protocol' | 'transport' | 'tlsMode' | 'defaults'>
 
@@ -163,6 +167,14 @@ export function repairTemplateDefaults(template: TemplateLike): Record<string, u
     const sni = readString(defaults, 'sni')
     if (!sni || isPlaceholderSni(sni)) {
       defaults.sni = randomRealitySni()
+    }
+    const flow = readString(defaults, 'flow')
+    if (!flow) {
+      defaults.flow = DEFAULT_REALITY_FLOW
+    }
+    const fingerprint = readString(defaults, 'fingerprint')
+    if (!fingerprint) {
+      defaults.fingerprint = DEFAULT_REALITY_FINGERPRINT
     }
   }
 

@@ -21,6 +21,7 @@ import {
   updateSubscription,
   updateTemplate,
 } from './control-plane'
+import { renderSubscriptionDocument } from './release-renderer'
 import { buildRuntimeCatalog } from './runtime-catalog'
 
 function createSqliteAdapter(db: DatabaseSync): SqlAdapter {
@@ -341,6 +342,35 @@ describe('control-plane template validation', () => {
     expect(String(template.defaults.password || '')).not.toBe('replace-me-base64-key')
     expect(atob(String(template.defaults.password || '')).length).toBe(16)
   })
+
+  it('normalizes reality defaults before persisting', async () => {
+    const services = createServices()
+
+    const template = await createTemplate(
+      services,
+      createValidTemplateInput({
+        name: 'Reality normalized',
+        protocol: 'vless',
+        transport: 'tcp',
+        tlsMode: 'reality',
+        defaults: {
+          serverPort: 23490,
+          uuid: '11111111-1111-4111-8111-111111111111',
+          sni: '',
+          flow: '',
+          fingerprint: '',
+          realityPrivateKey: 'replace-me',
+          realityPublicKey: 'replace-me',
+          realityShortId: '',
+        },
+      }),
+    )
+
+    expect(String(template.defaults.flow || '')).toBe('xtls-rprx-vision')
+    expect(String(template.defaults.fingerprint || '')).toBe('chrome')
+    expect(String(template.defaults.sni || '')).not.toBe('')
+    expect(String(template.defaults.realityShortId || '')).toMatch(/^[0-9a-f]{2,32}$/i)
+  })
 })
 
 describe('subscription documents', () => {
@@ -417,7 +447,81 @@ describe('subscription documents', () => {
     expect(document?.entries.length).toBe(1)
     expect(document?.entries[0]?.server).toBe('edge4.example.com')
     expect(document?.entries[0]?.sni).toBe('edge4.example.com')
-    expect(document?.entries[0]?.uri).toContain('sni=edge4.example.com')
+    expect(document?.entries[0]?.uri).toBeUndefined()
+    const plain = renderSubscriptionDocument(document!, 'plain')
+    expect(plain.body).toContain('sni=edge4.example.com')
+  })
+
+  it('serves subscription entries directly from artifact snapshots', async () => {
+    const services = createServices()
+    const node = await createNode(services, {
+      name: 'Node Snapshot',
+      nodeType: 'vps',
+      region: 'ap-sg',
+      tags: [],
+      networkType: 'public',
+      primaryDomain: 'edge-snapshot.example.com',
+      backupDomain: '',
+      entryIp: '203.0.113.21',
+      githubMirrorUrl: '',
+      cfDnsToken: '',
+      argoTunnelToken: '',
+      argoTunnelDomain: '',
+      argoTunnelPort: 2053,
+    })
+    const template = await createTemplate(services, createValidTemplateInput({
+      defaults: {
+        serverPort: 23491,
+        path: '/ws',
+        host: 'cdn.snapshot.example.com',
+        sni: 'edge-snapshot.example.com',
+        uuid: '11111111-1111-4111-8111-111111111111',
+      },
+    }))
+    const runtimeRelease = await publishNodeRelease(
+      services,
+      node.id,
+      'runtime',
+      [template.id],
+      {
+        installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
+        installSingBox: false,
+        installXray: false,
+      },
+      'ship runtime snapshot',
+    )
+    expect(runtimeRelease).toBeTruthy()
+    await acknowledgeRelease(services, node.id, String(runtimeRelease?.id), 'healthy', 'runtime ok')
+
+    const releaseRow = await services.db.get<{ artifact_key: string }>(
+      'SELECT artifact_key FROM releases WHERE id = ?',
+      [String(runtimeRelease?.id)],
+    )
+    expect(releaseRow?.artifact_key).toBeTruthy()
+    const storedArtifact = await services.artifacts.get(String(releaseRow?.artifact_key))
+    const parsedArtifact = JSON.parse(String(storedArtifact?.body || '{}')) as {
+      templates: unknown[]
+      subscriptionEndpoints: unknown[]
+    }
+    parsedArtifact.templates = []
+    await services.artifacts.putJson(String(releaseRow?.artifact_key), parsedArtifact)
+
+    const subscription = await createSubscription(services, {
+      name: 'Snapshot',
+      enabled: true,
+      visibleNodeIds: [node.id],
+    })
+
+    const document = await buildPublicSubscriptionDocument(services, subscription.token)
+    expect(document?.entries.length).toBe(1)
+    expect(document?.entries[0]?.server).toBe('edge-snapshot.example.com')
+    expect(document?.entries[0]?.host).toBe('cdn.snapshot.example.com')
+    expect(document?.entries[0]?.uri).toBeUndefined()
+    const plain = renderSubscriptionDocument(document!, 'plain')
+    expect(plain.body).toContain('edge-snapshot.example.com')
   })
 
   it('updates and deletes subscriptions', async () => {

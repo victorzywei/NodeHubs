@@ -176,12 +176,13 @@ export interface SubscriptionEndpoint {
   password?: string
   method?: string
   flow?: string
+  fingerprint?: string
   alterId?: number
   realityPublicKey?: string
   realityShortId?: string
   upMbps?: number
   downMbps?: number
-  uri: string
+  uri?: string
 }
 
 export interface BootstrapPlan {

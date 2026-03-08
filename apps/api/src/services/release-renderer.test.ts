@@ -92,7 +92,7 @@ describe('release renderer', () => {
     expect(artifact.runtimes[0]?.files[0]?.path).toBe('runtime/sing-box.json')
     expect(artifact.subscriptionEndpoints[0]?.host).toBe('cdn.example.com')
     expect(artifact.subscriptionEndpoints[0]?.sni).toBe('edge.example.com')
-    expect(artifact.subscriptionEndpoints[0]?.uri).toContain('vless://11111111-1111-4111-8111-111111111111@edge.example.com:443')
+    expect(artifact.subscriptionEndpoints[0]?.uri).toBeUndefined()
     expect(parseReleaseArtifact(JSON.stringify(artifact)))?.toMatchObject({
       schema: 'nodehubsapi-release-v2',
       releaseId: 'rel_1',
@@ -193,6 +193,57 @@ describe('release renderer', () => {
     expect(singbox.body).toContain('"server_name": "edge.example.com"')
     expect(singbox.body).toContain('"Host": "cdn.example.com"')
     expect(singbox.body).toContain('"path": "/ws"')
+  })
+
+  it('renders structured subscription documents from snapshot fields instead of reparsing uri', () => {
+    const runtimeCatalog = buildRuntimeCatalog()
+    const entry = renderReleaseArtifact({
+      releaseId: 'rel_3b',
+      revision: 4,
+      kind: 'runtime',
+      configRevision: 4,
+      bootstrapRevision: 1,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: '',
+      summary: 'runtime update',
+      node: createNode(),
+      templates: [createTemplate()],
+      bootstrapOptions: {
+        installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
+        installSingBox: false,
+        installXray: false,
+      },
+    }, runtimeCatalog).subscriptionEndpoints.map((item) => ({
+      ...item,
+      uri: 'vless://broken@example.invalid:1?type=tcp&security=none#broken',
+    }))
+
+    const clash = renderSubscriptionDocument(
+      {
+        subscriptionId: 'sub_1',
+        name: 'Default',
+        generatedAt: '2026-03-06T00:00:00.000Z',
+        entries: entry,
+      },
+      'clash',
+    )
+    const plain = renderSubscriptionDocument(
+      {
+        subscriptionId: 'sub_1',
+        name: 'Default',
+        generatedAt: '2026-03-06T00:00:00.000Z',
+        entries: entry,
+      },
+      'plain',
+    )
+
+    expect(clash.body).toContain('"servername":"edge.example.com"')
+    expect(clash.body).not.toContain('example.invalid')
+    expect(plain.body).toContain('edge.example.com:443')
+    expect(plain.body).not.toContain('example.invalid')
   })
 
   it('exposes a small template catalog', () => {
@@ -327,6 +378,90 @@ describe('release renderer', () => {
     const tags = (runtimeConfig.outbounds || []).map((item) => String(item.tag || ''))
     expect(tags).toContain('warp-out')
     expect(runtimeConfig.route?.rules?.some((rule) => JSON.stringify(rule).includes('0.0.0.0/0'))).toBe(true)
+  })
+
+  it('fills reality flow and fingerprint defaults in runtime and subscription outputs', () => {
+    const runtimeCatalog = buildRuntimeCatalog()
+    const artifact = renderReleaseArtifact({
+      releaseId: 'rel_reality',
+      revision: 7,
+      kind: 'runtime',
+      configRevision: 7,
+      bootstrapRevision: 1,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: 'reality defaults',
+      summary: 'runtime update',
+      node: createNode(),
+      templates: [
+        {
+          ...createTemplate(),
+          id: 'tpl_reality',
+          name: 'Reality xray',
+          engine: 'xray',
+          protocol: 'vless',
+          transport: 'tcp',
+          tlsMode: 'reality',
+          defaults: {
+            serverPort: 23490,
+            uuid: '11111111-1111-4111-8111-111111111111',
+            sni: '',
+            flow: '',
+            fingerprint: '',
+            realityPublicKey: 'pubkey-value',
+            realityPrivateKey: 'privkey-value',
+            realityShortId: '7c92f9ef2ca25e5a',
+          },
+        },
+      ],
+      bootstrapOptions: {
+        installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
+        installSingBox: false,
+        installXray: false,
+      },
+    }, runtimeCatalog)
+
+    const entry = artifact.subscriptionEndpoints[0]
+    expect(entry?.flow).toBe('xtls-rprx-vision')
+    expect(entry?.fingerprint).toBe('chrome')
+    expect(entry?.uri).toBeUndefined()
+
+    const plain = renderSubscriptionDocument(
+      {
+        subscriptionId: 'sub_reality',
+        name: 'Reality',
+        generatedAt: '2026-03-06T00:00:00.000Z',
+        entries: artifact.subscriptionEndpoints,
+      },
+      'plain',
+    )
+    expect(plain.body).toContain('flow=xtls-rprx-vision')
+    expect(plain.body).toContain('fp=chrome')
+
+    const clash = renderSubscriptionDocument(
+      {
+        subscriptionId: 'sub_reality',
+        name: 'Reality',
+        generatedAt: '2026-03-06T00:00:00.000Z',
+        entries: artifact.subscriptionEndpoints,
+      },
+      'clash',
+    )
+    expect(clash.body).toContain('"client-fingerprint":"chrome"')
+
+    const singbox = renderSubscriptionDocument(
+      {
+        subscriptionId: 'sub_reality',
+        name: 'Reality',
+        generatedAt: '2026-03-06T00:00:00.000Z',
+        entries: artifact.subscriptionEndpoints,
+      },
+      'singbox',
+    )
+    expect(singbox.body).toContain('"fingerprint": "chrome"')
+    expect(artifact.runtimes[0]?.files[0]?.content).toContain('"flow": "xtls-rprx-vision"')
   })
 
   it('adds bootstrap runtime binaries when requested', () => {

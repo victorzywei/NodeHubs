@@ -27,7 +27,7 @@ import type {
 import type { AppServices } from '../lib/app-types'
 import { APP_VERSION, ONLINE_WINDOW_MS } from '../lib/constants'
 import { createId, createToken, nowIso, parseJsonObject } from '../lib/utils'
-import { buildSubscriptionEntries, parseReleaseArtifact, renderReleaseArtifact } from './release-renderer'
+import { parseReleaseArtifact, renderReleaseArtifact } from './release-renderer'
 import { repairTemplateDefaults, repairTemplateRecord } from './template-defaults'
 
 type NodeRow = {
@@ -1227,34 +1227,7 @@ export async function buildPublicSubscriptionDocument(
     const parsedArtifact = parseReleaseArtifact(artifact.body)
     if (!parsedArtifact) continue
 
-    const node = {
-      ...toNodeRecord(nodeRow),
-      name: parsedArtifact.node.name,
-      nodeType: parsedArtifact.node.nodeType,
-      region: parsedArtifact.node.region,
-      tags: [...parsedArtifact.node.tags],
-      networkType: parsedArtifact.node.networkType,
-      primaryDomain: parsedArtifact.node.primaryDomain,
-      backupDomain: parsedArtifact.node.backupDomain,
-      entryIp: parsedArtifact.node.entryIp,
-      githubMirrorUrl: parsedArtifact.node.githubMirrorUrl,
-      cfDnsToken: parsedArtifact.node.cfDnsToken,
-      argoTunnelToken: parsedArtifact.node.argoTunnelToken,
-      argoTunnelDomain: parsedArtifact.node.argoTunnelDomain,
-      argoTunnelPort: parsedArtifact.node.argoTunnelPort,
-    } satisfies NodeRecord
-
-    try {
-      const templateRecords = parsedArtifact.templates.map((template) => ({
-        ...template,
-        notes: '',
-        createdAt: parsedArtifact.createdAt,
-        updatedAt: parsedArtifact.createdAt,
-      }))
-      entries.push(...buildSubscriptionEntries(node, templateRecords))
-    } catch {
-      entries.push(...parsedArtifact.subscriptionEndpoints)
-    }
+    entries.push(...parsedArtifact.subscriptionEndpoints)
   }
 
   return {

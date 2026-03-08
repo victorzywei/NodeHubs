@@ -352,6 +352,17 @@ function createEmptyTemplate() {
 }
 
 const newTemplate = ref(createEmptyTemplate())
+const realitySniMode = ref<'random'|'manual'>('random')
+const realityFingerprintOptions = [
+  { value: 'chrome', label: 'chrome' },
+  { value: 'firefox', label: 'firefox' },
+  { value: 'edge', label: 'edge' },
+  { value: 'safari', label: 'safari' },
+  { value: 'ios', label: 'ios' },
+  { value: 'android', label: 'android' },
+]
+const defaultRealityFingerprint = 'chrome'
+const defaultRealityFlow = 'xtls-rprx-vision'
 
 const sampleSecrets = new Set([
   'replace-me',
@@ -365,14 +376,23 @@ const sampleSecrets = new Set([
 
 const sampleRealitySnis = [
   'www.microsoft.com',
-  'www.cloudflare.com',
   'www.apple.com',
-  'aws.amazon.com',
+  'www.intel.com',
+  'www.oracle.com',
+  'www.ibm.com',
+  'www.nvidia.com',
 ]
+
+function detectRealitySniMode(defaults: Record<string, unknown>) {
+  const sni = String(defaults['sni'] || '').trim().toLowerCase()
+  if (!sni) return 'random' as const
+  return sampleRealitySnis.some((item) => item.toLowerCase() === sni) ? 'random' as const : 'manual' as const
+}
 
 function resetTemplateForm() {
   editingTemplateId.value = ''
   newTemplate.value = createEmptyTemplate()
+  realitySniMode.value = 'random'
   warpSourceNodeId.value = selectedNode.value?.id || warpSourceNodes.value[0]?.id || ''
 }
 
@@ -432,7 +452,7 @@ const templateDefaultFields = computed(() => {
   const p = newTemplate.value.protocol
   const t = newTemplate.value.transport
   const tls = newTemplate.value.tlsMode
-  const fields: Array<{key:string, label:string, placeholder:string, type?:string, generator?:string, list?:string}> = []
+  const fields: Array<{key:string, label:string, placeholder:string, type?:string, generator?:string, list?:string, options?: Array<{value:string, label:string}>, readonly?:boolean}> = []
 
   // Port
   fields.push({ key:'serverPort', label:'端口', placeholder:'443', type:'number' })
@@ -452,7 +472,7 @@ const templateDefaultFields = computed(() => {
   // WS/XHTTP path
   if (t === 'ws' || t === 'xhttp') {
     fields.push({ key:'path', label:'路径', placeholder: t === 'ws' ? '/ws' : '/' })
-    fields.push({ key:'host', label:'Host (optional)', placeholder: 'example.com' })
+    fields.push({ key:'host', label:'Host', placeholder: '需要填写服务器域名，例如 node.example.com' })
   }
   // gRPC service name
   if (t === 'grpc') {
@@ -460,14 +480,25 @@ const templateDefaultFields = computed(() => {
   }
   // TLS SNI
   if (tls === 'tls' || tls === 'reality' || p === 'hysteria2') {
-    fields.push({ key:'sni', label:'SNI', placeholder: tls === 'reality' ? '自动选择常用目标域名' : '例如 node.example.com', list: tls === 'reality' ? 'reality-sni-list' : undefined })
+    fields.push({
+      key:'sni',
+      label:'SNI',
+      placeholder: tls === 'reality'
+        ? (realitySniMode.value === 'random'
+          ? '随机选择大陆可访问的海外网站域名'
+          : '手动填写海外网站域名，例如 www.microsoft.com')
+        : '需要填写服务器证书域名，例如 node.example.com',
+      list: tls === 'reality' ? 'reality-sni-list' : undefined,
+      readonly: tls === 'reality' && realitySniMode.value === 'random',
+    })
   }
   // VLESS flow for Reality
   if (p === 'vless' && tls === 'reality') {
-    fields.push({ key:'flow', label:'Flow', placeholder:'xtls-rprx-vision' })
+    fields.push({ key:'flow', label:'Flow', placeholder:'Reality 建议 xtls-rprx-vision' })
   }
   // Reality keys
   if (tls === 'reality') {
+    fields.push({ key:'fingerprint', label:'Reality 指纹', placeholder:'chrome', options: realityFingerprintOptions })
     fields.push({ key:'realityPrivateKey', label:'Reality 私钥', placeholder:'点击 Generate Keypair 自动生成', generator:'x25519' })
     fields.push({ key:'realityPublicKey', label:'Reality 公钥', placeholder:'点击 Generate Keypair 自动生成' })
     fields.push({ key:'realityShortId', label:'Reality ShortId', placeholder:'点击 Generate 自动生成', generator:'shortId' })
@@ -522,6 +553,7 @@ async function applyPreset(p: any) {
     warpRouteMode: p.warpRouteMode === 'ipv4' || p.warpRouteMode === 'ipv6' ? p.warpRouteMode : 'all',
     defaults: p.defaults ? { ...p.defaults } : {}, notes: p.notes || ''
   }
+  realitySniMode.value = detectRealitySniMode(newTemplate.value.defaults)
   await hydrateTemplateDefaults('force')
 }
 
@@ -621,6 +653,17 @@ function pickRealitySni() {
   return sampleRealitySnis[bytes[0] % sampleRealitySnis.length] || sampleRealitySnis[0]
 }
 
+function setRealitySniMode(mode: 'random'|'manual') {
+  realitySniMode.value = mode
+  if (mode === 'random') {
+    newTemplate.value.defaults['sni'] = pickRealitySni()
+  }
+}
+
+function randomizeRealitySni() {
+  newTemplate.value.defaults['sni'] = pickRealitySni()
+}
+
 async function hydrateTemplateDefaults(mode: 'repair' | 'force' = 'repair') {
   const nextDefaults = { ...newTemplate.value.defaults }
   const shouldWrite = (current: unknown, invalid: boolean) => mode === 'force' || invalid
@@ -650,8 +693,15 @@ async function hydrateTemplateDefaults(mode: 'repair' | 'force' = 'repair') {
     if (shouldWrite(nextDefaults['realityShortId'], !isRealityShortId(nextDefaults['realityShortId']))) {
       nextDefaults['realityShortId'] = generateRandomHex(8)
     }
+    if (shouldWrite(nextDefaults['flow'], !String(nextDefaults['flow'] || '').trim())) {
+      nextDefaults['flow'] = defaultRealityFlow
+    }
+    if (shouldWrite(nextDefaults['fingerprint'], !String(nextDefaults['fingerprint'] || '').trim())) {
+      nextDefaults['fingerprint'] = defaultRealityFingerprint
+    }
     const currentSni = String(nextDefaults['sni'] || '').trim()
-    if (mode === 'force' || !currentSni || currentSni.startsWith('例如 ')) {
+    if ((realitySniMode.value === 'random' && (mode === 'force' || !currentSni || currentSni.startsWith('例如 ')))
+      || (!currentSni || currentSni.startsWith('例如 '))) {
       nextDefaults['sni'] = pickRealitySni()
     }
     if (mode === 'force' || isRealityPlaceholder(nextDefaults['realityPrivateKey']) || isRealityPlaceholder(nextDefaults['realityPublicKey'])) {
@@ -707,6 +757,7 @@ async function openEditTemplate(template: TemplateRecord) {
     defaults: { ...(template.defaults || {}) },
     notes: template.notes || '',
   }
+  realitySniMode.value = detectRealitySniMode(newTemplate.value.defaults)
   showCreateTemplate.value = true
   if (catalogPresets.value.length === 0) {
     try { catalogPresets.value = await api.listTemplateCatalog(adminKey.value) } catch {}
@@ -1875,25 +1926,38 @@ onMounted(() => { if (adminKey.value) login() })
           <!-- Dynamic default fields -->
           <div class="form-section-divider">协议参数</div>
           <datalist id="reality-sni-list">
-            <option value="www.microsoft.com"></option>
-            <option value="www.yahoo.com"></option>
-            <option value="www.apple.com"></option>
-            <option value="cloudflare.com"></option>
-            <option value="aws.amazon.com"></option>
+            <option v-for="domain in sampleRealitySnis" :key="domain" :value="domain"></option>
           </datalist>
           
           <div v-for="field in templateDefaultFields" :key="field.key" class="form-group">
             <label class="form-label" style="display:flex;justify-content:space-between;align-items:center">
               <span>{{ field.label }}</span>
-              <button v-if="field.generator" type="button" class="btn btn-xs btn-secondary" @click="handleGenerate(field.generator)">
-                {{ field.generator === 'x25519' ? 'Generate Keypair' : 'Generate' }}
-              </button>
+              <span style="display:flex;gap:6px;align-items:center">
+                <template v-if="field.key === 'sni' && newTemplate.tlsMode === 'reality'">
+                  <button type="button" class="btn btn-xs" :class="realitySniMode === 'random' ? 'btn-primary' : 'btn-secondary'" @click="setRealitySniMode('random')">随机站点</button>
+                  <button type="button" class="btn btn-xs" :class="realitySniMode === 'manual' ? 'btn-primary' : 'btn-secondary'" @click="setRealitySniMode('manual')">手动输入</button>
+                  <button v-if="realitySniMode === 'random'" type="button" class="btn btn-xs btn-secondary" @click="randomizeRealitySni()">换一个</button>
+                </template>
+                <button v-if="field.generator" type="button" class="btn btn-xs btn-secondary" @click="handleGenerate(field.generator)">
+                  {{ field.generator === 'x25519' ? 'Generate Keypair' : 'Generate' }}
+                </button>
+              </span>
             </label>
+            <select
+              v-if="field.options?.length"
+              class="form-select"
+              :value="String((newTemplate.defaults as any)[field.key] ?? '')"
+              @change="(e:any) => { (newTemplate.defaults as any)[field.key] = e.target.value }"
+            >
+              <option v-for="option in field.options" :key="option.value" :value="option.value">{{ option.label }}</option>
+            </select>
             <input
+              v-else
               class="form-input"
               :type="field.type || 'text'"
               :placeholder="field.placeholder"
               :list="field.list"
+              :readonly="field.readonly === true"
               :value="(newTemplate.defaults as any)[field.key] ?? ''"
               @input="(e:any) => { (newTemplate.defaults as any)[field.key] = field.type === 'number' ? Number(e.target.value) : e.target.value }"
             />

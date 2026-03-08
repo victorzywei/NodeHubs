@@ -47,6 +47,7 @@ type NormalizedTemplate = {
   password: string
   method: string
   flow: string
+  fingerprint: string
   alterId: number
   upMbps: number
   downMbps: number
@@ -65,6 +66,8 @@ const DEFAULT_WARP_SERVER_PORT = 2408
 const DEFAULT_WARP_PEER_PUBLIC_KEY = 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo='
 const DEFAULT_WARP_LOCAL_ADDRESS_IPV4 = '172.16.0.2/32'
 const DEFAULT_WARP_LOCAL_ADDRESS_IPV6 = '2606:4700:110:8d8d:1845:c39f:2dd5:a03a/128'
+const DEFAULT_REALITY_FLOW = 'xtls-rprx-vision'
+const DEFAULT_REALITY_FINGERPRINT = 'chrome'
 
 const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
@@ -132,7 +135,8 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
       serverPort: 23490,
       uuid: '',
       flow: 'xtls-rprx-vision',
-      sni: 'www.cloudflare.com',
+      sni: '',
+      fingerprint: 'chrome',
       realityPublicKey: '',
       realityPrivateKey: '',
       realityShortId: '',
@@ -545,7 +549,8 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
     uuid: readString(defaults, 'uuid'),
     password: readString(defaults, 'password'),
     method: readString(defaults, 'method', 'aes-128-gcm'),
-    flow: readString(defaults, 'flow'),
+    flow: readString(defaults, 'flow', tlsMode === 'reality' ? DEFAULT_REALITY_FLOW : ''),
+    fingerprint: readString(defaults, 'fingerprint', tlsMode === 'reality' ? DEFAULT_REALITY_FINGERPRINT : ''),
     alterId: readNumber(defaults, ['alterId'], 0),
     upMbps: readNumber(defaults, ['upMbps'], 100),
     downMbps: readNumber(defaults, ['downMbps'], 100),
@@ -572,6 +577,8 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
     normalized.realityPrivateKey = ensureField(normalized.realityPrivateKey, 'realityPrivateKey', template.name)
     normalized.realityShortId = ensureField(normalized.realityShortId, 'realityShortId', template.name)
     normalized.sni = ensureField(normalized.sni, 'sni', template.name)
+    normalized.flow = normalized.flow || DEFAULT_REALITY_FLOW
+    normalized.fingerprint = normalized.fingerprint || DEFAULT_REALITY_FINGERPRINT
   }
 
   return normalized
@@ -766,62 +773,6 @@ function encodeURIComponentSafe(value: string): string {
   return encodeURIComponent(value).replace(/%20/g, '+')
 }
 
-function buildSubscriptionUri(node: NodeRecord, template: NormalizedTemplate): string {
-  const label = encodeURIComponentSafe(`${node.name} ${template.name}`)
-  const params = new URLSearchParams()
-  params.set('type', template.transport)
-  if (template.protocol === 'vless') {
-    params.set('encryption', 'none')
-  }
-  if (template.transport === 'ws' || template.transport === 'xhttp') {
-    params.set('path', template.path)
-    if (template.host) params.set('host', template.host)
-  }
-  if (template.transport === 'grpc') {
-    params.set('serviceName', template.serviceName)
-  }
-  if (template.tlsMode === 'tls' || template.protocol === 'hysteria2') {
-    params.set('security', 'tls')
-    if (template.sni) params.set('sni', template.sni)
-  } else if (template.tlsMode === 'reality') {
-    params.set('security', 'reality')
-    params.set('sni', template.sni)
-    params.set('pbk', template.realityPublicKey)
-    params.set('sid', template.realityShortId)
-  } else {
-    params.set('security', 'none')
-  }
-
-  if (template.protocol === 'vless') {
-    return `vless://${template.uuid}@${template.server}:${template.port}?${params.toString()}#${label}`
-  }
-  if (template.protocol === 'vmess') {
-    const vmessConfig = {
-      v: '2',
-      ps: `${node.name} ${template.name}`,
-      add: template.server,
-      port: String(template.port),
-      id: template.uuid,
-      aid: String(readNumber(template.defaults, ['alterId'], 0)),
-      net: template.transport,
-      type: 'none',
-      host: template.host || '',
-      path: template.path || '',
-      tls: template.tlsMode === 'tls' ? 'tls' : '',
-      sni: template.sni || '',
-    }
-    return `vmess://${btoa(JSON.stringify(vmessConfig))}`
-  }
-  if (template.protocol === 'trojan') {
-    return `trojan://${template.password}@${template.server}:${template.port}?${params.toString()}#${label}`
-  }
-  if (template.protocol === 'hysteria2') {
-    return `hysteria2://${template.password}@${template.server}:${template.port}?${params.toString()}#${label}`
-  }
-  const credentials = btoa(`${template.method}:${template.password}`)
-  return `ss://${credentials}@${template.server}:${template.port}#${label}`
-}
-
 function buildSubscriptionEntry(node: NodeRecord, template: NormalizedTemplate): SubscriptionEndpoint {
   return {
     nodeId: node.id,
@@ -845,13 +796,71 @@ function buildSubscriptionEntry(node: NodeRecord, template: NormalizedTemplate):
     password: template.password || undefined,
     method: template.method || undefined,
     flow: template.flow || undefined,
+    fingerprint: template.fingerprint || undefined,
     alterId: template.alterId,
     realityPublicKey: template.realityPublicKey || undefined,
     realityShortId: template.realityShortId || undefined,
     upMbps: template.protocol === 'hysteria2' ? template.upMbps : undefined,
     downMbps: template.protocol === 'hysteria2' ? template.downMbps : undefined,
-    uri: buildSubscriptionUri(node, template),
   }
+}
+
+function buildSubscriptionUriFromEntry(entry: ResolvedSubscriptionEntry): string {
+  const label = encodeURIComponentSafe(entry.label)
+  const params = new URLSearchParams()
+  params.set('type', entry.transport)
+  if (entry.protocol === 'vless') {
+    params.set('encryption', 'none')
+    if (entry.flow) params.set('flow', entry.flow)
+  }
+  if (entry.transport === 'ws' || entry.transport === 'xhttp') {
+    params.set('path', entry.path)
+    if (entry.host) params.set('host', entry.host)
+  }
+  if (entry.transport === 'grpc') {
+    params.set('serviceName', entry.serviceName)
+  }
+  if (entry.tlsMode === 'tls' || entry.protocol === 'hysteria2') {
+    params.set('security', 'tls')
+    if (entry.sni) params.set('sni', entry.sni)
+  } else if (entry.tlsMode === 'reality') {
+    params.set('security', 'reality')
+    params.set('sni', entry.sni)
+    params.set('pbk', entry.realityPublicKey)
+    params.set('sid', entry.realityShortId)
+    params.set('fp', entry.fingerprint || DEFAULT_REALITY_FINGERPRINT)
+  } else {
+    params.set('security', 'none')
+  }
+
+  if (entry.protocol === 'vless') {
+    return `vless://${entry.uuid}@${entry.server}:${entry.port}?${params.toString()}#${label}`
+  }
+  if (entry.protocol === 'vmess') {
+    const vmessConfig = {
+      v: '2',
+      ps: entry.label,
+      add: entry.server,
+      port: String(entry.port),
+      id: entry.uuid,
+      aid: String(entry.alterId),
+      net: entry.transport,
+      type: 'none',
+      host: entry.host || '',
+      path: entry.path || '',
+      tls: entry.tlsMode === 'tls' ? 'tls' : '',
+      sni: entry.sni || '',
+    }
+    return `vmess://${btoa(JSON.stringify(vmessConfig))}`
+  }
+  if (entry.protocol === 'trojan') {
+    return `trojan://${entry.password}@${entry.server}:${entry.port}?${params.toString()}#${label}`
+  }
+  if (entry.protocol === 'hysteria2') {
+    return `hysteria2://${entry.password}@${entry.server}:${entry.port}?${params.toString()}#${label}`
+  }
+  const credentials = btoa(`${entry.method}:${entry.password}`)
+  return `ss://${credentials}@${entry.server}:${entry.port}#${label}`
 }
 
 export function buildSubscriptionEntries(node: NodeRecord, templates: TemplateRecord[]): SubscriptionEndpoint[] {
@@ -1191,6 +1200,7 @@ type ResolvedSubscriptionEntry = SubscriptionEndpoint & {
   password: string
   method: string
   flow: string
+  fingerprint: string
   alterId: number
   realityPublicKey: string
   realityShortId: string
@@ -1198,138 +1208,18 @@ type ResolvedSubscriptionEntry = SubscriptionEndpoint & {
   downMbps: number
 }
 
-function safeDecodeURIComponent(value: string): string {
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return value
-  }
-}
-
-function safeAtob(value: string): string {
-  try {
-    return atob(value)
-  } catch {
-    return ''
-  }
-}
-
-function parseUrlPort(value: string, fallback: number): number {
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return fallback
-  const port = Math.trunc(parsed)
-  if (port < 1 || port > 65535) return fallback
-  return port
-}
-
-function parseVmessUri(uri: string): Partial<ResolvedSubscriptionEntry> {
-  const encoded = uri.replace(/^vmess:\/\//i, '').trim()
-  const decoded = safeAtob(encoded)
-  if (!decoded) return {}
-
-  try {
-    const payload = JSON.parse(decoded) as Record<string, unknown>
-    const tlsEnabled = String(payload.tls || '').trim().toLowerCase() === 'tls'
-    return {
-      server: readString(payload, 'add'),
-      port: readNumber(payload, ['port'], 443),
-      uuid: readString(payload, 'id'),
-      alterId: readNumber(payload, ['aid', 'alterId'], 0),
-      transport: readString(payload, 'net', 'tcp') || 'tcp',
-      host: readString(payload, 'host'),
-      path: readString(payload, 'path'),
-      sni: readString(payload, 'sni'),
-      tlsMode: tlsEnabled ? 'tls' : 'none',
-    }
-  } catch {
-    return {}
-  }
-}
-
-function parseSsUri(uri: string): Partial<ResolvedSubscriptionEntry> {
-  const raw = uri.replace(/^ss:\/\//i, '').split('#')[0] || ''
-  const [main] = raw.split('?')
-  if (!main) return {}
-
-  const atIndex = main.lastIndexOf('@')
-  let credentials = ''
-  let hostPort = ''
-  if (atIndex >= 0) {
-    credentials = main.slice(0, atIndex)
-    hostPort = main.slice(atIndex + 1)
-  } else {
-    const decoded = safeAtob(main)
-    const decodedAtIndex = decoded.lastIndexOf('@')
-    if (decodedAtIndex >= 0) {
-      credentials = decoded.slice(0, decodedAtIndex)
-      hostPort = decoded.slice(decodedAtIndex + 1)
-    }
-  }
-  if (!credentials || !hostPort) return {}
-
-  const decodedCredentials = safeAtob(credentials) || credentials
-  const separator = decodedCredentials.indexOf(':')
-  const method = separator >= 0 ? decodedCredentials.slice(0, separator) : ''
-  const password = separator >= 0 ? decodedCredentials.slice(separator + 1) : ''
-  const portSeparator = hostPort.lastIndexOf(':')
-  const server = portSeparator >= 0 ? hostPort.slice(0, portSeparator) : hostPort
-  const port = portSeparator >= 0 ? parseUrlPort(hostPort.slice(portSeparator + 1), 0) : 0
-
-  return {
-    server,
-    port,
-    method,
-    password,
-  }
-}
-
-function parseStandardShareUri(uri: string): Partial<ResolvedSubscriptionEntry> {
-  try {
-    const url = new URL(uri)
-    const security = (url.searchParams.get('security') || '').trim().toLowerCase()
-    const host = safeDecodeURIComponent(url.searchParams.get('host') || '')
-    const path = safeDecodeURIComponent(url.searchParams.get('path') || '')
-    const serviceName = safeDecodeURIComponent(url.searchParams.get('serviceName') || '')
-    return {
-      protocol: url.protocol.replace(':', ''),
-      server: url.hostname,
-      port: parseUrlPort(url.port, 0),
-      transport: url.searchParams.get('type') || '',
-      host,
-      path,
-      serviceName,
-      sni: safeDecodeURIComponent(url.searchParams.get('sni') || ''),
-      realityPublicKey: safeDecodeURIComponent(url.searchParams.get('pbk') || ''),
-      realityShortId: safeDecodeURIComponent(url.searchParams.get('sid') || ''),
-      uuid: safeDecodeURIComponent(url.username || ''),
-      password: safeDecodeURIComponent(url.username || ''),
-      tlsMode: security === 'reality' ? 'reality' : security === 'tls' ? 'tls' : 'none',
-    }
-  } catch {
-    return {}
-  }
-}
-
 function resolveSubscriptionEntry(entry: SubscriptionEndpoint): ResolvedSubscriptionEntry {
-  const uri = String(entry.uri || '').trim()
-  let parsed: Partial<ResolvedSubscriptionEntry> = {}
-  if (uri.startsWith('vmess://')) {
-    parsed = parseVmessUri(uri)
-  } else if (uri.startsWith('ss://')) {
-    parsed = parseSsUri(uri)
-  } else {
-    parsed = parseStandardShareUri(uri)
-  }
-
-  const protocol = String(entry.protocol || parsed.protocol || '').trim().toLowerCase()
-  const transport = String(entry.transport || parsed.transport || 'tcp').trim().toLowerCase() || 'tcp'
-  const server = String(entry.server || parsed.server || '').trim()
-  const host = String(entry.host || parsed.host || '').trim()
-  const path = String(entry.path || parsed.path || '').trim()
+  const protocol = String(entry.protocol || '').trim().toLowerCase()
+  const transport = String(entry.transport || 'tcp').trim().toLowerCase() || 'tcp'
+  const server = String(entry.server || '').trim()
+  const host = String(entry.host || '').trim()
+  const path = String(entry.path || '').trim()
   const resolvedHost = host || ((transport === 'ws' || transport === 'xhttp') ? server : '')
-  const tlsMode = (entry.tlsMode || parsed.tlsMode || 'none') as ResolvedSubscriptionEntry['tlsMode']
-  const sni = String(entry.sni || parsed.sni || '').trim() || ((tlsMode !== 'none' || protocol === 'hysteria2') ? (resolvedHost || server) : '')
-  const serviceName = String(entry.serviceName || parsed.serviceName || '').trim() || (transport === 'grpc' ? 'grpc' : '')
+  const tlsMode = (entry.tlsMode || 'none') as ResolvedSubscriptionEntry['tlsMode']
+  const sni = String(entry.sni || '').trim() || ((tlsMode !== 'none' || protocol === 'hysteria2') ? (resolvedHost || server) : '')
+  const serviceName = String(entry.serviceName || '').trim() || (transport === 'grpc' ? 'grpc' : '')
+  const flow = String(entry.flow || '').trim() || (tlsMode === 'reality' && protocol === 'vless' ? DEFAULT_REALITY_FLOW : '')
+  const fingerprint = String(entry.fingerprint || '').trim() || (tlsMode === 'reality' ? DEFAULT_REALITY_FINGERPRINT : '')
 
   return {
     ...entry,
@@ -1337,20 +1227,21 @@ function resolveSubscriptionEntry(entry: SubscriptionEndpoint): ResolvedSubscrip
     transport,
     tlsMode,
     server,
-    port: Number(entry.port || parsed.port || 0),
+    port: Number(entry.port || 0),
     host: resolvedHost,
     sni,
     path: path || ((transport === 'ws' || transport === 'xhttp') ? '/' : ''),
     serviceName,
-    uuid: String(entry.uuid || parsed.uuid || '').trim(),
-    password: String(entry.password || parsed.password || '').trim(),
-    method: String(entry.method || parsed.method || '').trim(),
-    flow: String(entry.flow || parsed.flow || '').trim(),
-    alterId: Number(entry.alterId ?? parsed.alterId ?? 0),
-    realityPublicKey: String(entry.realityPublicKey || parsed.realityPublicKey || '').trim(),
-    realityShortId: String(entry.realityShortId || parsed.realityShortId || '').trim(),
-    upMbps: Number(entry.upMbps || parsed.upMbps || 0),
-    downMbps: Number(entry.downMbps || parsed.downMbps || 0),
+    uuid: String(entry.uuid || '').trim(),
+    password: String(entry.password || '').trim(),
+    method: String(entry.method || '').trim(),
+    flow,
+    fingerprint,
+    alterId: Number(entry.alterId ?? 0),
+    realityPublicKey: String(entry.realityPublicKey || '').trim(),
+    realityShortId: String(entry.realityShortId || '').trim(),
+    upMbps: Number(entry.upMbps || 0),
+    downMbps: Number(entry.downMbps || 0),
   }
 }
 
@@ -1413,7 +1304,7 @@ function buildClashProxy(entry: ResolvedSubscriptionEntry): Record<string, unkno
   }
 
   if (entry.tlsMode === 'reality') {
-    proxy['client-fingerprint'] = 'chrome'
+    proxy['client-fingerprint'] = entry.fingerprint || DEFAULT_REALITY_FINGERPRINT
     proxy['reality-opts'] = {
       'public-key': entry.realityPublicKey,
       'short-id': entry.realityShortId,
@@ -1486,6 +1377,10 @@ function buildSingboxOutbound(entry: ResolvedSubscriptionEntry): Record<string, 
       enabled: true,
       server_name: entry.sni || entry.server,
       insecure: false,
+      utls: {
+        enabled: true,
+        fingerprint: entry.fingerprint || DEFAULT_REALITY_FINGERPRINT,
+      },
       reality: {
         enabled: true,
         public_key: entry.realityPublicKey,
@@ -1501,8 +1396,14 @@ export function renderSubscriptionDocument(
   payload: Omit<PublicSubscriptionDocument, 'format'>,
   format: SubscriptionDocumentFormat,
 ): { body: string; contentType: string } {
-  const plain = payload.entries.map((item) => item.uri).join('\n')
-  const resolvedEntries = payload.entries.map(resolveSubscriptionEntry)
+  const resolvedEntries = payload.entries.map((entry) => {
+    const resolved = resolveSubscriptionEntry(entry)
+    return {
+      ...resolved,
+      uri: buildSubscriptionUriFromEntry(resolved),
+    }
+  })
+  const plain = resolvedEntries.map((item) => item.uri).join('\n')
   if (format === 'json') {
     return {
       body: JSON.stringify({ ...payload, format, entries: resolvedEntries }, null, 2),
