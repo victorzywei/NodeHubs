@@ -398,7 +398,10 @@ describe('heartbeat persistence', () => {
       bytesInTotal: 1,
       bytesOutTotal: 2,
       currentConnections: 3,
+      cpuCoreCount: 8,
       cpuUsagePercent: 10,
+      memoryTotalBytes: 16 * 1024 * 1024 * 1024,
+      memoryUsedBytes: 4 * 1024 * 1024 * 1024,
       memoryUsagePercent: 20,
       warpStatus: 'installed',
       warpIpv6: '2606:4700:110:8d8d:1845:c39f:2dd5:a03a',
@@ -410,6 +413,9 @@ describe('heartbeat persistence', () => {
 
     expect(updated?.warpPrivateKey).toBe('private-key')
     expect(updated?.warpReserved).toEqual([1, 2, 3])
+    expect(updated?.cpuCoreCount).toBe(8)
+    expect(updated?.memoryTotalBytes).toBe(16 * 1024 * 1024 * 1024)
+    expect(updated?.memoryUsedBytes).toBe(4 * 1024 * 1024 * 1024)
   })
 })
 

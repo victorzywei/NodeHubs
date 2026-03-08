@@ -39,6 +39,9 @@ export interface NodeRecord {
   storageTotalBytes?: number
   storageUsedBytes?: number
   storageUsagePercent?: number | null
+  cpuCoreCount?: number | null
+  memoryTotalBytes?: number
+  memoryUsedBytes?: number
   configRevision: number
   bootstrapRevision: number
   desiredReleaseRevision: number

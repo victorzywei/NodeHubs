@@ -126,6 +126,9 @@ export const updateNodeSchema = nodeSchemaBase.partial().extend({
   storageTotalBytes: z.number().nonnegative().optional(),
   storageUsedBytes: z.number().nonnegative().optional(),
   storageUsagePercent: z.number().min(0).max(100).nullable().optional(),
+  cpuCoreCount: z.number().int().min(1).nullable().optional(),
+  memoryTotalBytes: z.number().nonnegative().optional(),
+  memoryUsedBytes: z.number().nonnegative().optional(),
   protocolRuntimeVersion: z.string().trim().max(64).optional(),
   lastSeenAt: z.string().datetime().nullable().optional(),
 })
@@ -206,6 +209,9 @@ export const heartbeatSchema = z.object({
   storageTotalBytes: z.number().nonnegative().optional(),
   storageUsedBytes: z.number().nonnegative().optional(),
   storageUsagePercent: z.number().min(0).max(100).nullable().optional(),
+  cpuCoreCount: z.number().int().min(1).nullable().optional(),
+  memoryTotalBytes: z.number().nonnegative().optional(),
+  memoryUsedBytes: z.number().nonnegative().optional(),
   protocolRuntimeVersion: z.string().trim().max(64).default(''),
 })
 

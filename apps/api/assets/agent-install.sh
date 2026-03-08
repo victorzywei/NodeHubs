@@ -881,6 +881,22 @@ memory_usage_percent() {
   ' /proc/meminfo 2>/dev/null || printf 'null'
 }
 
+memory_usage_bytes() {
+  awk '
+    /^MemTotal:/ { total = $2 * 1024 }
+    /^MemAvailable:/ { available = $2 * 1024 }
+    END {
+      if (total <= 0) {
+        print "0 0"
+      } else {
+        used = total - available
+        if (used < 0) used = 0
+        printf "%.0f %.0f", total, used
+      }
+    }
+  ' /proc/meminfo 2>/dev/null || printf '0 0'
+}
+
 cpu_usage_percent() {
   if [ -r /proc/loadavg ] && command -v nproc >/dev/null 2>&1; then
     load_avg=$(awk '{print $1}' /proc/loadavg)
@@ -894,6 +910,14 @@ cpu_usage_percent() {
         printf "%.2f", value
       }
     }'
+    return 0
+  fi
+  printf 'null'
+}
+
+cpu_core_count() {
+  if command -v nproc >/dev/null 2>&1; then
+    nproc 2>/dev/null || printf 'null'
     return 0
   fi
   printf 'null'
@@ -1089,7 +1113,8 @@ self_heal_background_services() {
 }
 
 heartbeat() {
-  local bytes_in bytes_out memory cpu connections version
+  local bytes_in bytes_out memory cpu cpu_cores connections version
+  local memory_total memory_used
   local warp_ipv6_value warp_status_value warp_endpoint_value warp_private_key_value warp_reserved_value
   local argo_status_value argo_domain_value
   local storage_total storage_used storage_percent
@@ -1099,6 +1124,10 @@ $(sum_network_bytes)
 EOF_NET
   memory="$(memory_usage_percent)"
   cpu="$(cpu_usage_percent)"
+  cpu_cores="$(cpu_core_count)"
+  read -r memory_total memory_used <<EOF_MEM
+$(memory_usage_bytes)
+EOF_MEM
   connections="$(connection_count)"
   version="$(runtime_version)"
   warp_ipv6_value="$(warp_ipv6)"
@@ -1117,7 +1146,10 @@ EOF_STORAGE
   "bytesInTotal": ${bytes_in:-0},
   "bytesOutTotal": ${bytes_out:-0},
   "currentConnections": ${connections:-0},
+  "cpuCoreCount": ${cpu_cores:-null},
   "cpuUsagePercent": ${cpu:-null},
+  "memoryTotalBytes": ${memory_total:-0},
+  "memoryUsedBytes": ${memory_used:-0},
   "memoryUsagePercent": ${memory:-null},
   "heartbeatIntervalSeconds": ${HEARTBEAT_INTERVAL_SECONDS:-15},
   "versionPullIntervalSeconds": ${VERSION_PULL_INTERVAL_SECONDS:-15},

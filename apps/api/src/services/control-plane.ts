@@ -72,6 +72,9 @@ type NodeRow = {
   storage_total_bytes?: number
   storage_used_bytes?: number
   storage_usage_percent?: number | null
+  cpu_core_count?: number | null
+  memory_total_bytes?: number
+  memory_used_bytes?: number
   protocol_runtime_version: string
   created_at: string
   updated_at: string
@@ -194,6 +197,11 @@ function toNodeRecord(row: NodeRow): NodeRecord {
     storageUsagePercent: row.storage_usage_percent === null || row.storage_usage_percent === undefined
       ? null
       : Number(row.storage_usage_percent),
+    cpuCoreCount: row.cpu_core_count === null || row.cpu_core_count === undefined
+      ? null
+      : Number(row.cpu_core_count),
+    memoryTotalBytes: Number(row.memory_total_bytes || 0),
+    memoryUsedBytes: Number(row.memory_used_bytes || 0),
     protocolRuntimeVersion: row.protocol_runtime_version || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -461,10 +469,11 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       id, agent_token, name, node_type, region, tags_json, network_type, primary_domain, backup_domain, entry_ip,
       github_mirror_url, warp_license_key, cf_dns_token, argo_tunnel_token, argo_tunnel_domain, argo_tunnel_port,
       install_warp, install_argo, config_revision, bootstrap_revision, desired_release_revision,
-      current_release_revision, current_release_status, heartbeat_interval_seconds, version_pull_interval_seconds, bytes_in_total, bytes_out_total,
-      current_connections, warp_status, warp_ipv6, warp_endpoint, warp_private_key, warp_reserved_json, argo_status, argo_domain,
-      storage_total_bytes, storage_used_bytes, storage_usage_percent, protocol_runtime_version, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       current_release_revision, current_release_status, heartbeat_interval_seconds, version_pull_interval_seconds, bytes_in_total, bytes_out_total,
+       current_connections, warp_status, warp_ipv6, warp_endpoint, warp_private_key, warp_reserved_json, argo_status, argo_domain,
+       storage_total_bytes, storage_used_bytes, storage_usage_percent, cpu_core_count, memory_total_bytes, memory_used_bytes,
+       protocol_runtime_version, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       createToken(),
@@ -504,6 +513,9 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       0,
       0,
       null,
+      null,
+      0,
+      0,
       '',
       now,
       now,
@@ -549,6 +561,7 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
          cpu_usage_percent = ?, memory_usage_percent = ?, warp_status = ?, warp_ipv6 = ?, warp_endpoint = ?,
          warp_private_key = ?, warp_reserved_json = ?,
          argo_status = ?, argo_domain = ?, storage_total_bytes = ?, storage_used_bytes = ?, storage_usage_percent = ?,
+         cpu_core_count = ?, memory_total_bytes = ?, memory_used_bytes = ?,
          protocol_runtime_version = ?, last_seen_at = ?, heartbeat_interval_seconds = ?, version_pull_interval_seconds = ?,
          config_revision = ?, bootstrap_revision = ?, updated_at = ?
      WHERE id = ?`,
@@ -584,6 +597,9 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       input.storageTotalBytes ?? current.storage_total_bytes ?? 0,
       input.storageUsedBytes ?? current.storage_used_bytes ?? 0,
       input.storageUsagePercent ?? current.storage_usage_percent ?? null,
+      input.cpuCoreCount ?? current.cpu_core_count ?? null,
+      input.memoryTotalBytes ?? current.memory_total_bytes ?? 0,
+      input.memoryUsedBytes ?? current.memory_used_bytes ?? 0,
       input.protocolRuntimeVersion ?? current.protocol_runtime_version,
       input.lastSeenAt ?? current.last_seen_at,
       current.heartbeat_interval_seconds ?? 15,
@@ -980,6 +996,9 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
   const nextStorageTotalBytes = input.storageTotalBytes === undefined ? null : input.storageTotalBytes
   const nextStorageUsedBytes = input.storageUsedBytes === undefined ? null : input.storageUsedBytes
   const nextStorageUsagePercent = input.storageUsagePercent === undefined ? null : input.storageUsagePercent
+  const nextCpuCoreCount = input.cpuCoreCount === undefined ? null : input.cpuCoreCount
+  const nextMemoryTotalBytes = input.memoryTotalBytes === undefined ? null : input.memoryTotalBytes
+  const nextMemoryUsedBytes = input.memoryUsedBytes === undefined ? null : input.memoryUsedBytes
   const nextHeartbeatIntervalSeconds = input.heartbeatIntervalSeconds === undefined ? null : input.heartbeatIntervalSeconds
   const nextVersionPullIntervalSeconds = input.versionPullIntervalSeconds === undefined ? null : input.versionPullIntervalSeconds
   await services.db.run(
@@ -990,6 +1009,9 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
          argo_status = coalesce(?, argo_status), argo_domain = coalesce(?, argo_domain),
          storage_total_bytes = coalesce(?, storage_total_bytes), storage_used_bytes = coalesce(?, storage_used_bytes),
          storage_usage_percent = coalesce(?, storage_usage_percent),
+         cpu_core_count = coalesce(?, cpu_core_count),
+         memory_total_bytes = coalesce(?, memory_total_bytes),
+         memory_used_bytes = coalesce(?, memory_used_bytes),
          heartbeat_interval_seconds = coalesce(?, heartbeat_interval_seconds),
          version_pull_interval_seconds = coalesce(?, version_pull_interval_seconds),
          protocol_runtime_version = ?, last_seen_at = ?, updated_at = ?
@@ -1010,6 +1032,9 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
       nextStorageTotalBytes,
       nextStorageUsedBytes,
       nextStorageUsagePercent,
+      nextCpuCoreCount,
+      nextMemoryTotalBytes,
+      nextMemoryUsedBytes,
       nextHeartbeatIntervalSeconds,
       nextVersionPullIntervalSeconds,
       input.protocolRuntimeVersion,

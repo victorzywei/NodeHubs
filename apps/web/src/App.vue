@@ -255,88 +255,120 @@ async function openNodeReleaseLog(node: NodeRecord, revision?: number) {
   await openReleaseLog(node, release.id)
 }
 
-function getNodeCheckCommands(node: NodeRecord) {
-  const detectPaths = [
+function buildCheckCommandPrelude() {
+  return [
     'ETC_DIR="$(if [ -d /etc/nodehubsapi ]; then echo /etc/nodehubsapi; else echo "$HOME/.config/nodehubsapi"; fi)"',
     'STATE_DIR="$(if [ -d /opt/nodehubsapi ]; then echo /opt/nodehubsapi; else echo "$HOME/.local/share/nodehubsapi"; fi)"',
+    'AGENT_ENV="$ETC_DIR/agent.env"',
+    '[ -f "$AGENT_ENV" ] && . "$AGENT_ENV"',
+    'show_file() { local file="$1"; [ -f "$file" ] && sed -n \'1,200p\' "$file" || echo "missing: $file"; }',
+    'show_dir() { local dir="$1"; [ -d "$dir" ] && ls -lah "$dir" || echo "missing: $dir"; }',
+    'show_process() { local pattern="$1"; pgrep -af "$pattern" 2>/dev/null || echo "process not found: $pattern"; }',
+    'show_service_status() { local service="$1"; if command -v systemctl >/dev/null 2>&1; then systemctl status "$service" --no-pager 2>/dev/null && return 0; systemctl --user status "$service" --no-pager 2>/dev/null && return 0; fi; return 1; }',
+    'show_service_logs() { local service="$1"; local fallback="$2"; if command -v journalctl >/dev/null 2>&1; then journalctl -u "$service" -n 120 --no-pager 2>/dev/null && return 0; journalctl --user -u "$service" -n 120 --no-pager 2>/dev/null && return 0; fi; [ -f "$fallback" ] && tail -n 120 "$fallback" || echo "missing log: $fallback"; }',
   ].join('\n')
+}
+
+function getNodeCheckCommands(node: NodeRecord) {
+  const prelude = buildCheckCommandPrelude()
   const commands = [
     {
-      title: 'Agent 参数',
-      description: '查看 agent.env，确认 API、节点 ID、心跳和拉取版本时间。',
-      command: `${detectPaths}
-sed -n '1,200p' "$ETC_DIR/agent.env"`,
+      title: 'Agent 全量排查',
+      description: '查看 agent 参数、运行状态和最近日志。',
+      command: `${prelude}
+echo '== agent.env =='
+show_file "$ETC_DIR/agent.env"
+echo
+echo '== nodehubsapi-agent status =='
+show_service_status nodehubsapi-agent.service || show_process nodehubsapi-agent
+echo
+echo '== nodehubsapi-agent log =='
+show_service_logs nodehubsapi-agent.service "$STATE_DIR/agent.log"`,
     },
     {
-      title: 'Agent 运行状态',
-      description: '优先检查 systemd，其次回退到进程列表。',
-      command: `systemctl status nodehubsapi-agent.service --no-pager || systemctl --user status nodehubsapi-agent.service --no-pager || pgrep -af nodehubsapi-agent`,
-    },
-    {
-      title: 'Agent 日志',
-      description: '优先查看 journalctl，没有 systemd 时回退到 agent.log。',
-      command: `${detectPaths}
-journalctl -u nodehubsapi-agent.service -n 120 --no-pager || journalctl --user -u nodehubsapi-agent.service -n 120 --no-pager || tail -n 120 "$STATE_DIR/agent.log"`,
-    },
-    {
-      title: 'sing-box 配置与日志',
-      description: '查看 sing-box 当前配置、服务状态和日志。',
-      command: `${detectPaths}
-[ -f "$ETC_DIR/runtime/sing-box.json" ] && sed -n '1,200p' "$ETC_DIR/runtime/sing-box.json"
-systemctl status nodehubsapi-runtime-sing-box.service --no-pager || systemctl --user status nodehubsapi-runtime-sing-box.service --no-pager || pgrep -af sing-box
-journalctl -u nodehubsapi-runtime-sing-box.service -n 120 --no-pager || journalctl --user -u nodehubsapi-runtime-sing-box.service -n 120 --no-pager || tail -n 120 "$STATE_DIR/runtime/sing-box.log"`,
-    },
-    {
-      title: 'xray 配置与日志',
-      description: '查看 xray 当前配置、服务状态和日志。',
-      command: `${detectPaths}
-[ -f "$ETC_DIR/runtime/xray.json" ] && sed -n '1,200p' "$ETC_DIR/runtime/xray.json"
-systemctl status nodehubsapi-runtime-xray.service --no-pager || systemctl --user status nodehubsapi-runtime-xray.service --no-pager || pgrep -af xray
-journalctl -u nodehubsapi-runtime-xray.service -n 120 --no-pager || journalctl --user -u nodehubsapi-runtime-xray.service -n 120 --no-pager || tail -n 120 "$STATE_DIR/runtime/xray.log"`,
-    },
-    {
-      title: 'WARP 注册信息',
-      description: '查看 WARP 配置中的 IPv6、Endpoint、DeviceID、LicenseKey。',
-      command: `${detectPaths}
-[ -f "$STATE_DIR/warp/warp.conf" ] && grep -E '^(Address6|Endpoint|DeviceID|LicenseKey)' "$STATE_DIR/warp/warp.conf"
-ls -lah "$STATE_DIR/warp"`,
-    },
-    {
-      title: 'WARP 注册参数',
-      description: '查看 WARP 关键注册参数文件。',
-      command: `${detectPaths}
+      title: 'WARP 全量排查',
+      description: '查看 WARP 参数文件、目录状态，以及承载 WARP 的 runtime 日志。',
+      command: `${prelude}
+echo '== WARP files =='
+show_dir "$STATE_DIR/warp"
+[ -f "$STATE_DIR/warp/warp.conf" ] && sed -n '1,200p' "$STATE_DIR/warp/warp.conf"
 [ -f "$STATE_DIR/warp/private_key" ] && sed -n '1,2p' "$STATE_DIR/warp/private_key"
 [ -f "$STATE_DIR/warp/reserved" ] && cat "$STATE_DIR/warp/reserved"
-[ -f "$STATE_DIR/warp/endpoint" ] && cat "$STATE_DIR/warp/endpoint"`,
+[ -f "$STATE_DIR/warp/endpoint" ] && cat "$STATE_DIR/warp/endpoint"
+echo
+echo '== sing-box runtime =='
+show_service_status nodehubsapi-runtime-sing-box.service || show_process sing-box
+show_service_logs nodehubsapi-runtime-sing-box.service "$STATE_DIR/runtime/sing-box.log"
+echo
+echo '== xray runtime =='
+show_service_status nodehubsapi-runtime-xray.service || show_process xray
+show_service_logs nodehubsapi-runtime-xray.service "$STATE_DIR/runtime/xray.log"`,
+    },
+    {
+      title: '版本拉取 / 应用排查',
+      description: '查看 reconcile 返回、本地当前版本、版本目录和最近应用日志。',
+      command: `${prelude}
+echo '== reconcile env =='
+if [ -n "\${API_BASE:-}" ] && [ -n "\${NODE_ID:-}" ] && [ -n "\${AGENT_TOKEN:-}" ]; then
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -H "X-Agent-Token: $AGENT_TOKEN" "$API_BASE/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env" || true
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- --header="X-Agent-Token: $AGENT_TOKEN" "$API_BASE/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env" || true
+  elif command -v busybox >/dev/null 2>&1; then
+    busybox wget -qO- --header="X-Agent-Token: $AGENT_TOKEN" "$API_BASE/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env" || true
+  else
+    echo 'missing downloader: curl/wget/busybox wget'
+  fi
+else
+  echo 'missing API_BASE/NODE_ID/AGENT_TOKEN'
+fi
+echo
+echo '== local release metadata =='
+show_file "$ETC_DIR/runtime/release.json"
+[ -f "$STATE_DIR/releases/current.json" ] && sed -n '1,200p' "$STATE_DIR/releases/current.json"
+echo
+echo '== release files =='
+show_dir "$STATE_DIR/releases"
+LATEST_APPLY_LOG="$(ls -1t "$STATE_DIR"/releases/apply-*.log 2>/dev/null | head -n 1 || true)"
+if [ -n "$LATEST_APPLY_LOG" ]; then
+  echo
+  echo "== latest apply log: $LATEST_APPLY_LOG =="
+  tail -n 120 "$LATEST_APPLY_LOG"
+else
+  echo 'no apply log found'
+fi`,
     },
   ]
 
   if (node.networkType === 'public') {
     commands.push({
-      title: 'TLS 证书检查',
-      description: '查看证书文件、签发信息和有效期。',
-      command: `${detectPaths}
-ls -lah "$ETC_DIR/certs"
-[ -f "$ETC_DIR/certs/server.crt" ] && openssl x509 -in "$ETC_DIR/certs/server.crt" -noout -issuer -subject -dates`,
+      title: 'TLS 证书排查',
+      description: '查看证书文件与有效期。',
+      command: `${prelude}
+echo '== cert files =='
+show_dir "$ETC_DIR/certs"
+echo
+echo '== cert detail =='
+[ -f "$ETC_DIR/certs/server.crt" ] && openssl x509 -in "$ETC_DIR/certs/server.crt" -noout -issuer -subject -dates || echo "missing: $ETC_DIR/certs/server.crt"`,
     })
   } else {
-    commands.push(
-      {
-        title: 'Argo 参数',
-        description: '查看 cloudflared 环境变量和已记录的 Argo 域名。',
-        command: `${detectPaths}
-[ -f "$ETC_DIR/cloudflared.env" ] && sed -n '1,120p' "$ETC_DIR/cloudflared.env"
+    commands.push({
+      title: 'Argo 全量排查',
+      description: '查看 cloudflared 参数、运行状态和最近日志。',
+      command: `${prelude}
+echo '== cloudflared env =='
+show_file "$ETC_DIR/cloudflared.env"
+echo
+echo '== argo state =='
+show_dir "$STATE_DIR/argo"
 [ -f "$STATE_DIR/argo/domain" ] && cat "$STATE_DIR/argo/domain"
-ls -lah "$STATE_DIR/argo"`,
-      },
-      {
-        title: 'Argo 日志',
-        description: '查看 cloudflared 服务状态和日志。',
-        command: `${detectPaths}
-systemctl status nodehubsapi-cloudflared.service --no-pager || systemctl --user status nodehubsapi-cloudflared.service --no-pager || pgrep -af cloudflared
-journalctl -u nodehubsapi-cloudflared.service -n 120 --no-pager || journalctl --user -u nodehubsapi-cloudflared.service -n 120 --no-pager || tail -n 120 "$STATE_DIR/argo/cloudflared.log"`,
-      },
-    )
+echo
+echo '== cloudflared status =='
+show_service_status nodehubsapi-cloudflared.service || show_process cloudflared
+echo
+echo '== cloudflared log =='
+show_service_logs nodehubsapi-cloudflared.service "$STATE_DIR/argo/cloudflared.log"`,
+    })
   }
 
   return commands
@@ -1249,6 +1281,66 @@ function formatBytes(b: number) {
   return parseFloat((b / Math.pow(k, i)).toFixed(1)) + ' ' + s[i]
 }
 
+function formatPercent(value: number | null | undefined, digits = 2) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '-'
+  return `${Number(value).toFixed(digits).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')}%`
+}
+
+function getUsagePercent(used: number | null | undefined, total: number | null | undefined, fallback?: number | null) {
+  const normalizedTotal = Number(total || 0)
+  const normalizedUsed = Number(used || 0)
+  if (normalizedTotal > 0) {
+    return Math.max(0, Math.min(100, (normalizedUsed / normalizedTotal) * 100))
+  }
+  if (fallback === null || fallback === undefined || !Number.isFinite(Number(fallback))) return null
+  return Math.max(0, Math.min(100, Number(fallback)))
+}
+
+function getCpuMetricText(n: NodeRecord) {
+  const cores = n.cpuCoreCount ? `${n.cpuCoreCount} 核` : '-'
+  const usage = formatPercent(n.cpuUsagePercent, 1)
+  return usage === '-' ? cores : `${cores} / ${usage}`
+}
+
+function getMemoryMetricText(n: NodeRecord) {
+  const total = Number(n.memoryTotalBytes || 0)
+  const used = Number(n.memoryUsedBytes || 0)
+  const usage = getUsagePercent(used, total, n.memoryUsagePercent)
+  if (total > 0) {
+    return `${formatBytes(used)} / ${formatBytes(total)} / ${formatPercent(usage, 2)}`
+  }
+  return formatPercent(n.memoryUsagePercent, 2)
+}
+
+function getStorageMetricText(n: NodeRecord) {
+  const total = Number(n.storageTotalBytes || 0)
+  const used = Number(n.storageUsedBytes || 0)
+  const usage = getUsagePercent(used, total, n.storageUsagePercent)
+  if (total > 0) {
+    return `${formatBytes(used)} / ${formatBytes(total)} / ${formatPercent(usage, 2)}`
+  }
+  return formatPercent(n.storageUsagePercent, 2)
+}
+
+function getCpuUsagePercent(n: NodeRecord) {
+  return getUsagePercent(null, null, n.cpuUsagePercent)
+}
+
+function getMemoryUsagePercent(n: NodeRecord) {
+  return getUsagePercent(n.memoryUsedBytes, n.memoryTotalBytes, n.memoryUsagePercent)
+}
+
+function getStorageUsagePercent(n: NodeRecord) {
+  return getUsagePercent(n.storageUsedBytes, n.storageTotalBytes, n.storageUsagePercent)
+}
+
+function getProgressTone(value: number | null) {
+  if (value === null) return 'success'
+  if (value > 80) return 'danger'
+  if (value > 50) return 'warning'
+  return 'success'
+}
+
 function isOnline(n: NodeRecord) {
   if (!n.lastSeenAt) return false
   return Date.now() - new Date(n.lastSeenAt).getTime() < 120000
@@ -1723,7 +1815,9 @@ onMounted(() => { if (adminKey.value) login() })
             <div class="detail-row"><span class="detail-label">入口 IP</span><span class="detail-value text-mono">{{ selectedNode.entryIp || '-' }}</span></div>
             <div class="detail-row" v-if="selectedNode.argoTunnelDomain"><span class="detail-label">Argo 域名</span><span class="detail-value text-mono">{{ selectedNode.argoTunnelDomain }}</span></div>
             <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value"><span class="status-badge" :class="isOnline(selectedNode)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(selectedNode)?'在线':'离线' }}</span></span></div>
-            <div class="detail-row"><span class="detail-label">最后在线</span><span class="detail-value">{{ timeAgo(selectedNode.lastSeenAt) }}</span></div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-section-title">运行与网络</div>
             <div class="detail-row"><span class="detail-label">Runtime</span><span class="detail-value text-mono">{{ getRuntimeVersion(selectedNode) }}</span></div>
             <div class="detail-row"><span class="detail-label">心跳间隔</span><span class="detail-value">{{ getNodeHeartbeatInterval(selectedNode) }} 秒</span></div>
             <div class="detail-row"><span class="detail-label">拉取版本间隔</span><span class="detail-value">{{ getNodeVersionPullInterval(selectedNode) }} 秒</span></div>
@@ -1744,14 +1838,16 @@ onMounted(() => { if (adminKey.value) login() })
               </span>
             </div>
             <div class="detail-row"><span class="detail-label">Argo Domain</span><span class="detail-value text-mono">{{ selectedNode.argoDomain || selectedNode.argoTunnelDomain || '-' }}</span></div>
-            <div class="detail-row"><span class="detail-label">Storage</span><span class="detail-value">{{ getStorageUsage(selectedNode) }}</span></div>
           </div>
           <div class="detail-section">
-            <div class="detail-section-title">资源监控</div>
-            <div class="detail-row"><span class="detail-label">CPU</span><span class="detail-value">{{ selectedNode.cpuUsagePercent !== null ? selectedNode.cpuUsagePercent + '%' : '-' }}</span></div>
-            <div v-if="selectedNode.cpuUsagePercent!==null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="selectedNode.cpuUsagePercent>80?'danger':selectedNode.cpuUsagePercent>50?'warning':'success'" :style="{width:selectedNode.cpuUsagePercent+'%'}"></div></div>
-            <div class="detail-row"><span class="detail-label">内存</span><span class="detail-value">{{ selectedNode.memoryUsagePercent !== null ? selectedNode.memoryUsagePercent + '%' : '-' }}</span></div>
-            <div v-if="selectedNode.memoryUsagePercent!==null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="selectedNode.memoryUsagePercent>80?'danger':selectedNode.memoryUsagePercent>50?'warning':'success'" :style="{width:selectedNode.memoryUsagePercent+'%'}"></div></div>
+            <div class="detail-section-title">心跳上报</div>
+            <div class="detail-row"><span class="detail-label">最近心跳</span><span class="detail-value">{{ timeAgo(selectedNode.lastSeenAt) }}</span></div>
+            <div class="detail-row"><span class="detail-label">CPU</span><span class="detail-value">{{ getCpuMetricText(selectedNode) }}</span></div>
+            <div v-if="getCpuUsagePercent(selectedNode) !== null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="getProgressTone(getCpuUsagePercent(selectedNode))" :style="{width:getCpuUsagePercent(selectedNode)+'%'}"></div></div>
+            <div class="detail-row"><span class="detail-label">内存</span><span class="detail-value">{{ getMemoryMetricText(selectedNode) }}</span></div>
+            <div v-if="getMemoryUsagePercent(selectedNode) !== null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="getProgressTone(getMemoryUsagePercent(selectedNode))" :style="{width:getMemoryUsagePercent(selectedNode)+'%'}"></div></div>
+            <div class="detail-row"><span class="detail-label">存储</span><span class="detail-value">{{ getStorageMetricText(selectedNode) }}</span></div>
+            <div v-if="getStorageUsagePercent(selectedNode) !== null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="getProgressTone(getStorageUsagePercent(selectedNode))" :style="{width:getStorageUsagePercent(selectedNode)+'%'}"></div></div>
             <div class="detail-row"><span class="detail-label">连接数</span><span class="detail-value">{{ selectedNode.currentConnections }}</span></div>
             <div class="detail-row"><span class="detail-label">入站流量</span><span class="detail-value">{{ formatBytes(selectedNode.bytesInTotal) }}</span></div>
             <div class="detail-row"><span class="detail-label">出站流量</span><span class="detail-value">{{ formatBytes(selectedNode.bytesOutTotal) }}</span></div>
@@ -1798,7 +1894,7 @@ onMounted(() => { if (adminKey.value) login() })
           <div class="detail-section">
             <div class="detail-section-title">检查命令</div>
             <div class="text-muted" style="margin-bottom:8px;font-size:12px">
-              下列命令会自动兼容 system 和 user 两种安装路径，可直接复制到 VPS 执行。
+              下列命令会自动兼容 system、user、systemd 与后台进程模式，可直接复制到 VPS 执行。
             </div>
             <div v-for="item in getNodeCheckCommands(selectedNode)" :key="item.title" class="card mb-md" style="padding:12px">
               <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
