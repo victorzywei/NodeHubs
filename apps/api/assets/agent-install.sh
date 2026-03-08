@@ -23,7 +23,6 @@ AGENT_BIN=""
 SERVICE_FILE=""
 AGENT_ENV_FILE=""
 RUNTIME_BIN_DIR=""
-WARP_BIN_PATH=""
 CLOUDFLARED_BIN_PATH=""
 USER_AUTOSTART_SCRIPT=""
 SYSTEMCTL_USER_FLAG=""
@@ -120,7 +119,6 @@ detect_install_context() {
   fi
 
   AGENT_ENV_FILE="$ETC_DIR/agent.env"
-  WARP_BIN_PATH="$RUNTIME_BIN_DIR/warp-go"
   CLOUDFLARED_BIN_PATH="$RUNTIME_BIN_DIR/cloudflared"
   USER_AUTOSTART_SCRIPT="$ETC_DIR/agent-autostart.sh"
   BOOTSTRAP_CERT_PATH="$ETC_DIR/certs/server.crt"
@@ -700,7 +698,6 @@ RUNTIME_BIN_DIR=$RUNTIME_BIN_DIR
 INSTALL_MODE=$INSTALL_MODE
 USE_SYSTEMD=$USE_SYSTEMD
 SYSTEMCTL_USER_FLAG=$SYSTEMCTL_USER_FLAG
-WARP_BIN_PATH=$WARP_BIN_PATH
 CLOUDFLARED_BIN_PATH=$CLOUDFLARED_BIN_PATH
 USER_AUTOSTART_SCRIPT=$USER_AUTOSTART_SCRIPT
 NODESHUB_AGENT_ENV_FILE=$AGENT_ENV_FILE
@@ -760,7 +757,6 @@ load_agent_env() {
   NODESHUB_AGENT_ENV_FILE="$AGENT_ENV_FILE"
   AGENT_BIN="${AGENT_BIN:-$HOME/.local/bin/nodehubsapi-agent}"
   RUNTIME_BIN_DIR="${RUNTIME_BIN_DIR:-/usr/local/bin}"
-  WARP_BIN_PATH="${WARP_BIN_PATH:-$RUNTIME_BIN_DIR/warp-go}"
   CLOUDFLARED_BIN_PATH="${CLOUDFLARED_BIN_PATH:-$RUNTIME_BIN_DIR/cloudflared}"
   HEARTBEAT_INTERVAL_SECONDS="$(normalize_interval "${HEARTBEAT_INTERVAL_SECONDS:-15}" 15)"
   VERSION_PULL_INTERVAL_SECONDS="$(normalize_interval "${VERSION_PULL_INTERVAL_SECONDS:-15}" 15)"
@@ -940,16 +936,32 @@ warp_endpoint() {
   printf '%s' "$value"
 }
 
+warp_private_key() {
+  local value
+  value="$(cat "$STATE_DIR/warp/private_key" 2>/dev/null || true)"
+  if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
+    value="$(grep -E '^PrivateKey[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' | tr -d ' ' || true)"
+  fi
+  printf '%s' "$value"
+}
+
+warp_reserved_json() {
+  local value a b c
+  value="$(cat "$STATE_DIR/warp/reserved" 2>/dev/null || true)"
+  if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
+    value="$(grep -E '^Reserved[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' | tr -d ' ' || true)"
+  fi
+  value="$(printf '%s' "$value" | tr -d '[:space:]')"
+  IFS=',' read -r a b c _ <<< "$value"
+  if [[ "$a" =~ ^[0-9]+$ ]] && [[ "$b" =~ ^[0-9]+$ ]] && [[ "$c" =~ ^[0-9]+$ ]]; then
+    printf '[%s,%s,%s]' "$a" "$b" "$c"
+    return 0
+  fi
+  printf 'null'
+}
+
 warp_status() {
-  if [ -f "$STATE_DIR/warp/warp.pid" ] && kill -0 "$(cat "$STATE_DIR/warp/warp.pid" 2>/dev/null || true)" 2>/dev/null; then
-    printf 'running'
-    return 0
-  fi
-  if command -v pgrep >/dev/null 2>&1 && pgrep -f 'warp-go|wireguard|wg-quick' >/dev/null 2>&1; then
-    printf 'running'
-    return 0
-  fi
-  if [ -f "$STATE_DIR/warp/v6" ] || [ -f "$STATE_DIR/warp/warp.conf" ] || [ -x "$WARP_BIN_PATH" ]; then
+  if [ -f "$STATE_DIR/warp/v6" ] || [ -f "$STATE_DIR/warp/warp.conf" ] || [ -f "$STATE_DIR/warp/private_key" ]; then
     printf 'installed'
     return 0
   fi
@@ -1044,21 +1056,6 @@ ensure_runtime_background() {
   echo "$!" > "$pid_file"
 }
 
-ensure_warp_background() {
-  local pid_file="$STATE_DIR/warp/warp.pid"
-  local log_file="$STATE_DIR/warp/warp.log"
-  local config_file="$STATE_DIR/warp/warp.conf"
-  [ "${USE_SYSTEMD:-0}" = "1" ] && return 0
-  [ -x "$WARP_BIN_PATH" ] || return 0
-  [ -f "$config_file" ] || return 0
-  if pid_file_running "$pid_file"; then
-    return 0
-  fi
-  mkdir -p "$STATE_DIR/warp"
-  nohup "$WARP_BIN_PATH" --foreground --config "$config_file" >>"$log_file" 2>&1 &
-  echo "$!" > "$pid_file"
-}
-
 ensure_argo_background() {
   local pid_file="$STATE_DIR/argo/cloudflared.pid"
   local log_file="$STATE_DIR/argo/cloudflared.log"
@@ -1082,13 +1079,12 @@ self_heal_background_services() {
   [ "${USE_SYSTEMD:-0}" = "1" ] && return 0
   ensure_runtime_background "sing-box"
   ensure_runtime_background "xray"
-  ensure_warp_background
   ensure_argo_background
 }
 
 heartbeat() {
   local bytes_in bytes_out memory cpu connections version
-  local warp_ipv6_value warp_status_value warp_endpoint_value
+  local warp_ipv6_value warp_status_value warp_endpoint_value warp_private_key_value warp_reserved_value
   local argo_status_value argo_domain_value
   local storage_total storage_used storage_percent
   local payload
@@ -1102,6 +1098,8 @@ EOF_NET
   warp_ipv6_value="$(warp_ipv6)"
   warp_status_value="$(warp_status)"
   warp_endpoint_value="$(warp_endpoint)"
+  warp_private_key_value="$(warp_private_key)"
+  warp_reserved_value="$(warp_reserved_json)"
   argo_status_value="$(argo_status)"
   argo_domain_value="$(argo_domain)"
   read -r storage_total storage_used storage_percent <<EOF_STORAGE
@@ -1120,6 +1118,8 @@ EOF_STORAGE
   "warpStatus": $(json_escape "$warp_status_value"),
   "warpIpv6": $(json_escape "$warp_ipv6_value"),
   "warpEndpoint": $(json_escape "$warp_endpoint_value"),
+  "warpPrivateKey": $(json_escape "$warp_private_key_value"),
+  "warpReserved": ${warp_reserved_value},
   "argoStatus": $(json_escape "$argo_status_value"),
   "argoDomain": $(json_escape "$argo_domain_value"),
   "storageTotalBytes": ${storage_total:-0},

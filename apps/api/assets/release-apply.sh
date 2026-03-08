@@ -199,25 +199,6 @@ get_latest_github_tag() {
   printf '%s' "$tag"
 }
 
-get_latest_gitlab_tag() {
-  local project="$1"
-  local fallback="${2:-}"
-  local api tag
-
-  tag=""
-  if command -v curl >/dev/null 2>&1; then
-    api="$(direct_url "https://gitlab.com/api/v4/projects/${project}/releases/permalink/latest")"
-    tag="$(curl -fsSL "$api" 2>/dev/null | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
-  fi
-
-  if [ -z "$tag" ] && [ -n "$fallback" ]; then
-    warn "Failed to detect latest GitLab release tag, using fallback: $fallback"
-    tag="$fallback"
-  fi
-
-  printf '%s' "$tag"
-}
-
 http_get_to_file() {
   local url="$1"
   local target="$2"
@@ -580,17 +561,6 @@ resolve_cloudflared_arch() {
   esac
 }
 
-resolve_warpgo_arch() {
-  case "$(uname -m 2>/dev/null || true)" in
-    x86_64|amd64) echo amd64 ;;
-    aarch64|arm64) echo arm64 ;;
-    armv7l|armv7) echo armv7 ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 guess_acme_email() {
   local domain="$1"
   local zone="$domain"
@@ -809,45 +779,6 @@ save_warp_runtime() {
   printf '%s\n' "$endpoint" > "$warp_dir/endpoint"
 }
 
-install_warpgo_binary() {
-  local target="$RUNTIME_BIN_DIR/warp-go"
-  local version
-  local fallback_version="v1.0.8"
-  local arch asset archive_file unpack_dir candidate
-  if [ -x "$target" ]; then
-    printf '%s' "$target"
-    return 0
-  fi
-  arch="$(resolve_warpgo_arch)" || {
-    warn "warp-go is not available for this architecture."
-    return 1
-  }
-  ensure_command tar tar || {
-    warn "tar is required to install warp-go."
-    return 1
-  }
-  version="$(get_latest_gitlab_tag "ProjectWARP%2Fwarp-go" "$fallback_version")"
-  [ -n "$version" ] || version="$fallback_version"
-  asset="warp-go_${version#v}_linux_${arch}.tar.gz"
-  archive_file="$TMP_DIR/$asset"
-  unpack_dir="$TMP_DIR/warp-go"
-  mkdir -p "$unpack_dir"
-  http_download_to_file "https://gitlab.com/ProjectWARP/warp-go/-/releases/${version}/downloads/${asset}" "$archive_file"
-  tar -xzf "$archive_file" -C "$unpack_dir"
-  candidate="$(find "$unpack_dir" -maxdepth 3 -type f -name 'warp-go' | head -n1 || true)"
-  [ -n "$candidate" ] || return 1
-  install_binary_file "$candidate" "$target"
-  printf '%s' "$target"
-}
-
-ensure_warp_allowed_ips() {
-  local config_file="$1"
-  if grep -q '^AllowedIPs[[:space:]]*=' "$config_file" 2>/dev/null; then
-    return 0
-  fi
-  printf '%s\n' 'AllowedIPs = 0.0.0.0/0, ::/0' >> "$config_file"
-}
-
 register_warp_via_api() {
   local warp_dir="$STATE_DIR/warp"
   local config_file="$warp_dir/warp.conf"
@@ -904,83 +835,9 @@ EOF
   save_warp_runtime "$warp_dir" "$private_key" "$ipv6" "$reserved" "$endpoint"
 }
 
-register_warp_with_warpgo() {
-  local warp_bin="$1"
-  local warp_dir="$STATE_DIR/warp"
-  local config_file="$warp_dir/warp.conf"
-  local private_key ipv6 endpoint reserved
-  mkdir -p "$warp_dir"
-  "$warp_bin" --register --config "$config_file" >/dev/null 2>&1
-  if [ -n "$NODE_WARP_LICENSE_KEY" ]; then
-    if grep -q '^LicenseKey[[:space:]]*=' "$config_file" 2>/dev/null; then
-      sed -i "s/^LicenseKey[[:space:]]*=.*/LicenseKey = $NODE_WARP_LICENSE_KEY/" "$config_file"
-    else
-      printf 'LicenseKey = %s\n' "$NODE_WARP_LICENSE_KEY" >> "$config_file"
-    fi
-    "$warp_bin" --update --config "$config_file" >/dev/null 2>&1 || true
-  fi
-  ensure_warp_allowed_ips "$config_file"
-  private_key="$(sed -n 's/^PrivateKey[[:space:]]*=[[:space:]]*//p' "$config_file" | head -n1)"
-  ipv6="$(sed -n 's/^Address6[[:space:]]*=[[:space:]]*//p' "$config_file" | head -n1 | sed 's#/.*##')"
-  endpoint="$(sed -n 's/^Endpoint[[:space:]]*=[[:space:]]*//p' "$config_file" | head -n1)"
-  reserved="$(sed -n 's/^Reserved[[:space:]]*=[[:space:]]*//p' "$config_file" | head -n1)"
-  save_warp_runtime "$warp_dir" "$private_key" "$ipv6" "$reserved" "$endpoint"
-}
-
-write_warp_service() {
-  local warp_bin="$1"
-  local config_file="$STATE_DIR/warp/warp.conf"
-  local service_file="$SYSTEMD_DIR/nodehubsapi-warp.service"
-  [ "$USE_SYSTEMD" = "1" ] || return 0
-  mkdir -p "$SYSTEMD_DIR"
-  cat >"$service_file" <<EOF
-[Unit]
-Description=nodehubsapi warp-go
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=${warp_bin} --foreground --config ${config_file}
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=$SYSTEMD_WANTED_BY
-EOF
-  run_systemctl daemon-reload
-  run_systemctl enable --now nodehubsapi-warp.service >/dev/null
-  run_systemctl restart nodehubsapi-warp.service
-}
-
-start_warp_background() {
-  local warp_bin="$1"
-  local config_file="$STATE_DIR/warp/warp.conf"
-  local pid_file="$STATE_DIR/warp/warp.pid"
-  local log_file="$STATE_DIR/warp/warp.log"
-  local old_pid=""
-  mkdir -p "$STATE_DIR/warp"
-  if [ -f "$pid_file" ]; then
-    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
-    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
-      kill "$old_pid" >/dev/null 2>&1 || true
-      sleep 1
-    fi
-  fi
-  nohup "$warp_bin" --foreground --config "$config_file" >>"$log_file" 2>&1 &
-  echo "$!" > "$pid_file"
-}
-
 ensure_warp_bootstrap() {
-  local warp_bin
-  warp_bin="$(install_warpgo_binary)" || return 1
-  register_warp_via_api || register_warp_with_warpgo "$warp_bin"
-  if [ "$USE_SYSTEMD" = "1" ]; then
-    write_warp_service "$warp_bin"
-  else
-    start_warp_background "$warp_bin"
-  fi
-  log "WARP bootstrap completed."
+  register_warp_via_api
+  log "WARP registration completed."
 }
 
 install_cloudflared_binary() {

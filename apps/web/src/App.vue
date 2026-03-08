@@ -273,11 +273,12 @@ journalctl -u nodehubsapi-runtime-xray.service -n 120 --no-pager || journalctl -
 ls -lah "$STATE_DIR/warp"`,
     },
     {
-      title: 'WARP 日志',
-      description: '查看 WARP 服务状态和运行日志。',
+      title: 'WARP 注册参数',
+      description: '查看 WARP 关键注册参数文件。',
       command: `${detectPaths}
-systemctl status nodehubsapi-warp.service --no-pager || systemctl --user status nodehubsapi-warp.service --no-pager || pgrep -af warp-go
-journalctl -u nodehubsapi-warp.service -n 120 --no-pager || journalctl --user -u nodehubsapi-warp.service -n 120 --no-pager || tail -n 120 "$STATE_DIR/warp/warp.log"`,
+[ -f "$STATE_DIR/warp/private_key" ] && sed -n '1,2p' "$STATE_DIR/warp/private_key"
+[ -f "$STATE_DIR/warp/reserved" ] && cat "$STATE_DIR/warp/reserved"
+[ -f "$STATE_DIR/warp/endpoint" ] && cat "$STATE_DIR/warp/endpoint"`,
     },
   ]
 
@@ -1877,8 +1878,8 @@ onMounted(() => { if (adminKey.value) login() })
                 <label class="publish-template-row">
                   <input type="checkbox" class="form-checkbox" v-model="publishBootstrap.installWarp" />
                   <div class="publish-template-copy">
-                    <div class="publish-template-name">安装 WARP</div>
-                    <div class="publish-template-meta">可选填写本次 bootstrap 使用的 WARP License Key；留空则按普通 WARP 流程安装。</div>
+                    <div class="publish-template-name">注册 WARP</div>
+                    <div class="publish-template-meta">可选填写本次 bootstrap 使用的 WARP License Key；留空则按普通 WARP 注册流程执行。</div>
                   </div>
                 </label>
                 <div v-if="publishBootstrap.installWarp" class="form-group" style="margin:8px 0 0">
@@ -1917,7 +1918,7 @@ onMounted(() => { if (adminKey.value) login() })
                 <div v-else-if="publishPreview">
                   <div v-if="publishKind === 'bootstrap'" class="publish-preview-file">
                     <div class="publish-preview-meta">Bootstrap 计划 / {{ publishPreview.bootstrap.mode }}</div>
-                    <div class="detail-row"><span class="detail-label">安装 WARP</span><span class="detail-value">{{ publishPreview.bootstrap.installWarp ? '是' : '否' }}</span></div>
+                    <div class="detail-row"><span class="detail-label">注册 WARP</span><span class="detail-value">{{ publishPreview.bootstrap.installWarp ? '是' : '否' }}</span></div>
                     <div class="detail-row"><span class="detail-label">WARP License Key</span><span class="detail-value">{{ publishPreview.bootstrap.warpLicenseKey ? '已提供' : '未提供' }}</span></div>
                     <div class="detail-row"><span class="detail-label">心跳间隔</span><span class="detail-value">{{ publishPreview.bootstrap.heartbeatIntervalSeconds }} 秒</span></div>
                     <div class="detail-row"><span class="detail-label">拉取版本间隔</span><span class="detail-value">{{ publishPreview.bootstrap.versionPullIntervalSeconds }} 秒</span></div>

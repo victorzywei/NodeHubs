@@ -1058,7 +1058,7 @@ function buildBootstrapNotes(node: NodeRecord, kind: ReleaseKind, bootstrapOptio
     notes.push(`Selected bootstrap actions: ${actions.join(', ')}.`)
   }
   if (bootstrapOptions.installWarp) {
-    notes.push(bootstrapOptions.warpLicenseKey ? 'Bootstrap carries an inline WARP License Key.' : 'Bootstrap installs WARP without a License Key.')
+    notes.push(bootstrapOptions.warpLicenseKey ? 'Bootstrap carries an inline WARP License Key.' : 'Bootstrap registers WARP without a License Key.')
   }
   notes.push(`Heartbeat interval: ${bootstrapOptions.heartbeatIntervalSeconds}s.`)
   notes.push(`Version pull interval: ${bootstrapOptions.versionPullIntervalSeconds}s.`)
