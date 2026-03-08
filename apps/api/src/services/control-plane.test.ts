@@ -375,7 +375,7 @@ describe('control-plane template validation', () => {
 })
 
 describe('heartbeat persistence', () => {
-  it('stores extended warp template fields from heartbeat data', async () => {
+  it('stores warp runtime fields from heartbeat data', async () => {
     const services = createServices()
     const node = await createNode(services, {
       name: 'Node Warp',
@@ -404,17 +404,11 @@ describe('heartbeat persistence', () => {
       warpIpv6: '2606:4700:110:8d8d:1845:c39f:2dd5:a03a',
       warpEndpoint: 'engage.cloudflareclient.com:2408',
       warpPrivateKey: 'private-key',
-      warpPeerPublicKey: 'peer-public-key',
-      warpSystemInterface: false,
-      warpLocalAddressIpv4: '172.16.0.2/32',
       warpReserved: [1, 2, 3],
       protocolRuntimeVersion: 'sing-box 1.13.0',
     })
 
     expect(updated?.warpPrivateKey).toBe('private-key')
-    expect(updated?.warpPeerPublicKey).toBe('peer-public-key')
-    expect(updated?.warpSystemInterface).toBe(false)
-    expect(updated?.warpLocalAddressIpv4).toBe('172.16.0.2/32')
     expect(updated?.warpReserved).toEqual([1, 2, 3])
   })
 })

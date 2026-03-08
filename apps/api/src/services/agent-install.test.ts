@@ -122,9 +122,6 @@ describe('agent install scripts', () => {
     expect(script).toContain('self_update_if_needed')
     expect(script).not.toContain('sudo ')
     expect(script).not.toContain('jq')
-    expect(script).toContain('"warpPeerPublicKey": $(json_escape "$warp_peer_public_key_value")')
-    expect(script).toContain('"warpSystemInterface": ${warp_system_interface_value}')
-    expect(script).toContain('"warpLocalAddressIpv4": $(json_escape "$warp_local_address_ipv4_value")')
   })
 
   it('builds reconcile env documents for shell sourcing', () => {

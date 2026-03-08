@@ -66,9 +66,6 @@ type NodeRow = {
   warp_ipv6?: string
   warp_endpoint?: string
   warp_private_key?: string
-  warp_peer_public_key?: string
-  warp_system_interface?: number
-  warp_local_address_ipv4?: string
   warp_reserved_json?: string
   argo_status?: string
   argo_domain?: string
@@ -189,9 +186,6 @@ function toNodeRecord(row: NodeRow): NodeRecord {
     warpIpv6: row.warp_ipv6 || '',
     warpEndpoint: row.warp_endpoint || '',
     warpPrivateKey: row.warp_private_key || '',
-    warpPeerPublicKey: row.warp_peer_public_key || '',
-    warpSystemInterface: toBool(row.warp_system_interface),
-    warpLocalAddressIpv4: row.warp_local_address_ipv4 || '',
     warpReserved: parseJsonObject<number[]>(row.warp_reserved_json || '[]', []),
     argoStatus: row.argo_status || '',
     argoDomain: row.argo_domain || '',
@@ -468,9 +462,9 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       github_mirror_url, warp_license_key, cf_dns_token, argo_tunnel_token, argo_tunnel_domain, argo_tunnel_port,
       install_warp, install_argo, config_revision, bootstrap_revision, desired_release_revision,
       current_release_revision, current_release_status, heartbeat_interval_seconds, version_pull_interval_seconds, bytes_in_total, bytes_out_total,
-      current_connections, warp_status, warp_ipv6, warp_endpoint, warp_private_key, warp_peer_public_key, warp_system_interface, warp_local_address_ipv4, warp_reserved_json, argo_status, argo_domain,
+      current_connections, warp_status, warp_ipv6, warp_endpoint, warp_private_key, warp_reserved_json, argo_status, argo_domain,
       storage_total_bytes, storage_used_bytes, storage_usage_percent, protocol_runtime_version, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       createToken(),
@@ -503,9 +497,6 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       '',
       '',
       '',
-      '',
-      '',
-      0,
       '',
       '[]',
       '',
@@ -556,7 +547,7 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
          github_mirror_url = ?, warp_license_key = ?, cf_dns_token = ?, argo_tunnel_token = ?, argo_tunnel_domain = ?, argo_tunnel_port = ?,
          install_warp = ?, install_argo = ?, bytes_in_total = ?, bytes_out_total = ?, current_connections = ?,
          cpu_usage_percent = ?, memory_usage_percent = ?, warp_status = ?, warp_ipv6 = ?, warp_endpoint = ?,
-         warp_private_key = ?, warp_peer_public_key = ?, warp_system_interface = ?, warp_local_address_ipv4 = ?, warp_reserved_json = ?,
+         warp_private_key = ?, warp_reserved_json = ?,
          argo_status = ?, argo_domain = ?, storage_total_bytes = ?, storage_used_bytes = ?, storage_usage_percent = ?,
          protocol_runtime_version = ?, last_seen_at = ?, heartbeat_interval_seconds = ?, version_pull_interval_seconds = ?,
          config_revision = ?, bootstrap_revision = ?, updated_at = ?
@@ -587,9 +578,6 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       input.warpIpv6 ?? current.warp_ipv6 ?? '',
       input.warpEndpoint ?? current.warp_endpoint ?? '',
       input.warpPrivateKey ?? current.warp_private_key ?? '',
-      input.warpPeerPublicKey ?? current.warp_peer_public_key ?? '',
-      input.warpSystemInterface === undefined ? current.warp_system_interface ?? 0 : (input.warpSystemInterface ? 1 : 0),
-      input.warpLocalAddressIpv4 ?? current.warp_local_address_ipv4 ?? '',
       JSON.stringify(input.warpReserved ?? parseJsonObject<number[]>(current.warp_reserved_json || '[]', [])),
       input.argoStatus ?? current.argo_status ?? '',
       input.argoDomain ?? current.argo_domain ?? '',
@@ -986,9 +974,6 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
   const nextWarpIpv6 = input.warpIpv6 === undefined ? null : input.warpIpv6
   const nextWarpEndpoint = input.warpEndpoint === undefined ? null : input.warpEndpoint
   const nextWarpPrivateKey = input.warpPrivateKey === undefined ? null : input.warpPrivateKey
-  const nextWarpPeerPublicKey = input.warpPeerPublicKey === undefined ? null : input.warpPeerPublicKey
-  const nextWarpSystemInterface = input.warpSystemInterface === undefined ? null : Number(input.warpSystemInterface)
-  const nextWarpLocalAddressIpv4 = input.warpLocalAddressIpv4 === undefined ? null : input.warpLocalAddressIpv4
   const nextWarpReservedJson = input.warpReserved === undefined ? null : JSON.stringify(input.warpReserved)
   const nextArgoStatus = input.argoStatus === undefined ? null : input.argoStatus
   const nextArgoDomain = input.argoDomain === undefined ? null : input.argoDomain
@@ -1001,9 +986,7 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
     `UPDATE nodes
      SET bytes_in_total = ?, bytes_out_total = ?, current_connections = ?, cpu_usage_percent = ?, memory_usage_percent = ?,
          warp_status = coalesce(?, warp_status), warp_ipv6 = coalesce(?, warp_ipv6), warp_endpoint = coalesce(?, warp_endpoint),
-         warp_private_key = coalesce(?, warp_private_key), warp_peer_public_key = coalesce(?, warp_peer_public_key),
-         warp_system_interface = coalesce(?, warp_system_interface), warp_local_address_ipv4 = coalesce(?, warp_local_address_ipv4),
-         warp_reserved_json = coalesce(?, warp_reserved_json),
+         warp_private_key = coalesce(?, warp_private_key), warp_reserved_json = coalesce(?, warp_reserved_json),
          argo_status = coalesce(?, argo_status), argo_domain = coalesce(?, argo_domain),
          storage_total_bytes = coalesce(?, storage_total_bytes), storage_used_bytes = coalesce(?, storage_used_bytes),
          storage_usage_percent = coalesce(?, storage_usage_percent),
@@ -1021,9 +1004,6 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
       nextWarpIpv6,
       nextWarpEndpoint,
       nextWarpPrivateKey,
-      nextWarpPeerPublicKey,
-      nextWarpSystemInterface,
-      nextWarpLocalAddressIpv4,
       nextWarpReservedJson,
       nextArgoStatus,
       nextArgoDomain,

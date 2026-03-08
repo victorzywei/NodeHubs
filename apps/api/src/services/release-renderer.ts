@@ -404,15 +404,15 @@ function resolveWarpRoute(node: NodeRecord, templates: NormalizedTemplate[]): Re
     readNumberByKeys(defaults, ['warp_server_port', 'server_port'], endpointFallback.port || DEFAULT_WARP_SERVER_PORT),
     endpointFallback.port || DEFAULT_WARP_SERVER_PORT,
   )
-  const peerPublicKey = readStringByKeys(defaults, ['warp_peer_public_key', 'peer_public_key'], node.warpPeerPublicKey || DEFAULT_WARP_PEER_PUBLIC_KEY)
-  const systemInterface = readBooleanByKeys(defaults, ['warp_system_interface', 'system_interface'], node.warpSystemInterface === true)
+  const peerPublicKey = readStringByKeys(defaults, ['warp_peer_public_key', 'peer_public_key'], DEFAULT_WARP_PEER_PUBLIC_KEY)
+  const systemInterface = readBooleanByKeys(defaults, ['warp_system_interface', 'system_interface'], false)
   const mtu = Math.max(576, Math.min(65535, Math.trunc(readNumberByKeys(defaults, ['warp_mtu', 'mtu'], 1280))))
   const reserved = normalizeReserved(
     Object.prototype.hasOwnProperty.call(defaults, 'warp_reserved') ? defaults.warp_reserved : defaults.reserved,
     fallbackReserved,
   )
 
-  const localAddressV4 = readStringByKeys(defaults, ['warp_local_address_ipv4', 'local_address_ipv4'], node.warpLocalAddressIpv4 || DEFAULT_WARP_LOCAL_ADDRESS_IPV4)
+  const localAddressV4 = readStringByKeys(defaults, ['warp_local_address_ipv4', 'local_address_ipv4'], DEFAULT_WARP_LOCAL_ADDRESS_IPV4)
   const localAddressV6 = normalizeV6Cidr(
     readStringByKeys(defaults, ['warp_local_address_ipv6', 'local_address_ipv6'], nodeV6),
     DEFAULT_WARP_LOCAL_ADDRESS_IPV6,

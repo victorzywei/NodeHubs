@@ -772,17 +772,11 @@ save_warp_runtime() {
   local ipv6="$3"
   local reserved="$4"
   local endpoint="$5"
-  local peer_public_key="$6"
-  local system_interface="$7"
-  local local_address_ipv4="$8"
   mkdir -p "$warp_dir"
   printf '%s\n' "$private_key" > "$warp_dir/private_key"
   printf '%s\n' "$ipv6" > "$warp_dir/v6"
   printf '%s\n' "$reserved" > "$warp_dir/reserved"
   printf '%s\n' "$endpoint" > "$warp_dir/endpoint"
-  printf '%s\n' "$peer_public_key" > "$warp_dir/peer_public_key"
-  printf '%s\n' "$system_interface" > "$warp_dir/system_interface"
-  printf '%s\n' "$local_address_ipv4" > "$warp_dir/local_address_ipv4"
 }
 
 ensure_sing_box_binary_for_warp() {
@@ -889,7 +883,7 @@ DeviceID = ${device_id}
 Token = ${access_token}
 AllowedIPs = 0.0.0.0/0, ::/0
 EOF
-  save_warp_runtime "$warp_dir" "$private_key" "$ipv6" "$reserved" "$endpoint" "$peer_public_key" "$system_interface" "$local_address_ipv4"
+  save_warp_runtime "$warp_dir" "$private_key" "$ipv6" "$reserved" "$endpoint"
 }
 
 ensure_warp_bootstrap() {

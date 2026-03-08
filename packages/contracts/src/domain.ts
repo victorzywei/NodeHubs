@@ -33,9 +33,6 @@ export interface NodeRecord {
   warpIpv6?: string
   warpEndpoint?: string
   warpPrivateKey?: string
-  warpPeerPublicKey?: string
-  warpSystemInterface?: boolean
-  warpLocalAddressIpv4?: string
   warpReserved?: number[]
   argoStatus?: string
   argoDomain?: string
