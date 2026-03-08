@@ -766,6 +766,14 @@ load_agent_env() {
 
 load_agent_env
 
+log() {
+  printf '%s\n' "[nodehubsapi] $*"
+}
+
+warn() {
+  printf '%s\n' "[nodehubsapi] WARN: $*" >&2
+}
+
 json_escape() {
   local value="$1"
   value="${value//\\/\\\\}"

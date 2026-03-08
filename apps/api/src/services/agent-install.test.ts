@@ -120,6 +120,8 @@ describe('agent install scripts', () => {
     expect(script).toContain("cat >\"$AGENT_BIN\" <<'NODESHUB_AGENT_BIN_EOF'")
     expect(script).toContain('ensure_downloader() {')
     expect(script).toContain('self_heal_background_services')
+    expect(script).toContain('log() {')
+    expect(script).toContain('warn() {')
     expect(script).toContain('install_user_login_autostart')
     expect(script).toContain('install_system_boot_autostart')
     expect(script).toContain('/etc/rc.local')
