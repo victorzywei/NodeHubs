@@ -25,6 +25,7 @@ AGENT_ENV_FILE=""
 RUNTIME_BIN_DIR=""
 WARP_BIN_PATH=""
 CLOUDFLARED_BIN_PATH=""
+USER_AUTOSTART_SCRIPT=""
 SYSTEMCTL_USER_FLAG=""
 SYSTEMD_WANTED_BY="multi-user.target"
 SYSTEMD_DIR=""
@@ -52,6 +53,10 @@ json_escape() {
 
 log() {
   printf '%s\n' "[nodehubsapi] $*"
+}
+
+log_stderr() {
+  printf '%s\n' "[nodehubsapi] $*" >&2
 }
 
 warn() {
@@ -117,6 +122,7 @@ detect_install_context() {
   AGENT_ENV_FILE="$ETC_DIR/agent.env"
   WARP_BIN_PATH="$RUNTIME_BIN_DIR/warp-go"
   CLOUDFLARED_BIN_PATH="$RUNTIME_BIN_DIR/cloudflared"
+  USER_AUTOSTART_SCRIPT="$ETC_DIR/agent-autostart.sh"
   BOOTSTRAP_CERT_PATH="$ETC_DIR/certs/server.crt"
   BOOTSTRAP_KEY_PATH="$ETC_DIR/certs/server.key"
 
@@ -319,7 +325,7 @@ install_lego_binary() {
   local fallback_version="v4.32.0"
   local arch asset archive_file unpack_dir
   if [ -x "$target" ]; then
-    log "Reusing existing lego binary: $target"
+    log_stderr "Reusing existing lego binary: $target"
     printf '%s' "$target"
     return 0
   fi
@@ -337,7 +343,7 @@ install_lego_binary() {
   archive_file="$TMP_DIR/$asset"
   unpack_dir="$TMP_DIR/lego"
   mkdir -p "$unpack_dir"
-  log "Downloading lego ${version} for TLS bootstrap."
+  log_stderr "Downloading lego ${version} for TLS bootstrap."
   http_download_to_file "https://github.com/go-acme/lego/releases/download/${version}/${asset}" "$archive_file"
   tar -xzf "$archive_file" -C "$unpack_dir"
   install_binary_file "$unpack_dir/lego" "$target"
@@ -482,7 +488,7 @@ install_cloudflared_binary() {
   local target="$RUNTIME_BIN_DIR/cloudflared"
   local arch
   if [ -x "$target" ]; then
-    log "Reusing existing cloudflared binary: $target"
+    log_stderr "Reusing existing cloudflared binary: $target"
     printf '%s' "$target"
     return 0
   fi
@@ -490,7 +496,7 @@ install_cloudflared_binary() {
     warn "cloudflared is not available for this architecture."
     return 1
   }
-  log "Downloading cloudflared for Argo bootstrap."
+  log_stderr "Downloading cloudflared for Argo bootstrap."
   http_download_to_file "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}" "$TMP_DIR/cloudflared"
   install_binary_file "$TMP_DIR/cloudflared" "$target"
   printf '%s' "$target"
@@ -676,6 +682,7 @@ NODE_ID=$NODE_ID
 AGENT_TOKEN=$AGENT_TOKEN
 AGENT_VERSION=$AGENT_VERSION
 AGENT_INSTALL_URL=$AGENT_INSTALL_URL
+AGENT_BIN=$AGENT_BIN
 NODE_NETWORK_TYPE=$NODE_NETWORK_TYPE
 NODE_PRIMARY_DOMAIN=$NODE_PRIMARY_DOMAIN
 NODE_BACKUP_DOMAIN=$NODE_BACKUP_DOMAIN
@@ -695,6 +702,7 @@ USE_SYSTEMD=$USE_SYSTEMD
 SYSTEMCTL_USER_FLAG=$SYSTEMCTL_USER_FLAG
 WARP_BIN_PATH=$WARP_BIN_PATH
 CLOUDFLARED_BIN_PATH=$CLOUDFLARED_BIN_PATH
+USER_AUTOSTART_SCRIPT=$USER_AUTOSTART_SCRIPT
 NODESHUB_AGENT_ENV_FILE=$AGENT_ENV_FILE
 HEARTBEAT_INTERVAL_SECONDS=$HEARTBEAT_INTERVAL_SECONDS
 VERSION_PULL_INTERVAL_SECONDS=$VERSION_PULL_INTERVAL_SECONDS
@@ -750,6 +758,7 @@ AGENT_ENV_FILE="$(discover_agent_env_file)" || {
 load_agent_env() {
   . "$AGENT_ENV_FILE"
   NODESHUB_AGENT_ENV_FILE="$AGENT_ENV_FILE"
+  AGENT_BIN="${AGENT_BIN:-$HOME/.local/bin/nodehubsapi-agent}"
   RUNTIME_BIN_DIR="${RUNTIME_BIN_DIR:-/usr/local/bin}"
   WARP_BIN_PATH="${WARP_BIN_PATH:-$RUNTIME_BIN_DIR/warp-go}"
   CLOUDFLARED_BIN_PATH="${CLOUDFLARED_BIN_PATH:-$RUNTIME_BIN_DIR/cloudflared}"
@@ -988,6 +997,95 @@ storage_usage() {
   printf '0 0 null'
 }
 
+pid_file_running() {
+  local pid_file="$1"
+  local pid=""
+  if [ ! -f "$pid_file" ]; then
+    return 1
+  fi
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$pid_file"
+  return 1
+}
+
+ensure_runtime_background() {
+  local engine="$1"
+  local binary config args pid_file log_file
+  case "$engine" in
+    sing-box)
+      binary="$RUNTIME_BIN_DIR/sing-box"
+      config="$ETC_DIR/runtime/sing-box.json"
+      args="run -c \"$config\""
+      ;;
+    xray)
+      binary="$RUNTIME_BIN_DIR/xray"
+      config="$ETC_DIR/runtime/xray.json"
+      args="run -config \"$config\""
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  [ -x "$binary" ] || return 0
+  [ -f "$config" ] || return 0
+
+  pid_file="$STATE_DIR/runtime/${engine}.pid"
+  log_file="$STATE_DIR/runtime/${engine}.log"
+  if pid_file_running "$pid_file"; then
+    return 0
+  fi
+
+  mkdir -p "$STATE_DIR/runtime"
+  nohup /bin/sh -lc "cd \"$ETC_DIR\" && exec \"$binary\" $args" >>"$log_file" 2>&1 &
+  echo "$!" > "$pid_file"
+}
+
+ensure_warp_background() {
+  local pid_file="$STATE_DIR/warp/warp.pid"
+  local log_file="$STATE_DIR/warp/warp.log"
+  local config_file="$STATE_DIR/warp/warp.conf"
+  [ "${USE_SYSTEMD:-0}" = "1" ] && return 0
+  [ -x "$WARP_BIN_PATH" ] || return 0
+  [ -f "$config_file" ] || return 0
+  if pid_file_running "$pid_file"; then
+    return 0
+  fi
+  mkdir -p "$STATE_DIR/warp"
+  nohup "$WARP_BIN_PATH" --foreground --config "$config_file" >>"$log_file" 2>&1 &
+  echo "$!" > "$pid_file"
+}
+
+ensure_argo_background() {
+  local pid_file="$STATE_DIR/argo/cloudflared.pid"
+  local log_file="$STATE_DIR/argo/cloudflared.log"
+  local origin_url="http://127.0.0.1:${NODE_ARGO_ORIGIN_PORT:-2053}"
+  [ "${USE_SYSTEMD:-0}" = "1" ] && return 0
+  [ "${NODE_NETWORK_TYPE:-}" = "noPublicIp" ] || return 0
+  [ -x "$CLOUDFLARED_BIN_PATH" ] || return 0
+  if pid_file_running "$pid_file"; then
+    return 0
+  fi
+  mkdir -p "$STATE_DIR/argo"
+  if [ -n "${NODE_ARGO_TUNNEL_TOKEN:-}" ]; then
+    nohup /bin/sh -lc "exec \"$CLOUDFLARED_BIN_PATH\" tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token \"$NODE_ARGO_TUNNEL_TOKEN\" >>\"$log_file\" 2>&1" >/dev/null 2>&1 &
+  else
+    nohup /bin/sh -lc "exec \"$CLOUDFLARED_BIN_PATH\" tunnel --url \"$origin_url\" --edge-ip-version auto --no-autoupdate --protocol http2 >>\"$log_file\" 2>&1" >/dev/null 2>&1 &
+  fi
+  echo "$!" > "$pid_file"
+}
+
+self_heal_background_services() {
+  [ "${USE_SYSTEMD:-0}" = "1" ] && return 0
+  ensure_runtime_background "sing-box"
+  ensure_runtime_background "xray"
+  ensure_warp_background
+  ensure_argo_background
+}
+
 heartbeat() {
   local bytes_in bytes_out memory cpu connections version
   local warp_ipv6_value warp_status_value warp_endpoint_value
@@ -1087,6 +1185,7 @@ loop() {
   local now heartbeat_interval version_pull_interval next_wake_at sleep_for max_heartbeat_at max_reconcile_at
   while true; do
     load_agent_env
+    self_heal_background_services
     now="$(unix_now)"
     heartbeat_interval="${HEARTBEAT_INTERVAL_SECONDS:-15}"
     version_pull_interval="${VERSION_PULL_INTERVAL_SECONDS:-15}"
@@ -1174,6 +1273,74 @@ start_agent_background() {
   echo "$!" > "$pid_file"
 }
 
+write_user_autostart_launcher() {
+  [ "$INSTALL_MODE" = "user" ] || return 0
+  mkdir -p "$(dirname "$USER_AUTOSTART_SCRIPT")"
+  cat >"$USER_AUTOSTART_SCRIPT" <<EOF
+#!/usr/bin/env bash
+set -eu
+
+AGENT_ENV_FILE=$AGENT_ENV_FILE
+
+[ -f "\$AGENT_ENV_FILE" ] || exit 0
+. "\$AGENT_ENV_FILE"
+
+AGENT_BIN="\${AGENT_BIN:-$HOME/.local/bin/nodehubsapi-agent}"
+STATE_DIR="\${STATE_DIR:-$HOME/.local/share/nodehubsapi}"
+PID_FILE="\$STATE_DIR/agent.pid"
+LOG_FILE="\$STATE_DIR/agent.log"
+PID=""
+
+[ "\${USE_SYSTEMD:-0}" = "1" ] && exit 0
+
+mkdir -p "\$STATE_DIR"
+
+if [ -f "\$PID_FILE" ]; then
+  PID="\$(cat "\$PID_FILE" 2>/dev/null || true)"
+  if [ -n "\$PID" ] && kill -0 "\$PID" 2>/dev/null; then
+    exit 0
+  fi
+  rm -f "\$PID_FILE"
+fi
+
+if [ ! -x "\$AGENT_BIN" ]; then
+  exit 0
+fi
+
+nohup "\$AGENT_BIN" >>"\$LOG_FILE" 2>&1 &
+echo "\$!" > "\$PID_FILE"
+EOF
+  chmod +x "$USER_AUTOSTART_SCRIPT"
+}
+
+ensure_profile_hook() {
+  local profile_file="$1"
+  local marker_begin="# >>> nodehubsapi autostart >>>"
+  local marker_end="# <<< nodehubsapi autostart <<<"
+  [ -f "$profile_file" ] || : >"$profile_file"
+  if grep -F "$marker_begin" "$profile_file" >/dev/null 2>&1; then
+    return 0
+  fi
+  cat >>"$profile_file" <<EOF
+
+$marker_begin
+if [ -x "$USER_AUTOSTART_SCRIPT" ]; then
+  "$USER_AUTOSTART_SCRIPT" >/dev/null 2>&1 || true
+fi
+$marker_end
+EOF
+}
+
+install_user_login_autostart() {
+  [ "$INSTALL_MODE" = "user" ] || return 0
+  [ "$USE_SYSTEMD" = "1" ] && return 0
+  write_user_autostart_launcher
+  ensure_profile_hook "$HOME/.profile"
+  ensure_profile_hook "$HOME/.bash_profile"
+  ensure_profile_hook "$HOME/.bash_login"
+  ensure_profile_hook "$HOME/.zprofile"
+}
+
 print_summary() {
   cat <<EOF
 nodehubsapi agent installed.
@@ -1188,6 +1355,8 @@ nodehubsapi agent installed.
 - Version pull interval: $VERSION_PULL_INTERVAL_SECONDS s
 - Mandatory bootstrap:
 $([ "$NODE_NETWORK_TYPE" = "public" ] && printf '%s' "TLS certificate -> $BOOTSTRAP_CERT_PATH (CF DNS token uses lego DNS challenge; otherwise lego standalone challenge)" || printf '%s' "Argo -> $STATE_DIR/argo/domain")
+- User autostart:
+$([ "$INSTALL_MODE" = "user" ] && [ "$USE_SYSTEMD" != "1" ] && printf '%s' "$USER_AUTOSTART_SCRIPT (triggered from login shell profiles)" || printf '%s' "not required")
 - Hook directories:
   $ETC_DIR/hooks/pre-apply.d
   $ETC_DIR/hooks/post-apply.d
@@ -1201,6 +1370,7 @@ write_agent_env
 write_agent_binary
 run_network_bootstrap
 if ! write_service; then
+  install_user_login_autostart
   start_agent_background
 fi
 cleanup_tmp_dir
