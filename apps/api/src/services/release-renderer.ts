@@ -1059,6 +1059,7 @@ function buildBootstrapNotes(node: NodeRecord, kind: ReleaseKind, bootstrapOptio
   }
   if (bootstrapOptions.installWarp) {
     notes.push(bootstrapOptions.warpLicenseKey ? 'Bootstrap carries an inline WARP License Key.' : 'Bootstrap registers WARP without a License Key.')
+    notes.push('WARP registration uses sing-box to generate the WireGuard keypair and fetches sing-box automatically when it is missing.')
   }
   notes.push(`Heartbeat interval: ${bootstrapOptions.heartbeatIntervalSeconds}s.`)
   notes.push(`Version pull interval: ${bootstrapOptions.versionPullIntervalSeconds}s.`)

@@ -779,22 +779,66 @@ save_warp_runtime() {
   printf '%s\n' "$endpoint" > "$warp_dir/endpoint"
 }
 
+ensure_sing_box_binary_for_warp() {
+  local existing_bin="$RUNTIME_BIN_DIR/sing-box"
+  if [ -x "$existing_bin" ]; then
+    printf '%s' "$existing_bin"
+    return 0
+  fi
+  if command -v sing-box >/dev/null 2>&1; then
+    command -v sing-box
+    return 0
+  fi
+
+  warn "sing-box is missing; installing it to generate the WARP WireGuard keypair."
+  local RUNTIME_ENGINE="sing-box"
+  local RUNTIME_VERSION=""
+  local RUNTIME_BINARY_NAME="sing-box"
+  local RUNTIME_INSTALL_PATH_DEFAULT="/usr/local/bin/sing-box"
+  local RUNTIME_ARCHIVE_FORMAT="tar.gz"
+  local RUNTIME_INSTALL_PATH=""
+  resolve_runtime_install_path
+  install_runtime_binary || return 1
+  printf '%s' "$RUNTIME_INSTALL_PATH"
+}
+
+generate_warp_keypair_with_sing_box() {
+  local sing_box_bin key_output private_key public_key fallback_keys
+  sing_box_bin="$(ensure_sing_box_binary_for_warp)" || return 1
+  key_output="$("$sing_box_bin" generate wg-keypair 2>/dev/null || true)"
+  [ -n "$key_output" ] || {
+    warn "sing-box failed to generate a WARP WireGuard keypair."
+    return 1
+  }
+
+  private_key="$(printf '%s\n' "$key_output" | grep -i 'private' | grep -oE '[A-Za-z0-9+/=]{43,}' | head -n1 || true)"
+  public_key="$(printf '%s\n' "$key_output" | grep -i 'public' | grep -oE '[A-Za-z0-9+/=]{43,}' | head -n1 || true)"
+  if [ -z "$private_key" ] || [ -z "$public_key" ]; then
+    fallback_keys="$(printf '%s\n' "$key_output" | grep -oE '[A-Za-z0-9+/=]{43,}' | head -n2 || true)"
+    private_key="$(printf '%s\n' "$fallback_keys" | sed -n '1p')"
+    public_key="$(printf '%s\n' "$fallback_keys" | sed -n '2p')"
+  fi
+
+  [ -n "$private_key" ] || return 1
+  [ -n "$public_key" ] || return 1
+  printf '%s\n%s\n' "$private_key" "$public_key"
+}
+
 register_warp_via_api() {
   local warp_dir="$STATE_DIR/warp"
   local config_file="$warp_dir/warp.conf"
-  local wg_bin reg_api reg_payload response private_key public_key tos serial
+  local keypair_output reg_api reg_payload response private_key public_key tos serial
   local device_id access_token ipv6 host port client_id_b64 reserved endpoint bytes b1 b2 b3
   mkdir -p "$warp_dir"
   if [ -s "$config_file" ] && [ -s "$warp_dir/private_key" ] && [ -s "$warp_dir/v6" ]; then
     return 0
   fi
   ensure_command curl curl ca-certificates || return 1
-  ensure_command wg wireguard-tools || return 1
-  wg_bin="$(command -v wg)"
   reg_api="https://api.cloudflareclient.com/v0a4005/reg"
-  private_key="$("$wg_bin" genkey 2>/dev/null || true)"
+  keypair_output="$(generate_warp_keypair_with_sing_box)" || return 1
+  private_key="$(printf '%s\n' "$keypair_output" | sed -n '1p')"
+  public_key="$(printf '%s\n' "$keypair_output" | sed -n '2p')"
   [ -n "$private_key" ] || return 1
-  public_key="$(printf '%s' "$private_key" | "$wg_bin" pubkey 2>/dev/null || true)"
   [ -n "$public_key" ] || return 1
   tos="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
   serial="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)"
@@ -1132,11 +1176,11 @@ main() {
   ensure_tls_certificate
   apply_runtime_plans
   cp "$ETC_DIR/runtime/release.json" "$STATE_DIR/releases/current.json"
-  if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then
-    ensure_warp_bootstrap
-  fi
   if [ "$RELEASE_KIND" = "bootstrap" ]; then
     apply_bootstrap_runtime_binaries
+  fi
+  if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then
+    ensure_warp_bootstrap
   fi
   apply_agent_schedule_settings
   run_hooks "$ETC_DIR/hooks/post-apply.d"

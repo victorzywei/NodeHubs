@@ -513,6 +513,7 @@ describe('release renderer', () => {
     expect(artifact.bootstrap.installSingBox).toBe(true)
     expect(artifact.bootstrap.installXray).toBe(true)
     expect(artifact.bootstrap.runtimeBinaries.map((item) => item.engine).sort()).toEqual(['sing-box', 'xray'])
+    expect(artifact.bootstrap.notes.some((note) => note.includes('uses sing-box to generate the WireGuard keypair'))).toBe(true)
   })
 
   it('repairs placeholder secrets before rendering xray shadowsocks 2022 configs', () => {

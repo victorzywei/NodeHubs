@@ -1879,7 +1879,7 @@ onMounted(() => { if (adminKey.value) login() })
                   <input type="checkbox" class="form-checkbox" v-model="publishBootstrap.installWarp" />
                   <div class="publish-template-copy">
                     <div class="publish-template-name">注册 WARP</div>
-                    <div class="publish-template-meta">可选填写本次 bootstrap 使用的 WARP License Key；留空则按普通 WARP 注册流程执行。</div>
+                    <div class="publish-template-meta">可选填写本次 bootstrap 使用的 WARP License Key；注册时使用 sing-box 生成 WireGuard 密钥，缺失时会自动拉取 sing-box。</div>
                   </div>
                 </label>
                 <div v-if="publishBootstrap.installWarp" class="form-group" style="margin:8px 0 0">

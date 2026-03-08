@@ -185,8 +185,11 @@ describe('agent install scripts', () => {
     expect(script).toContain('schedule_agent_restart_if_needed')
     expect(script).toContain('if [ "$RELEASE_KIND" = "bootstrap" ] && [ "$BOOTSTRAP_INSTALL_WARP" = "1" ]; then')
     expect(script).toContain('apply_bootstrap_runtime_binaries')
+    expect(script).toContain('ensure_sing_box_binary_for_warp() {')
+    expect(script).toContain('generate wg-keypair')
     expect(script).toContain('Issued TLS certificate via lego standalone HTTP challenge.')
     expect(script).not.toContain('BOOTSTRAP_INSTALL_ARGO')
+    expect(script).not.toContain('wireguard-tools')
   })
 
   it('builds bootstrap apply scripts that can install sing-box and xray binaries', () => {
