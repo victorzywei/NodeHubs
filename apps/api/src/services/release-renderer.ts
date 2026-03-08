@@ -895,7 +895,7 @@ function buildRuntimeConfig(
       if (endpointBypassRule) rules.push(endpointBypassRule)
 
       outbounds.push({
-        tag: 'x-warp-out',
+        tag: 'warp-out',
         protocol: 'wireguard',
         settings: {
           secretKey: warp.privateKey,
@@ -910,16 +910,7 @@ function buildRuntimeConfig(
           reserved: warp.reserved,
           mtu: warp.mtu,
           kernelMode: warp.systemInterface,
-        },
-      })
-      outbounds.push({
-        tag: 'warp-out',
-        protocol: 'freedom',
-        settings: {
           domainStrategy: 'ForceIPv6v4',
-        },
-        proxySettings: {
-          tag: 'x-warp-out',
         },
       })
       routing.domainStrategy = 'IPOnDemand'

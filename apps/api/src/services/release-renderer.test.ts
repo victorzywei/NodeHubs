@@ -516,6 +516,82 @@ describe('release renderer', () => {
     expect(artifact.bootstrap.notes.some((note) => note.includes('uses sing-box to generate the WireGuard keypair'))).toBe(true)
   })
 
+  it('renders xray warp exit as a direct wireguard outbound', () => {
+    const runtimeCatalog = buildRuntimeCatalog()
+    const artifact = renderReleaseArtifact({
+      releaseId: 'rel_xray_warp',
+      revision: 9,
+      kind: 'runtime',
+      configRevision: 9,
+      bootstrapRevision: 1,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: 'xray warp enabled',
+      summary: 'runtime update',
+      node: {
+        ...createNode(),
+        warpEndpoint: 'engage.cloudflareclient.com:2408',
+        warpIpv6: '2606:4700:d0::a29f:c006',
+        warpPrivateKey: 'template-private-key',
+        warpReserved: [7, 8, 9],
+      },
+      templates: [
+        {
+          ...createTemplate(),
+          id: 'tpl_xray_warp',
+          engine: 'xray',
+          warpExit: true,
+          warpRouteMode: 'all',
+          defaults: {
+            ...createTemplate().defaults,
+            warp_server: 'engage.cloudflareclient.com',
+            warp_server_port: 2408,
+            warp_private_key: 'template-private-key',
+            warp_peer_public_key: 'template-peer-key',
+            warp_system_interface: 'false',
+            warp_mtu: 1280,
+            reserved: '7,8,9',
+          },
+        },
+      ],
+      bootstrapOptions: {
+        installWarp: false,
+        warpLicenseKey: '',
+        heartbeatIntervalSeconds: 15,
+        versionPullIntervalSeconds: 15,
+        installSingBox: false,
+        installXray: false,
+      },
+    }, runtimeCatalog)
+
+    const runtimeConfig = JSON.parse(artifact.runtimes[0]?.files[0]?.content || '{}') as {
+      outbounds?: Array<Record<string, unknown>>
+      routing?: { rules?: Array<Record<string, unknown>>; domainStrategy?: string }
+    }
+    const outbounds = runtimeConfig.outbounds || []
+    const warpOutbound = outbounds.find((item) => String(item.tag || '') === 'warp-out')
+
+    expect(outbounds.some((item) => String(item.tag || '') === 'x-warp-out')).toBe(false)
+    expect(warpOutbound).toMatchObject({
+      tag: 'warp-out',
+      protocol: 'wireguard',
+      settings: {
+        secretKey: 'template-private-key',
+        address: ['172.16.0.2/32', '2606:4700:d0::a29f:c006/128'],
+        reserved: [7, 8, 9],
+        mtu: 1280,
+        kernelMode: false,
+        domainStrategy: 'ForceIPv6v4',
+      },
+    })
+    expect((warpOutbound?.settings as { peers?: Array<Record<string, unknown>> } | undefined)?.peers?.[0]).toMatchObject({
+      publicKey: 'template-peer-key',
+      endpoint: 'engage.cloudflareclient.com:2408',
+      allowedIPs: ['0.0.0.0/0', '::/0'],
+    })
+    expect(runtimeConfig.routing?.domainStrategy).toBe('IPOnDemand')
+    expect(runtimeConfig.routing?.rules?.some((rule) => JSON.stringify(rule).includes('"outboundTag":"warp-out"'))).toBe(true)
+  })
+
   it('repairs placeholder secrets before rendering xray shadowsocks 2022 configs', () => {
     const runtimeCatalog = buildRuntimeCatalog()
     const artifact = renderReleaseArtifact({
