@@ -81,6 +81,34 @@ function logout() {
 }
 
 // ---- Data Loading ----
+function hasWarpSourceData(node: NodeRecord) {
+  return Boolean((node.warpPrivateKey || '').trim())
+    || Boolean((node.warpEndpoint || '').trim())
+    || Boolean((node.warpIpv6 || '').trim())
+    || (Array.isArray(node.warpReserved) && node.warpReserved.length === 3)
+}
+
+function findNodeById(nodeList: NodeRecord[], nodeId: string | null | undefined) {
+  if (!nodeId) return null
+  return nodeList.find((node) => node.id === nodeId) || null
+}
+
+function syncNodeSelections(nextNodes: NodeRecord[]) {
+  if (selectedNode.value) selectedNode.value = findNodeById(nextNodes, selectedNode.value.id)
+  if (selectedReleaseLogNode.value) selectedReleaseLogNode.value = findNodeById(nextNodes, selectedReleaseLogNode.value.id)
+  if (publishNode.value) publishNode.value = findNodeById(nextNodes, publishNode.value.id)
+  if (warpSourceNodeId.value && !findNodeById(nextNodes, warpSourceNodeId.value)) {
+    warpSourceNodeId.value = selectedNode.value?.id || nextNodes.find(hasWarpSourceData)?.id || ''
+  }
+}
+
+async function refreshNodesData() {
+  const nextNodes = await api.listNodes(adminKey.value)
+  nodes.value = nextNodes
+  syncNodeSelections(nextNodes)
+  return nextNodes
+}
+
 async function loadAll() {
   loading.value = true
   try {
@@ -90,6 +118,7 @@ async function loadAll() {
       api.listSubscriptions(adminKey.value),
     ])
     nodes.value = n; templates.value = t; subscriptions.value = s
+    syncNodeSelections(n)
   } catch (e:any) { toast('error', e.message) }
   loading.value = false
 }
@@ -423,13 +452,7 @@ function closeTemplateModal() {
   resetTemplateForm()
 }
 
-const warpSourceNodes = computed(() =>
-  nodes.value.filter((node) =>
-    Boolean((node.warpPrivateKey || '').trim())
-    || Boolean((node.warpEndpoint || '').trim())
-    || Boolean((node.warpIpv6 || '').trim()),
-  ),
-)
+const warpSourceNodes = computed(() => nodes.value.filter(hasWarpSourceData))
 
 // Protocol options based on engine
 const protocolOptions = computed(() => {
@@ -1137,11 +1160,19 @@ function parseWarpEndpoint(value: string): { host: string; port: number } | null
   }
 }
 
-function fillWarpDefaultsFromNode() {
+async function fillWarpDefaultsFromNode() {
+  let latestNodes = nodes.value
+  try {
+    latestNodes = await refreshNodesData()
+  } catch (e:any) {
+    toast('error', e.message || '刷新节点数据失败')
+    return
+  }
+
   const sourceNode =
-    nodes.value.find((node) => node.id === warpSourceNodeId.value)
-    || selectedNode.value
-    || warpSourceNodes.value[0]
+    findNodeById(latestNodes, warpSourceNodeId.value)
+    || findNodeById(latestNodes, selectedNode.value?.id)
+    || latestNodes.find(hasWarpSourceData)
     || null
   if (!sourceNode) {
     toast('error', 'No node with WARP report data available')
@@ -1245,6 +1276,17 @@ function getWarpStatusText(n: NodeRecord) {
   if (warpStatus.includes('running')) return 'Running'
   if (warpStatus.includes('installed')) return 'Installed'
   return 'Not Installed'
+}
+
+function getWarpPrivateKeyText(n: NodeRecord) {
+  return (n.warpPrivateKey || '').trim() || '-'
+}
+
+function getWarpReservedText(n: NodeRecord) {
+  if (Array.isArray(n.warpReserved) && n.warpReserved.length === 3) {
+    return n.warpReserved.map((value) => Number(value)).join(',')
+  }
+  return '-'
 }
 
 function getRuntimeVersion(n: NodeRecord) {
@@ -1697,6 +1739,8 @@ onMounted(() => { if (adminKey.value) login() })
             </div>
             <div class="detail-row"><span class="detail-label">WARP IPv6</span><span class="detail-value text-mono">{{ selectedNode.warpIpv6 || '-' }}</span></div>
             <div class="detail-row"><span class="detail-label">WARP Endpoint</span><span class="detail-value text-mono">{{ selectedNode.warpEndpoint || '-' }}</span></div>
+            <div class="detail-row"><span class="detail-label">WARP Private Key</span><span class="detail-value text-mono">{{ getWarpPrivateKeyText(selectedNode) }}</span></div>
+            <div class="detail-row"><span class="detail-label">WARP Reserved</span><span class="detail-value text-mono">{{ getWarpReservedText(selectedNode) }}</span></div>
             <div class="detail-row">
               <span class="detail-label">Argo</span>
               <span class="detail-value">
