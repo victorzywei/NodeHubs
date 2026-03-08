@@ -890,10 +890,9 @@ export async function publishNodeRelease(
   } catch (error) {
     await services.db.run(
       `UPDATE nodes
-       SET desired_release_revision = ?, current_release_status = ?, updated_at = ?
+       SET current_release_status = ?, updated_at = ?
        WHERE id = ? AND desired_release_revision = ?`,
       [
-        Math.max(0, reserved.revision - 1),
         'failed',
         nowIso(),
         nodeId,
@@ -1211,15 +1210,8 @@ export async function acknowledgeRelease(
     )
   } else if (status === 'failed') {
     await services.db.run(
-      `UPDATE nodes
-       SET desired_release_revision = CASE
-         WHEN desired_release_revision = ? THEN current_release_revision
-         ELSE desired_release_revision
-       END,
-       current_release_status = ?,
-       updated_at = ?
-       WHERE id = ?`,
-      [Number(release.revision || 0), status, updatedAt, nodeId],
+      'UPDATE nodes SET current_release_status = ?, updated_at = ? WHERE id = ?',
+      [status, updatedAt, nodeId],
     )
   } else {
     await services.db.run(

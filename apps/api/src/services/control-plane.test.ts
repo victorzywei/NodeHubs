@@ -124,7 +124,7 @@ function createValidTemplateInput(overrides: Partial<CreateTemplateInput> = {}):
 }
 
 describe('control-plane release flow', () => {
-  it('stops reconcile delivery after a failed release and rolls desired revision back', async () => {
+  it('stops reconcile delivery after a failed release without rolling desired revision back', async () => {
     const services = createServices()
     const node = await createNode(services, {
       name: 'Node A',
@@ -169,7 +169,8 @@ describe('control-plane release flow', () => {
     expect(afterFailed?.release).toBeNull()
 
     const latestNode = await getNodeById(services, node.id)
-    expect(latestNode?.desiredReleaseRevision).toBe(latestNode?.currentReleaseRevision)
+    expect(latestNode?.desiredReleaseRevision).toBe(release?.revision)
+    expect(latestNode?.currentReleaseRevision).toBe(0)
     expect(latestNode?.currentReleaseStatus).toBe('failed')
   })
 
