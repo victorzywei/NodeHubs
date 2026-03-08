@@ -1151,20 +1151,39 @@ function fillWarpDefaultsFromNode() {
   const nextDefaults = { ...newTemplate.value.defaults }
   let patched = 0
   const privateKey = (sourceNode.warpPrivateKey || '').trim()
+  const peerPublicKey = (sourceNode.warpPeerPublicKey || '').trim()
+  const localAddressIpv4 = (sourceNode.warpLocalAddressIpv4 || '').trim()
+  const ipv6 = (sourceNode.warpIpv6 || '').trim()
+  const reservedValues = Array.isArray(sourceNode.warpReserved) && sourceNode.warpReserved.length === 3
+    ? sourceNode.warpReserved
+    : null
+  const hasNodeReserved = Array.isArray(reservedValues)
+  const endpoint = parseWarpEndpoint(sourceNode.warpEndpoint || '')
+  const hasReportedWarpData = Boolean(privateKey || peerPublicKey || localAddressIpv4 || ipv6 || endpoint || hasNodeReserved)
   if (privateKey) {
     nextDefaults['warp_private_key'] = privateKey
     patched += 1
   }
-  const ipv6 = (sourceNode.warpIpv6 || '').trim()
+  if (peerPublicKey) {
+    nextDefaults['warp_peer_public_key'] = peerPublicKey
+    patched += 1
+  }
+  if (typeof sourceNode.warpSystemInterface === 'boolean' && hasReportedWarpData) {
+    nextDefaults['warp_system_interface'] = sourceNode.warpSystemInterface
+    patched += 1
+  }
+  if (localAddressIpv4) {
+    nextDefaults['warp_local_address_ipv4'] = localAddressIpv4
+    patched += 1
+  }
   if (ipv6) {
     nextDefaults['warp_local_address_ipv6'] = ensureIpv6Cidr(ipv6)
     patched += 1
   }
-  if (Array.isArray(sourceNode.warpReserved) && sourceNode.warpReserved.length === 3) {
-    nextDefaults['warp_reserved'] = sourceNode.warpReserved.map((value) => Number(value)).join(',')
+  if (hasNodeReserved) {
+    nextDefaults['warp_reserved'] = reservedValues.map((value) => Number(value)).join(',')
     patched += 1
   }
-  const endpoint = parseWarpEndpoint(sourceNode.warpEndpoint || '')
   if (endpoint) {
     nextDefaults['warp_server'] = endpoint.host
     nextDefaults['warp_server_port'] = endpoint.port

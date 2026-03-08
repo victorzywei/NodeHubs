@@ -772,11 +772,17 @@ save_warp_runtime() {
   local ipv6="$3"
   local reserved="$4"
   local endpoint="$5"
+  local peer_public_key="$6"
+  local system_interface="$7"
+  local local_address_ipv4="$8"
   mkdir -p "$warp_dir"
   printf '%s\n' "$private_key" > "$warp_dir/private_key"
   printf '%s\n' "$ipv6" > "$warp_dir/v6"
   printf '%s\n' "$reserved" > "$warp_dir/reserved"
   printf '%s\n' "$endpoint" > "$warp_dir/endpoint"
+  printf '%s\n' "$peer_public_key" > "$warp_dir/peer_public_key"
+  printf '%s\n' "$system_interface" > "$warp_dir/system_interface"
+  printf '%s\n' "$local_address_ipv4" > "$warp_dir/local_address_ipv4"
 }
 
 ensure_sing_box_binary_for_warp() {
@@ -829,6 +835,7 @@ register_warp_via_api() {
   local config_file="$warp_dir/warp.conf"
   local keypair_output reg_api reg_payload response private_key public_key tos serial
   local device_id access_token ipv6 host port client_id_b64 reserved endpoint bytes b1 b2 b3
+  local peer_public_key system_interface local_address_ipv4
   mkdir -p "$warp_dir"
   if [ -s "$config_file" ] && [ -s "$warp_dir/private_key" ] && [ -s "$warp_dir/v6" ]; then
     return 0
@@ -856,6 +863,9 @@ register_warp_via_api() {
   if [ -n "$NODE_WARP_LICENSE_KEY" ]; then
     curl -fsS "${reg_api}/${device_id}/account" -X PUT -H "Content-Type: application/json; charset=UTF-8" -H "Accept: application/json" -H "Authorization: Bearer ${access_token}" --data "$(printf '{"license":"%s"}' "$NODE_WARP_LICENSE_KEY")" >/dev/null 2>&1 || true
   fi
+  peer_public_key="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+  system_interface="false"
+  local_address_ipv4="172.16.0.2/32"
   endpoint="$(normalize_warp_endpoint "$host" "$port")"
   reserved="0,0,0"
   if [ -n "$client_id_b64" ] && command -v od >/dev/null 2>&1 && command -v base64 >/dev/null 2>&1; then
@@ -869,14 +879,17 @@ register_warp_via_api() {
   fi
   cat >"$config_file" <<EOF
 PrivateKey = ${private_key}
+Address4 = ${local_address_ipv4}
 Address6 = ${ipv6}/128
 Endpoint = ${endpoint}
+PeerPublicKey = ${peer_public_key}
+SystemInterface = ${system_interface}
 Reserved = ${reserved}
 DeviceID = ${device_id}
 Token = ${access_token}
 AllowedIPs = 0.0.0.0/0, ::/0
 EOF
-  save_warp_runtime "$warp_dir" "$private_key" "$ipv6" "$reserved" "$endpoint"
+  save_warp_runtime "$warp_dir" "$private_key" "$ipv6" "$reserved" "$endpoint" "$peer_public_key" "$system_interface" "$local_address_ipv4"
 }
 
 ensure_warp_bootstrap() {

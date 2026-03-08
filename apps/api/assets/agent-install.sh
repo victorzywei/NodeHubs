@@ -37,6 +37,8 @@ VERSION_PULL_INTERVAL_SECONDS=15
 BOOTSTRAP_CERT_PATH=""
 BOOTSTRAP_KEY_PATH=""
 TMP_DIR=""
+DEFAULT_WARP_PEER_PUBLIC_KEY="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+DEFAULT_WARP_LOCAL_ADDRESS_IPV4="172.16.0.2/32"
 __BOOTSTRAP_TLS_DOMAINS__
 trap cleanup_tmp_dir EXIT
 
@@ -945,6 +947,44 @@ warp_private_key() {
   printf '%s' "$value"
 }
 
+warp_peer_public_key() {
+  local value
+  value="$(cat "$STATE_DIR/warp/peer_public_key" 2>/dev/null || true)"
+  if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
+    value="$(grep -E '^PeerPublicKey[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' | tr -d ' ' || true)"
+  fi
+  if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
+    value="$DEFAULT_WARP_PEER_PUBLIC_KEY"
+  fi
+  printf '%s' "$value"
+}
+
+warp_system_interface_json() {
+  local value
+  value="$(cat "$STATE_DIR/warp/system_interface" 2>/dev/null || true)"
+  if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
+    value="$(grep -E '^SystemInterface[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' | tr -d ' ' || true)"
+  fi
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    true|1|yes) printf 'true' ;;
+    false|0|no|'') printf 'false' ;;
+    *) printf 'false' ;;
+  esac
+}
+
+warp_local_address_ipv4() {
+  local value
+  value="$(cat "$STATE_DIR/warp/local_address_ipv4" 2>/dev/null || true)"
+  if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
+    value="$(grep -E '^Address4[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' | tr -d ' ' || true)"
+  fi
+  if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
+    value="$DEFAULT_WARP_LOCAL_ADDRESS_IPV4"
+  fi
+  printf '%s' "$value"
+}
+
 warp_reserved_json() {
   local value a b c
   value="$(cat "$STATE_DIR/warp/reserved" 2>/dev/null || true)"
@@ -1084,7 +1124,8 @@ self_heal_background_services() {
 
 heartbeat() {
   local bytes_in bytes_out memory cpu connections version
-  local warp_ipv6_value warp_status_value warp_endpoint_value warp_private_key_value warp_reserved_value
+  local warp_ipv6_value warp_status_value warp_endpoint_value warp_private_key_value warp_peer_public_key_value
+  local warp_system_interface_value warp_local_address_ipv4_value warp_reserved_value
   local argo_status_value argo_domain_value
   local storage_total storage_used storage_percent
   local payload
@@ -1099,6 +1140,9 @@ EOF_NET
   warp_status_value="$(warp_status)"
   warp_endpoint_value="$(warp_endpoint)"
   warp_private_key_value="$(warp_private_key)"
+  warp_peer_public_key_value="$(warp_peer_public_key)"
+  warp_system_interface_value="$(warp_system_interface_json)"
+  warp_local_address_ipv4_value="$(warp_local_address_ipv4)"
   warp_reserved_value="$(warp_reserved_json)"
   argo_status_value="$(argo_status)"
   argo_domain_value="$(argo_domain)"
@@ -1119,6 +1163,9 @@ EOF_STORAGE
   "warpIpv6": $(json_escape "$warp_ipv6_value"),
   "warpEndpoint": $(json_escape "$warp_endpoint_value"),
   "warpPrivateKey": $(json_escape "$warp_private_key_value"),
+  "warpPeerPublicKey": $(json_escape "$warp_peer_public_key_value"),
+  "warpSystemInterface": ${warp_system_interface_value},
+  "warpLocalAddressIpv4": $(json_escape "$warp_local_address_ipv4_value"),
   "warpReserved": ${warp_reserved_value},
   "argoStatus": $(json_escape "$argo_status_value"),
   "argoDomain": $(json_escape "$argo_domain_value"),
