@@ -921,7 +921,9 @@ warp_ipv6() {
   local value
   value="$(cat "$STATE_DIR/warp/v6" 2>/dev/null || true)"
   if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
-    value="$(grep -E '^Address6[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' | tr -d ' ' || true)"
+    value="$(grep -E '^(Address|Address6)[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}')"
+    # value might be "172.16.0.2/32, 2606:.../128"
+    value="$(printf '%s' "$value" | tr ',' '\n' | grep ':' | tr -d '[:space:]' | head -n 1 || true)"
   fi
   value="${value%%/*}"
   printf '%s' "$value"
@@ -931,8 +933,9 @@ warp_endpoint() {
   local value
   value="$(cat "$STATE_DIR/warp/endpoint" 2>/dev/null || true)"
   if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
-    value="$(grep -E '^Endpoint[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' | tr -d ' ' || true)"
+    value="$(grep -E '^Endpoint[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' || true)"
   fi
+  value="$(printf '%s' "$value" | tr -d ' \t\n\r')"
   printf '%s' "$value"
 }
 
@@ -940,8 +943,9 @@ warp_private_key() {
   local value
   value="$(cat "$STATE_DIR/warp/private_key" 2>/dev/null || true)"
   if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
-    value="$(grep -E '^PrivateKey[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' | tr -d ' ' || true)"
+    value="$(grep -E '^PrivateKey[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' || true)"
   fi
+  value="$(printf '%s' "$value" | tr -d ' \t\n\r')"
   printf '%s' "$value"
 }
 
@@ -949,9 +953,9 @@ warp_reserved_json() {
   local value a b c
   value="$(cat "$STATE_DIR/warp/reserved" 2>/dev/null || true)"
   if [ -z "$value" ] && [ -f "$STATE_DIR/warp/warp.conf" ]; then
-    value="$(grep -E '^Reserved[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' | tr -d ' ' || true)"
+    value="$(grep -E '^Reserved[[:space:]]*=' "$STATE_DIR/warp/warp.conf" 2>/dev/null | head -n 1 | awk -F '=' '{print $2}' || true)"
   fi
-  value="$(printf '%s' "$value" | tr -d '[:space:]')"
+  value="$(printf '%s' "$value" | tr -d '[] \t\n\r')"
   IFS=',' read -r a b c _ <<< "$value"
   if [[ "$a" =~ ^[0-9]+$ ]] && [[ "$b" =~ ^[0-9]+$ ]] && [[ "$c" =~ ^[0-9]+$ ]]; then
     printf '[%s,%s,%s]' "$a" "$b" "$c"
