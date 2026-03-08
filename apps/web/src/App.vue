@@ -1705,7 +1705,7 @@ onMounted(() => { if (adminKey.value) login() })
 
     <!-- Node Detail Panel -->
     <template v-if="selectedNode">
-      <div class="detail-overlay" @click="selectedNode=null"></div>
+      <div class="detail-overlay" @mousedown="selectedNode=null"></div>
       <aside class="detail-panel">
         <div class="detail-panel-header">
           <h2 style="font-size:16px;font-weight:700">{{ selectedNode.name }}</h2>
@@ -1815,7 +1815,7 @@ onMounted(() => { if (adminKey.value) login() })
       </aside>
     </template>
 
-    <div v-if="showReleaseLog" class="modal-overlay" @click.self="closeReleaseLog">
+    <div v-if="showReleaseLog" class="modal-overlay" @mousedown.self="closeReleaseLog">
       <div class="modal-content" style="max-width:880px">
         <div class="modal-header">
           <h3 class="modal-title">版本应用日志</h3>
@@ -1852,7 +1852,7 @@ onMounted(() => { if (adminKey.value) login() })
     </div>
 
     <!-- Publish Release Modal -->
-    <div v-if="showPublishRelease" class="modal-overlay" @click.self="closePublishRelease">
+    <div v-if="showPublishRelease" class="modal-overlay" @mousedown.self="closePublishRelease">
       <div class="modal-content" style="max-width:640px">
         <div class="modal-header">
           <h3 class="modal-title">发布节点版本</h3>
@@ -1991,7 +1991,7 @@ onMounted(() => { if (adminKey.value) login() })
     </div>
 
     <!-- Create Node Modal -->
-    <div v-if="showCreateNode" class="modal-overlay" @click.self="showCreateNode=false">
+    <div v-if="showCreateNode" class="modal-overlay" @mousedown.self="showCreateNode=false">
       <div class="modal-content" style="max-width:600px">
         <div class="modal-header"><h3 class="modal-title">新建节点</h3><button class="modal-close-btn" @click="showCreateNode=false">×</button></div>
         <div class="modal-body" style="max-height:60vh;overflow-y:auto">
@@ -2054,7 +2054,7 @@ onMounted(() => { if (adminKey.value) login() })
     </div>
 
     <!-- Create Template Modal -->
-    <div v-if="showCreateTemplate" class="modal-overlay" @click.self="closeTemplateModal">
+    <div v-if="showCreateTemplate" class="modal-overlay" @mousedown.self="closeTemplateModal">
       <div class="modal-content" style="max-width:640px">
         <div class="modal-header"><h3 class="modal-title">{{ editingTemplateId ? '编辑模板' : '新建模板' }}</h3><button class="modal-close-btn" @click="closeTemplateModal">×</button></div>
         <div class="modal-body" style="max-height:60vh;overflow-y:auto">
@@ -2203,7 +2203,7 @@ onMounted(() => { if (adminKey.value) login() })
     </div>
 
     <!-- Subscription QR Modal -->
-    <div v-if="showSubscriptionQr" class="modal-overlay" @click.self="closeSubscriptionQr">
+    <div v-if="showSubscriptionQr" class="modal-overlay" @mousedown.self="closeSubscriptionQr">
       <div class="modal-content" style="max-width:420px">
         <div class="modal-header"><h3 class="modal-title">订阅二维码</h3><button class="modal-close-btn" @click="closeSubscriptionQr">×</button></div>
         <div class="modal-body" style="display:grid;gap:12px;justify-items:center">
@@ -2220,7 +2220,7 @@ onMounted(() => { if (adminKey.value) login() })
     </div>
 
     <!-- Create Subscription Modal -->
-    <div v-if="showCreateSub" class="modal-overlay" @click.self="closeSubscriptionModal">
+    <div v-if="showCreateSub" class="modal-overlay" @mousedown.self="closeSubscriptionModal">
       <div class="modal-content">
         <div class="modal-header"><h3 class="modal-title">{{ editingSubscriptionId ? '编辑订阅' : '新建订阅' }}</h3><button class="modal-close-btn" @click="closeSubscriptionModal">×</button></div>
         <div class="modal-body">
