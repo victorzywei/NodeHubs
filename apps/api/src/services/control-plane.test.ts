@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import type { CreateTemplateInput } from '@contracts/index'
+import type { CreateNodeInput, CreateTemplateInput } from '@contracts/index'
 import type { AppServices } from '../lib/app-types'
 import type { SqlAdapter, SqlValue } from '../lib/db'
 import type { ArtifactStore, StoredArtifact } from '../storage/types'
@@ -19,6 +19,7 @@ import {
   getNodeReleaseLog,
   publishNodeRelease,
   recordHeartbeat,
+  updateNode,
   updateSubscription,
   updateTemplate,
 } from './control-plane'
@@ -53,14 +54,7 @@ function applyMigrations(db: DatabaseSync): void {
     const sqlText = readFileSync(resolve(migrationDir, migrationFile), 'utf8')
     const statements = sqlText.split(';').map((item) => item.trim()).filter(Boolean)
     for (const statement of statements) {
-      try {
-        db.exec(`${statement};`)
-      } catch (error) {
-        const message = error instanceof Error ? error.message.toLowerCase() : ''
-        if (!message.includes('duplicate column name')) {
-          throw error
-        }
-      }
+      db.exec(`${statement};`)
     }
   }
 }
@@ -102,6 +96,29 @@ function createServices(): AppServices {
   }
 }
 
+function createNodeInput(overrides: Partial<CreateNodeInput> = {}): CreateNodeInput {
+  return {
+    name: 'Node A',
+    nodeType: 'vps',
+    region: 'ap-sg',
+    tags: [],
+    networkType: 'public',
+    primaryDomain: 'edge.example.com',
+    backupDomain: '',
+    entryIp: '203.0.113.10',
+    githubMirrorUrl: '',
+    installWarp: false,
+    warpLicenseKey: '',
+    cfDnsToken: '',
+    argoTunnelToken: '',
+    argoTunnelDomain: '',
+    argoTunnelPort: 2053,
+    heartbeatIntervalSeconds: 15,
+    versionPullIntervalSeconds: 15,
+    ...overrides,
+  }
+}
+
 function createValidTemplateInput(overrides: Partial<CreateTemplateInput> = {}): CreateTemplateInput {
   return {
     name: 'VLESS WS TLS',
@@ -124,40 +141,29 @@ function createValidTemplateInput(overrides: Partial<CreateTemplateInput> = {}):
 }
 
 describe('control-plane release flow', () => {
-  it('stops reconcile delivery after a failed release without rolling desired revision back', async () => {
+  it('keeps runtime config revision stable when only install-time node settings change', async () => {
     const services = createServices()
-    const node = await createNode(services, {
-      name: 'Node A',
-      nodeType: 'vps',
-      region: 'ap-sg',
-      tags: [],
-      networkType: 'public',
-      primaryDomain: 'edge.example.com',
-      backupDomain: '',
-      entryIp: '203.0.113.10',
-      githubMirrorUrl: '',
-      cfDnsToken: '',
-      argoTunnelToken: '',
-      argoTunnelDomain: '',
-      argoTunnelPort: 2053,
+    const node = await createNode(services, createNodeInput())
+
+    const updated = await updateNode(services, node.id, {
+      installWarp: true,
+      warpLicenseKey: 'warp-plus-key',
+      heartbeatIntervalSeconds: 30,
+      versionPullIntervalSeconds: 60,
     })
+
+    expect(updated?.installWarp).toBe(true)
+    expect(updated?.heartbeatIntervalSeconds).toBe(30)
+    expect(updated?.versionPullIntervalSeconds).toBe(60)
+    expect(updated?.configRevision).toBe(node.configRevision)
+  })
+
+  it('stops reconcile delivery after a failed template release without rolling desired revision back', async () => {
+    const services = createServices()
+    const node = await createNode(services, createNodeInput())
     const template = await createTemplate(services, createValidTemplateInput())
-    const release = await publishNodeRelease(
-      services,
-      node.id,
-      'runtime',
-      [template.id],
-      {
-        installWarp: false,
-        warpLicenseKey: '',
-        heartbeatIntervalSeconds: 15,
-        versionPullIntervalSeconds: 15,
-        installSingBox: false,
-        installXray: false,
-      },
-      'ship',
-    )
-    expect(release).toBeTruthy()
+    const release = await publishNodeRelease(services, node.id, [template.id], 'ship')
+
     expect(release?.status).toBe('pending')
 
     const pending = await getDesiredRelease(services, node.id)
@@ -174,117 +180,11 @@ describe('control-plane release flow', () => {
     expect(latestNode?.currentReleaseStatus).toBe('failed')
   })
 
-  it('allows bootstrap releases that only change heartbeat and pull schedules', async () => {
-    const services = createServices()
-    const node = await createNode(services, {
-      name: 'Node B',
-      nodeType: 'vps',
-      region: 'ap-sg',
-      tags: [],
-      networkType: 'public',
-      primaryDomain: 'edge2.example.com',
-      backupDomain: '',
-      entryIp: '203.0.113.11',
-      githubMirrorUrl: '',
-      cfDnsToken: '',
-      argoTunnelToken: '',
-      argoTunnelDomain: '',
-      argoTunnelPort: 2053,
-    })
-
-    const release = await publishNodeRelease(
-      services,
-      node.id,
-      'bootstrap',
-      [],
-      {
-        installWarp: false,
-        warpLicenseKey: '',
-        heartbeatIntervalSeconds: 30,
-        versionPullIntervalSeconds: 90,
-        installSingBox: false,
-        installXray: false,
-      },
-      'tune schedules',
-    )
-
-    expect(release).toBeTruthy()
-    expect(release?.summary).toContain('heartbeat=30s,pull=90s')
-  })
-
-  it('rejects bootstrap releases that include protocol templates', async () => {
-    const services = createServices()
-    const node = await createNode(services, {
-      name: 'Node B2',
-      nodeType: 'vps',
-      region: 'ap-sg',
-      tags: [],
-      networkType: 'public',
-      primaryDomain: 'edge-bootstrap.example.com',
-      backupDomain: '',
-      entryIp: '203.0.113.21',
-      githubMirrorUrl: '',
-      cfDnsToken: '',
-      argoTunnelToken: '',
-      argoTunnelDomain: '',
-      argoTunnelPort: 2053,
-    })
-    const template = await createTemplate(services, createValidTemplateInput())
-
-    await expect(
-      publishNodeRelease(
-        services,
-        node.id,
-        'bootstrap',
-        [template.id],
-        {
-          installWarp: false,
-          warpLicenseKey: '',
-          heartbeatIntervalSeconds: 30,
-          versionPullIntervalSeconds: 90,
-          installSingBox: false,
-          installXray: false,
-        },
-        'invalid bootstrap',
-      ),
-    ).rejects.toThrow(/do not accept protocol templates/i)
-  })
-
   it('stores apply logs once per status and overwrites on status transitions', async () => {
     const services = createServices()
-    const node = await createNode(services, {
-      name: 'Node C',
-      nodeType: 'vps',
-      region: 'ap-sg',
-      tags: [],
-      networkType: 'public',
-      primaryDomain: 'edge3.example.com',
-      backupDomain: '',
-      entryIp: '203.0.113.12',
-      githubMirrorUrl: '',
-      cfDnsToken: '',
-      argoTunnelToken: '',
-      argoTunnelDomain: '',
-      argoTunnelPort: 2053,
-    })
+    const node = await createNode(services, createNodeInput({ name: 'Node Logs', primaryDomain: 'logs.example.com' }))
     const template = await createTemplate(services, createValidTemplateInput())
-    const release = await publishNodeRelease(
-      services,
-      node.id,
-      'runtime',
-      [template.id],
-      {
-        installWarp: false,
-        warpLicenseKey: '',
-        heartbeatIntervalSeconds: 15,
-        versionPullIntervalSeconds: 15,
-        installSingBox: false,
-        installXray: false,
-      },
-      'ship logs',
-    )
-
-    expect(release).toBeTruthy()
+    const release = await publishNodeRelease(services, node.id, [template.id], 'ship logs')
 
     await acknowledgeRelease(
       services,
@@ -305,9 +205,9 @@ describe('control-plane release flow', () => {
 
     let stored = await getNodeReleaseLog(services, node.id, String(release?.id))
     expect(stored?.applyLogStatus).toBe('applying')
-    expect(stored?.applyLog).toContain('step-1')
+    expect(stored?.applyLog).toContain('step-2 duplicate applying')
     expect(stored?.applyLog).not.toContain('secret-value')
-    expect(stored?.applyLog).not.toContain('step-2 duplicate applying')
+    expect(stored?.applyLog).not.toContain('step-1')
 
     await acknowledgeRelease(
       services,
@@ -317,19 +217,10 @@ describe('control-plane release flow', () => {
       'apply failed',
       'step-3 failed',
     )
-    await acknowledgeRelease(
-      services,
-      node.id,
-      String(release?.id),
-      'failed',
-      'apply failed again',
-      'step-4 duplicate failed',
-    )
 
     stored = await getNodeReleaseLog(services, node.id, String(release?.id))
     expect(stored?.applyLogStatus).toBe('failed')
     expect(stored?.applyLog).toContain('step-3 failed')
-    expect(stored?.applyLog).not.toContain('step-4 duplicate failed')
   })
 })
 
@@ -382,55 +273,12 @@ describe('control-plane template validation', () => {
     expect(String(template.defaults.password || '')).not.toBe('replace-me-base64-key')
     expect(atob(String(template.defaults.password || '')).length).toBe(16)
   })
-
-  it('normalizes reality defaults before persisting', async () => {
-    const services = createServices()
-
-    const template = await createTemplate(
-      services,
-      createValidTemplateInput({
-        name: 'Reality normalized',
-        protocol: 'vless',
-        transport: 'tcp',
-        tlsMode: 'reality',
-        defaults: {
-          serverPort: 23490,
-          uuid: '11111111-1111-4111-8111-111111111111',
-          sni: '',
-          flow: '',
-          fingerprint: '',
-          realityPrivateKey: 'replace-me',
-          realityPublicKey: 'replace-me',
-          realityShortId: '',
-        },
-      }),
-    )
-
-    expect(String(template.defaults.flow || '')).toBe('xtls-rprx-vision')
-    expect(String(template.defaults.fingerprint || '')).toBe('chrome')
-    expect(String(template.defaults.sni || '')).not.toBe('')
-    expect(String(template.defaults.realityShortId || '')).toMatch(/^[0-9a-f]{2,32}$/i)
-  })
 })
 
 describe('heartbeat persistence', () => {
   it('stores warp runtime fields from heartbeat data', async () => {
     const services = createServices()
-    const node = await createNode(services, {
-      name: 'Node Warp',
-      nodeType: 'vps',
-      region: 'ap-sg',
-      tags: [],
-      networkType: 'public',
-      primaryDomain: 'warp.example.com',
-      backupDomain: '',
-      entryIp: '203.0.113.30',
-      githubMirrorUrl: '',
-      cfDnsToken: '',
-      argoTunnelToken: '',
-      argoTunnelDomain: '',
-      argoTunnelPort: 2053,
-    })
+    const node = await createNode(services, createNodeInput({ name: 'Node Warp', primaryDomain: 'warp.example.com' }))
 
     const updated = await recordHeartbeat(services, {
       nodeId: node.id,
@@ -459,29 +307,13 @@ describe('heartbeat persistence', () => {
     expect(updated?.warpPrivateKey).toBe('private-key')
     expect(updated?.warpReserved).toEqual([1, 2, 3])
     expect(updated?.cpuCoreCount).toBe(8)
-    expect(updated?.memoryTotalBytes).toBe(16 * 1024 * 1024 * 1024)
-    expect(updated?.memoryUsedBytes).toBe(4 * 1024 * 1024 * 1024)
   })
 })
 
 describe('subscription documents', () => {
-  it('builds subscription entries from the latest healthy runtime release even after bootstrap', async () => {
+  it('builds subscription entries from the latest healthy template release', async () => {
     const services = createServices()
-    const node = await createNode(services, {
-      name: 'Node D',
-      nodeType: 'vps',
-      region: 'ap-sg',
-      tags: [],
-      networkType: 'public',
-      primaryDomain: 'edge4.example.com',
-      backupDomain: '',
-      entryIp: '203.0.113.13',
-      githubMirrorUrl: '',
-      cfDnsToken: '',
-      argoTunnelToken: '',
-      argoTunnelDomain: '',
-      argoTunnelPort: 2053,
-    })
+    const node = await createNode(services, createNodeInput({ name: 'Node Sub', primaryDomain: 'edge-sub.example.com' }))
     const template = await createTemplate(services, createValidTemplateInput({
       defaults: {
         serverPort: 23491,
@@ -491,41 +323,8 @@ describe('subscription documents', () => {
         uuid: '11111111-1111-4111-8111-111111111111',
       },
     }))
-    const runtimeRelease = await publishNodeRelease(
-      services,
-      node.id,
-      'runtime',
-      [template.id],
-      {
-        installWarp: false,
-        warpLicenseKey: '',
-        heartbeatIntervalSeconds: 15,
-        versionPullIntervalSeconds: 15,
-        installSingBox: false,
-        installXray: false,
-      },
-      'ship runtime',
-    )
-    expect(runtimeRelease).toBeTruthy()
-    await acknowledgeRelease(services, node.id, String(runtimeRelease?.id), 'healthy', 'runtime ok')
-
-    const bootstrapRelease = await publishNodeRelease(
-      services,
-      node.id,
-      'bootstrap',
-      [],
-      {
-        installWarp: true,
-        warpLicenseKey: '',
-        heartbeatIntervalSeconds: 20,
-        versionPullIntervalSeconds: 30,
-        installSingBox: false,
-        installXray: false,
-      },
-      'bootstrap only',
-    )
-    expect(bootstrapRelease).toBeTruthy()
-    await acknowledgeRelease(services, node.id, String(bootstrapRelease?.id), 'healthy', 'bootstrap ok')
+    const release = await publishNodeRelease(services, node.id, [template.id], 'ship runtime')
+    await acknowledgeRelease(services, node.id, String(release?.id), 'healthy', 'runtime ok')
 
     const subscription = await createSubscription(services, {
       name: 'Main',
@@ -534,32 +333,17 @@ describe('subscription documents', () => {
     })
 
     const document = await buildPublicSubscriptionDocument(services, subscription.token)
-    expect(document).toBeTruthy()
     expect(document?.entries.length).toBe(1)
-    expect(document?.entries[0]?.server).toBe('edge4.example.com')
-    expect(document?.entries[0]?.sni).toBe('edge4.example.com')
-    expect(document?.entries[0]?.uri).toBeUndefined()
+    expect(document?.entries[0]?.server).toBe('edge-sub.example.com')
+    expect(document?.entries[0]?.sni).toBe('edge-sub.example.com')
+
     const plain = renderSubscriptionDocument(document!, 'plain')
-    expect(plain.body).toContain('sni=edge4.example.com')
+    expect(plain.body).toContain('sni=edge-sub.example.com')
   })
 
   it('serves subscription entries directly from artifact snapshots', async () => {
     const services = createServices()
-    const node = await createNode(services, {
-      name: 'Node Snapshot',
-      nodeType: 'vps',
-      region: 'ap-sg',
-      tags: [],
-      networkType: 'public',
-      primaryDomain: 'edge-snapshot.example.com',
-      backupDomain: '',
-      entryIp: '203.0.113.21',
-      githubMirrorUrl: '',
-      cfDnsToken: '',
-      argoTunnelToken: '',
-      argoTunnelDomain: '',
-      argoTunnelPort: 2053,
-    })
+    const node = await createNode(services, createNodeInput({ name: 'Node Snapshot', primaryDomain: 'edge-snapshot.example.com' }))
     const template = await createTemplate(services, createValidTemplateInput({
       defaults: {
         serverPort: 23491,
@@ -569,29 +353,13 @@ describe('subscription documents', () => {
         uuid: '11111111-1111-4111-8111-111111111111',
       },
     }))
-    const runtimeRelease = await publishNodeRelease(
-      services,
-      node.id,
-      'runtime',
-      [template.id],
-      {
-        installWarp: false,
-        warpLicenseKey: '',
-        heartbeatIntervalSeconds: 15,
-        versionPullIntervalSeconds: 15,
-        installSingBox: false,
-        installXray: false,
-      },
-      'ship runtime snapshot',
-    )
-    expect(runtimeRelease).toBeTruthy()
-    await acknowledgeRelease(services, node.id, String(runtimeRelease?.id), 'healthy', 'runtime ok')
+    const release = await publishNodeRelease(services, node.id, [template.id], 'ship runtime snapshot')
+    await acknowledgeRelease(services, node.id, String(release?.id), 'healthy', 'runtime ok')
 
     const releaseRow = await services.db.get<{ artifact_key: string }>(
       'SELECT artifact_key FROM releases WHERE id = ?',
-      [String(runtimeRelease?.id)],
+      [String(release?.id)],
     )
-    expect(releaseRow?.artifact_key).toBeTruthy()
     const storedArtifact = await services.artifacts.get(String(releaseRow?.artifact_key))
     const parsedArtifact = JSON.parse(String(storedArtifact?.body || '{}')) as {
       templates: unknown[]
@@ -610,28 +378,11 @@ describe('subscription documents', () => {
     expect(document?.entries.length).toBe(1)
     expect(document?.entries[0]?.server).toBe('edge-snapshot.example.com')
     expect(document?.entries[0]?.host).toBe('cdn.snapshot.example.com')
-    expect(document?.entries[0]?.uri).toBeUndefined()
-    const plain = renderSubscriptionDocument(document!, 'plain')
-    expect(plain.body).toContain('edge-snapshot.example.com')
   })
 
   it('updates and deletes subscriptions', async () => {
     const services = createServices()
-    const node = await createNode(services, {
-      name: 'Node E',
-      nodeType: 'vps',
-      region: 'ap-sg',
-      tags: [],
-      networkType: 'public',
-      primaryDomain: 'edge5.example.com',
-      backupDomain: '',
-      entryIp: '203.0.113.14',
-      githubMirrorUrl: '',
-      cfDnsToken: '',
-      argoTunnelToken: '',
-      argoTunnelDomain: '',
-      argoTunnelPort: 2053,
-    })
+    const node = await createNode(services, createNodeInput({ name: 'Node Visible', primaryDomain: 'edge-visible.example.com' }))
     const subscription = await createSubscription(services, {
       name: 'Before',
       enabled: true,

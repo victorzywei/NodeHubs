@@ -10,7 +10,7 @@ This project is greenfield. It does not preserve old project parameter names or 
 ## What is implemented
 
 - Node, template, and subscription CRUD
-- Runtime and bootstrap revisions tracked separately
+- Runtime releases only; node install parameters are managed on the node itself
 - Release publishing with real artifact generation
 - Protocol template preset catalog
 - Public subscription endpoint that only reads healthy current releases
@@ -41,7 +41,6 @@ Agent endpoints:
 - `GET /api/nodes/agent/reconcile?nodeId=...`
 - `GET /api/nodes/agent/reconcile?nodeId=...&format=env`
 - `GET /api/nodes/agent/releases/:releaseId/apply-script?nodeId=...`
-- `GET /api/nodes/agent/releases/:releaseId/artifact?nodeId=...`
 - `POST /api/nodes/agent/releases/:releaseId/ack`
 
 ## Local development
@@ -124,9 +123,10 @@ Use `apps/api/.dev.vars.example` as the local Worker env template.
 - Supported rendered transports today: `ws`, `grpc`, `tcp`
 - Public subscriptions read only `healthy` releases that match the node's `current_release_revision`
 - Release artifacts store rendered runtime files, pinned runtime binary metadata, and subscription URIs
-- The generated agent install script does not use `apt`, `yum`, `dnf`, or `apk`
+- The generated agent install script downloads the agent and runtime binaries directly from upstream releases
+- When `installWarp` is enabled, the installer uses the host package manager to install the official Cloudflare WARP client
 - The generated agent uses `curl`, `wget`, or `busybox wget` and falls back to `unzip`, `bsdtar`, `python3`, or `busybox unzip` for zip archives
-- Hooks can be dropped into `/etc/nodehubsapi/hooks/pre-apply.d`, `/etc/nodehubsapi/hooks/post-apply.d`, and `/etc/nodehubsapi/hooks/bootstrap.d`
+- Hooks can be dropped into `/etc/nodehubsapi/hooks/pre-apply.d` and `/etc/nodehubsapi/hooks/post-apply.d`
 
 ## Validation
 
@@ -141,4 +141,4 @@ The current repo passes:
 - Add richer protocol renderers beyond the current supported set
 - Add release rollback and timeout jobs
 - Add aggregated traffic rollups
-- Add one-time bootstrap tickets instead of long-lived install scripts if you want stronger install security
+- Add one-time install tickets instead of long-lived install scripts if you want stronger install security

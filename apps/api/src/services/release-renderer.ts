@@ -1,5 +1,4 @@
 import type {
-  BootstrapOptions,
   NodeRecord,
   PublicSubscriptionDocument,
   ReleaseArtifact,
@@ -18,13 +17,11 @@ type RenderContext = {
   revision: number
   kind: ReleaseKind
   configRevision: number
-  bootstrapRevision: number
   createdAt: string
   message: string
   summary: string
   node: NodeRecord
   templates: TemplateRecord[]
-  bootstrapOptions: BootstrapOptions
 }
 
 type NormalizedTemplate = {
@@ -367,7 +364,10 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
   const warpExit = repairedTemplate.warpExit === true || readBoolean(defaults.warp_exit, false)
   const warpRouteModeRaw = readString(defaults, 'warp_route_mode', repairedTemplate.warpRouteMode || 'all')
   const warpRouteMode: TemplateRecord['warpRouteMode'] = warpRouteModeRaw === 'ipv4' || warpRouteModeRaw === 'ipv6' ? warpRouteModeRaw : 'all'
-  const listenPort = readNumber(defaults, ['serverPort', 'port'], defaultPort(repairedTemplate))
+  const templateListenPort = readNumber(defaults, ['serverPort', 'port'], defaultPort(repairedTemplate))
+  const listenPort = node.networkType === 'noPublicIp'
+    ? Number(node.argoTunnelPort || 2053)
+    : templateListenPort
   const host = readString(defaults, 'host', defaultTemplateHost(node, server))
   const sni = readString(defaults, 'sni', defaultTemplateSni(node, host || server))
   const normalized: NormalizedTemplate = {
@@ -839,52 +839,6 @@ function buildRuntimeConfig(
   }
 }
 
-function buildBootstrapRuntimeBinaries(
-  runtimeCatalog: RuntimeCatalog,
-  bootstrapOptions: BootstrapOptions,
-): RuntimeBinaryPlan[] {
-  const plans: RuntimeBinaryPlan[] = []
-  if (bootstrapOptions.installSingBox) {
-    plans.push(cloneBinaryPlan(runtimeCatalog['sing-box']))
-  }
-  if (bootstrapOptions.installXray) {
-    plans.push(cloneBinaryPlan(runtimeCatalog.xray))
-  }
-  return plans
-}
-
-function buildBootstrapNotes(node: NodeRecord, kind: ReleaseKind, bootstrapOptions: BootstrapOptions): string[] {
-  const notes = [
-    'Bootstrap releases only manage agent/runtime program files and bootstrap-side services.',
-    'Runtime releases alone apply protocol templates and runtime config files under /etc/nodehubsapi/runtime.',
-    'Deploy commands always install the agent and perform mandatory network bootstrap based on the node network type.',
-  ]
-  if (node.networkType === 'public') {
-    notes.push('Public-IP nodes bootstrap TLS certificates during agent installation.')
-  } else {
-    notes.push('No-public-IP nodes bootstrap Argo during agent installation.')
-  }
-  const actions = [
-    bootstrapOptions.installWarp ? 'WARP' : '',
-    bootstrapOptions.installSingBox ? 'sing-box' : '',
-    bootstrapOptions.installXray ? 'xray' : '',
-  ].filter(Boolean)
-  if (actions.length > 0) {
-    notes.push(`Selected bootstrap actions: ${actions.join(', ')}.`)
-  }
-  if (bootstrapOptions.installWarp) {
-    notes.push(bootstrapOptions.warpLicenseKey ? 'Bootstrap carries an inline WARP License Key for the official warp-cli client.' : 'Bootstrap installs the official warp-cli client without a License Key.')
-    notes.push('WARP bootstrap requires root-mode node permissions and uses the official Cloudflare Linux client workflow.')
-  }
-  notes.push(`Templates with WARP exit use the node-side ${WARP_INTERFACE_NAME} interface as the outbound egress.`)
-  notes.push(`Heartbeat interval: ${bootstrapOptions.heartbeatIntervalSeconds}s.`)
-  notes.push(`Version pull interval: ${bootstrapOptions.versionPullIntervalSeconds}s.`)
-  if (kind === 'bootstrap') {
-    notes.push('Bootstrap revision changed. Re-run local bootstrap hooks before marking the node ready.')
-  }
-  return notes
-}
-
 export function listTemplatePresets(): TemplatePreset[] {
   return TEMPLATE_PRESETS.map((item) => hydrateTemplatePreset(item))
 }
@@ -910,31 +864,27 @@ function groupTemplatesByEngine(templates: NormalizedTemplate[]): Record<Templat
 }
 
 export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: RuntimeCatalog): ReleaseArtifact {
-  const isRuntimeRelease = context.kind === 'runtime'
-  const runtimeTemplates = isRuntimeRelease ? context.templates : []
+  const runtimeTemplates = context.templates
   const normalizedTemplates = runtimeTemplates.map((template) => normalizeTemplate(context.node, template))
   const groupedTemplates = groupTemplatesByEngine(normalizedTemplates)
-  const bootstrapRuntimeBinaries = buildBootstrapRuntimeBinaries(runtimeCatalog, context.bootstrapOptions)
-  const runtimes = isRuntimeRelease
-    ? (Object.keys(groupedTemplates) as Array<TemplateRecord['engine']>)
-        .filter((engine) => groupedTemplates[engine].length > 0)
-        .map((engine) => {
-          const runtimeConfig = buildRuntimeConfig(engine, groupedTemplates[engine], context.node)
-          const entryConfigPath = `runtime/${engine}.json`
-          return {
-            engine,
-            binary: cloneBinaryPlan(runtimeCatalog[engine]),
-            entryConfigPath,
-            files: [
-              {
-                path: entryConfigPath,
-                contentType: 'application/json' as const,
-                content: JSON.stringify(runtimeConfig, null, 2),
-              },
-            ],
-          }
-        })
-    : []
+  const runtimes = (Object.keys(groupedTemplates) as Array<TemplateRecord['engine']>)
+    .filter((engine) => groupedTemplates[engine].length > 0)
+    .map((engine) => {
+      const runtimeConfig = buildRuntimeConfig(engine, groupedTemplates[engine], context.node)
+      const entryConfigPath = `runtime/${engine}.json`
+      return {
+        engine,
+        binary: cloneBinaryPlan(runtimeCatalog[engine]),
+        entryConfigPath,
+        files: [
+          {
+            path: entryConfigPath,
+            contentType: 'application/json' as const,
+            content: JSON.stringify(runtimeConfig, null, 2),
+          },
+        ],
+      }
+    })
 
   return {
     schema: 'nodehubsapi-release-v2',
@@ -943,7 +893,6 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
     revision: context.revision,
     kind: context.kind,
     configRevision: context.configRevision,
-    bootstrapRevision: context.bootstrapRevision,
     summary: context.summary,
     message: context.message,
     createdAt: context.createdAt,
@@ -975,22 +924,7 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
       defaults: { ...template.defaults },
     })),
     runtimes,
-    bootstrap: {
-      serviceName: 'nodehubsapi-agent',
-      runtimeServiceName: 'nodehubsapi-runtime',
-      installWarp: context.bootstrapOptions.installWarp,
-      warpLicenseKey: context.bootstrapOptions.warpLicenseKey,
-      heartbeatIntervalSeconds: context.bootstrapOptions.heartbeatIntervalSeconds,
-      versionPullIntervalSeconds: context.bootstrapOptions.versionPullIntervalSeconds,
-      installSingBox: context.bootstrapOptions.installSingBox,
-      installXray: context.bootstrapOptions.installXray,
-      runtimeBinaries: bootstrapRuntimeBinaries,
-      mode: context.kind === 'bootstrap' ? 'bootstrap-required' : 'runtime-only',
-      notes: buildBootstrapNotes(context.node, context.kind, context.bootstrapOptions),
-    },
-    subscriptionEndpoints: isRuntimeRelease
-      ? normalizedTemplates.map((template) => buildSubscriptionEntry(context.node, template))
-      : [],
+    subscriptionEndpoints: normalizedTemplates.map((template) => buildSubscriptionEntry(context.node, template)),
   }
 }
 

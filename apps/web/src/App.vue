@@ -32,16 +32,7 @@ const releaseLogLoading = ref(false)
 const deployCommand = ref('')
 const uninstallCommand = ref('')
 const publishNode = ref<NodeRecord|null>(null)
-const publishKind = ref<'runtime'|'bootstrap'>('runtime')
 const publishTemplateIds = ref<string[]>([])
-const publishBootstrap = ref({
-  installWarp: false,
-  warpLicenseKey: '',
-  heartbeatIntervalSeconds: 15,
-  versionPullIntervalSeconds: 15,
-  installSingBox: false,
-  installXray: false,
-})
 const publishMessage = ref('')
 const publishingRelease = ref(false)
 const publishPreview = ref<ReleasePreviewRecord|null>(null)
@@ -123,6 +114,10 @@ const newNode = ref({
   networkType:'public' as 'public'|'noPublicIp',
   primaryDomain:'', backupDomain:'', entryIp:'',
   useGithubMirror:false, githubMirrorUrl:'',
+  installWarp:false,
+  warpLicenseKey:'',
+  heartbeatIntervalSeconds:15,
+  versionPullIntervalSeconds:15,
   cfDnsToken:'',
   argoTunnelToken:'',
   argoTunnelDomain:'',
@@ -135,6 +130,10 @@ function resetNewNode() {
     networkType:'public',
     primaryDomain:'', backupDomain:'', entryIp:'',
     useGithubMirror:false, githubMirrorUrl:'',
+    installWarp:false,
+    warpLicenseKey:'',
+    heartbeatIntervalSeconds:15,
+    versionPullIntervalSeconds:15,
     cfDnsToken:'',
     argoTunnelToken:'',
     argoTunnelDomain:'',
@@ -154,6 +153,10 @@ async function createNode() {
       backupDomain: n.networkType === 'public' ? n.backupDomain.trim() : '',
       entryIp: n.networkType === 'public' ? n.entryIp.trim() : '',
       githubMirrorUrl: n.useGithubMirror ? n.githubMirrorUrl : '',
+      installWarp: n.installWarp,
+      warpLicenseKey: n.installWarp ? n.warpLicenseKey.trim() : '',
+      heartbeatIntervalSeconds: n.heartbeatIntervalSeconds || 15,
+      versionPullIntervalSeconds: n.versionPullIntervalSeconds || 15,
       cfDnsToken: n.networkType === 'public' ? n.cfDnsToken.trim() : '',
       argoTunnelToken: n.networkType === 'noPublicIp' ? n.argoTunnelToken.trim() : '',
       argoTunnelDomain: n.networkType === 'noPublicIp' ? n.argoTunnelDomain.trim() : '',
@@ -1014,17 +1017,8 @@ function getSubscriptionVisibleNodesLabel(subscription: SubscriptionRecord) {
 
 function openPublishRelease(node: NodeRecord) {
   publishNode.value = node
-  publishKind.value = 'runtime'
   publishMessage.value = ''
   publishTemplateIds.value = templates.value.map((template) => template.id)
-  publishBootstrap.value = {
-    installWarp: false,
-    warpLicenseKey: '',
-    heartbeatIntervalSeconds: node.heartbeatIntervalSeconds || 15,
-    versionPullIntervalSeconds: node.versionPullIntervalSeconds || 15,
-    installSingBox: false,
-    installXray: false,
-  }
   publishPreview.value = null
   publishPreviewError.value = ''
   showPublishRelease.value = true
@@ -1033,16 +1027,7 @@ function openPublishRelease(node: NodeRecord) {
 function closePublishRelease() {
   showPublishRelease.value = false
   publishNode.value = null
-  publishKind.value = 'runtime'
   publishTemplateIds.value = []
-  publishBootstrap.value = {
-    installWarp: false,
-    warpLicenseKey: '',
-    heartbeatIntervalSeconds: 15,
-    versionPullIntervalSeconds: 15,
-    installSingBox: false,
-    installXray: false,
-  }
   publishMessage.value = ''
   publishPreview.value = null
   publishPreviewError.value = ''
@@ -1065,13 +1050,7 @@ async function loadPublishPreview() {
     publishPreviewLoading.value = false
     return
   }
-  if (publishKind.value === 'runtime' && publishTemplateIds.value.length === 0) {
-    publishPreview.value = null
-    publishPreviewError.value = ''
-    publishPreviewLoading.value = false
-    return
-  }
-  if (publishKind.value === 'bootstrap' && !bootstrapHasWork()) {
+  if (publishTemplateIds.value.length === 0) {
     publishPreview.value = null
     publishPreviewError.value = ''
     publishPreviewLoading.value = false
@@ -1083,9 +1062,7 @@ async function loadPublishPreview() {
   publishPreviewError.value = ''
   try {
     const preview = await api.previewNodeRelease(adminKey.value, publishNode.value.id, {
-      kind: publishKind.value,
-      templateIds: publishKind.value === 'runtime' ? publishTemplateIds.value : [],
-      bootstrapOptions: buildBootstrapOptionsPayload(),
+      templateIds: publishTemplateIds.value,
       message: publishMessage.value.trim(),
     })
     if (requestId !== publishPreviewRequestId) return
@@ -1103,20 +1080,14 @@ async function loadPublishPreview() {
 
 async function publishSelectedRelease() {
   if (!publishNode.value) return
-  if (publishKind.value === 'runtime' && publishTemplateIds.value.length === 0) {
+  if (publishTemplateIds.value.length === 0) {
     toast('error', 'Select at least one template')
-    return
-  }
-  if (publishKind.value === 'bootstrap' && !bootstrapHasWork()) {
-    toast('error', 'Select at least one bootstrap action or adjust the schedules')
     return
   }
   try {
     publishingRelease.value = true
     await api.publishNode(adminKey.value, publishNode.value.id, {
-      kind: publishKind.value,
-      templateIds: publishKind.value === 'runtime' ? publishTemplateIds.value : [],
-      bootstrapOptions: buildBootstrapOptionsPayload(),
+      templateIds: publishTemplateIds.value,
       message: publishMessage.value.trim(),
     })
     const selectedNodeId = selectedNode.value?.id
@@ -1310,65 +1281,21 @@ function getNodeDeployStatusClass(n: NodeRecord) {
   return n.currentReleaseStatus === 'idle' ? 'offline' : getReleaseStatusClass(n.currentReleaseStatus)
 }
 
-function normalizeBootstrapIntervalSeconds(value: unknown, fallback = 15) {
+function normalizeIntervalSeconds(value: unknown, fallback = 15) {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return fallback
   return Math.max(5, Math.min(3600, Math.trunc(parsed)))
 }
 
 function getNodeHeartbeatInterval(node: NodeRecord | null) {
-  return normalizeBootstrapIntervalSeconds(node?.heartbeatIntervalSeconds, 15)
+  return normalizeIntervalSeconds(node?.heartbeatIntervalSeconds, 15)
 }
 
 function getNodeVersionPullInterval(node: NodeRecord | null) {
-  return normalizeBootstrapIntervalSeconds(node?.versionPullIntervalSeconds, 15)
+  return normalizeIntervalSeconds(node?.versionPullIntervalSeconds, 15)
 }
 
-const canInstallWarpOnSelectedNode = computed(() => publishNode.value?.permissionMode !== 'user')
-
-function buildBootstrapOptionsPayload() {
-  const installWarp = canInstallWarpOnSelectedNode.value && publishBootstrap.value.installWarp
-  return {
-    ...publishBootstrap.value,
-    installWarp,
-    warpLicenseKey: installWarp ? publishBootstrap.value.warpLicenseKey.trim() : '',
-    heartbeatIntervalSeconds: normalizeBootstrapIntervalSeconds(
-      publishBootstrap.value.heartbeatIntervalSeconds,
-      getNodeHeartbeatInterval(publishNode.value),
-    ),
-    versionPullIntervalSeconds: normalizeBootstrapIntervalSeconds(
-      publishBootstrap.value.versionPullIntervalSeconds,
-      getNodeVersionPullInterval(publishNode.value),
-    ),
-  }
-}
-
-function bootstrapHasWork() {
-  if (!publishNode.value) return false
-  const options = buildBootstrapOptionsPayload()
-  return options.installWarp
-    || options.installSingBox
-    || options.installXray
-    || options.heartbeatIntervalSeconds !== getNodeHeartbeatInterval(publishNode.value)
-    || options.versionPullIntervalSeconds !== getNodeVersionPullInterval(publishNode.value)
-}
-
-const publishBlocked = computed(() => {
-  if (publishKind.value === 'runtime') {
-    return publishTemplateIds.value.length === 0
-  }
-  return !bootstrapHasWork()
-})
-
-watch(
-  [publishKind, () => publishNode.value?.permissionMode || ''],
-  ([kind, permissionMode]) => {
-    if (kind !== 'bootstrap' || permissionMode !== 'user') return
-    if (!publishBootstrap.value.installWarp && !publishBootstrap.value.warpLicenseKey.trim()) return
-    publishBootstrap.value.installWarp = false
-    publishBootstrap.value.warpLicenseKey = ''
-  },
-)
+const publishBlocked = computed(() => publishTemplateIds.value.length === 0)
 
 function getWarpLabel(n: NodeRecord) {
   const warpIpv4 = (n.warpIpv4 || '').trim()
@@ -1415,10 +1342,9 @@ function isPage(page: 'dashboard'|'nodes'|'templates'|'subscriptions') {
 watch(
   [
     showPublishRelease,
-    publishKind,
     () => publishNode.value?.id || '',
     () => publishTemplateIds.value.join(','),
-    () => `${publishBootstrap.value.installWarp}:${publishBootstrap.value.warpLicenseKey}:${publishBootstrap.value.heartbeatIntervalSeconds}:${publishBootstrap.value.versionPullIntervalSeconds}:${publishBootstrap.value.installSingBox}:${publishBootstrap.value.installXray}`,
+    publishMessage,
   ],
   ([visible]) => {
     if (!visible) return
@@ -1866,18 +1792,10 @@ onMounted(() => { if (adminKey.value) login() })
             <div class="card" style="padding:14px">
               <div style="font-size:15px;font-weight:700">{{ publishNode.name }}</div>
               <div class="text-muted text-mono" style="margin-top:4px">{{ publishNode.id }}</div>
-              <div class="text-muted" style="margin-top:8px;font-size:12px">Runtime 负责模板与配置下发；Bootstrap 负责 WARP、sing-box、xray 以及 agent 心跳/拉取版本时间设置。</div>
+              <div class="text-muted" style="margin-top:8px;font-size:12px">这里只发布模板版本。部署参数已经收敛到节点本身，首次部署命令会按节点配置完成证书或 Argo、xray/sing-box、以及可选 WARP 安装。</div>
             </div>
 
             <div class="form-group">
-              <label class="form-label">发布类型</label>
-              <select class="form-select" v-model="publishKind">
-                <option value="runtime">Runtime</option>
-                <option value="bootstrap">Bootstrap</option>
-              </select>
-            </div>
-
-            <div v-if="publishKind==='runtime'" class="form-group">
               <label class="form-label">模板选择</label>
               <div v-if="templates.length===0" class="empty-state" style="padding:20px 12px">
                 <div class="empty-state-title">暂无模板</div>
@@ -1908,51 +1826,6 @@ onMounted(() => { if (adminKey.value) login() })
               </div>
             </div>
 
-            <div v-else class="form-group">
-              <label class="form-label">Bootstrap 动作</label>
-              <div class="form-group" style="margin-bottom:12px">
-                <label class="form-label">心跳间隔时间（秒）</label>
-                <input class="form-input" type="number" min="5" max="3600" step="1" v-model.number="publishBootstrap.heartbeatIntervalSeconds" />
-              </div>
-              <div class="form-group" style="margin-bottom:12px">
-                <label class="form-label">拉取版本时间（秒）</label>
-                <input class="form-input" type="number" min="5" max="3600" step="1" v-model.number="publishBootstrap.versionPullIntervalSeconds" />
-              </div>
-              <div class="publish-template-list">
-                <label class="publish-template-row">
-                  <input type="checkbox" class="form-checkbox" v-model="publishBootstrap.installWarp" :disabled="!canInstallWarpOnSelectedNode" />
-                  <div class="publish-template-copy">
-                    <div class="publish-template-name">安装 WARP</div>
-                    <div class="publish-template-meta">使用官方 warp-cli 完成安装和注册；可选填写本次 bootstrap 使用的 WARP License Key。</div>
-                  </div>
-                </label>
-                <div v-if="!canInstallWarpOnSelectedNode" class="text-muted" style="margin:8px 0 0;font-size:12px">
-                  当前节点为用户态权限，不能安装官方 warp-cli。
-                </div>
-                <div v-if="publishBootstrap.installWarp" class="form-group" style="margin:8px 0 0">
-                  <label class="form-label">WARP License Key</label>
-                  <input class="form-input" v-model="publishBootstrap.warpLicenseKey" placeholder="可选，仅作用于本次 bootstrap 发布" />
-                </div>
-                <label class="publish-template-row">
-                  <input type="checkbox" class="form-checkbox" v-model="publishBootstrap.installSingBox" />
-                  <div class="publish-template-copy">
-                    <div class="publish-template-name">安装 sing-box</div>
-                    <div class="publish-template-meta">仅安装内核二进制，不下发模板运行配置。</div>
-                  </div>
-                </label>
-                <label class="publish-template-row">
-                  <input type="checkbox" class="form-checkbox" v-model="publishBootstrap.installXray" />
-                  <div class="publish-template-copy">
-                    <div class="publish-template-name">安装 xray</div>
-                    <div class="publish-template-meta">仅安装内核二进制，不下发模板运行配置。</div>
-                  </div>
-                </label>
-              </div>
-              <div class="text-muted" style="margin-top:8px;font-size:12px">
-                Deploy 命令已负责证书或 Argo 的必选网络初始化；这里负责可选组件安装和 agent 调度时间。
-              </div>
-            </div>
-
             <div class="form-group">
               <label class="form-label">发布备注</label>
               <textarea class="form-textarea" v-model="publishMessage" placeholder="可选，例如：切换到 sing-box 模板组合" />
@@ -1963,17 +1836,6 @@ onMounted(() => { if (adminKey.value) login() })
                 <div v-if="publishPreviewLoading" class="text-muted">预览生成中...</div>
                 <div v-else-if="publishPreviewError" class="publish-preview-error">{{ publishPreviewError }}</div>
                 <div v-else-if="publishPreview">
-                  <div v-if="publishKind === 'bootstrap'" class="publish-preview-file">
-                    <div class="publish-preview-meta">Bootstrap 计划 / {{ publishPreview.bootstrap.mode }}</div>
-                    <div class="detail-row"><span class="detail-label">安装 WARP</span><span class="detail-value">{{ publishPreview.bootstrap.installWarp ? '是' : '否' }}</span></div>
-                    <div class="detail-row"><span class="detail-label">WARP License Key</span><span class="detail-value">{{ publishPreview.bootstrap.warpLicenseKey ? '已提供' : '未提供' }}</span></div>
-                    <div class="detail-row"><span class="detail-label">心跳间隔</span><span class="detail-value">{{ publishPreview.bootstrap.heartbeatIntervalSeconds }} 秒</span></div>
-                    <div class="detail-row"><span class="detail-label">拉取版本间隔</span><span class="detail-value">{{ publishPreview.bootstrap.versionPullIntervalSeconds }} 秒</span></div>
-                    <div class="detail-row"><span class="detail-label">安装 sing-box</span><span class="detail-value">{{ publishPreview.bootstrap.installSingBox ? '是' : '否' }}</span></div>
-                    <div class="detail-row"><span class="detail-label">安装 xray</span><span class="detail-value">{{ publishPreview.bootstrap.installXray ? '是' : '否' }}</span></div>
-                    <div class="detail-row"><span class="detail-label">运行时二进制</span><span class="detail-value">{{ publishPreview.bootstrap.runtimeBinaries.length ? publishPreview.bootstrap.runtimeBinaries.map((item) => `${item.binaryName}@${item.version}`).join(', ') : '-' }}</span></div>
-                    <div v-for="note in publishPreview.bootstrap.notes" :key="note" class="text-muted" style="margin-top:8px;font-size:12px">{{ note }}</div>
-                  </div>
                   <div v-for="runtime in publishPreview.runtimePlans" :key="runtime.engine" class="publish-preview-file">
                     <div class="publish-preview-meta">内核 {{ runtime.engine }} / 入口 {{ runtime.entryConfigPath }}</div>
                     <div v-for="file in runtime.files" :key="`${runtime.engine}:${file.path}`" class="publish-preview-file">
@@ -1982,7 +1844,7 @@ onMounted(() => { if (adminKey.value) login() })
                     </div>
                   </div>
                 </div>
-                <div v-else class="text-muted">{{ publishKind === 'runtime' ? '选择模板后自动生成预览' : '选择 bootstrap 动作或调整调度时间后自动生成预览' }}</div>
+                <div v-else class="text-muted">选择模板后自动生成预览</div>
               </div>
             </div>
           </template>
@@ -2016,6 +1878,26 @@ onMounted(() => { if (adminKey.value) login() })
           <div v-if="newNode.useGithubMirror" class="form-group">
             <label class="form-label">GitHub 镜像地址</label>
             <input class="form-input" v-model="newNode.githubMirrorUrl" placeholder="https://ghproxy.com/https://github.com" />
+          </div>
+
+          <div class="form-section-divider">部署参数</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">心跳间隔（秒）</label>
+              <input class="form-input" type="number" min="5" max="3600" step="1" v-model.number="newNode.heartbeatIntervalSeconds" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">拉取版本间隔（秒）</label>
+              <input class="form-input" type="number" min="5" max="3600" step="1" v-model.number="newNode.versionPullIntervalSeconds" />
+            </div>
+          </div>
+          <div class="form-checkbox-group mb-md">
+            <input type="checkbox" class="form-checkbox" v-model="newNode.installWarp" id="node-install-warp">
+            <label for="node-install-warp" class="form-label" style="margin:0">首次部署时安装 WARP</label>
+          </div>
+          <div v-if="newNode.installWarp" class="form-group">
+            <label class="form-label">WARP License Key</label>
+            <input class="form-input" v-model="newNode.warpLicenseKey" placeholder="可选，填写后会在首次部署时一起注册" />
           </div>
 
           <div class="form-section-divider">服务器网络</div>

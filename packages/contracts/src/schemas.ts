@@ -83,6 +83,7 @@ function validateTemplateCombination(
 }
 
 export const nodeKindSchema = z.enum(['vps', 'edge'])
+const intervalSecondsSchema = z.number().int().min(5).max(3600)
 
 const nodeSchemaBase = z.object({
   name: z.string().trim().min(1).max(120),
@@ -94,10 +95,14 @@ const nodeSchemaBase = z.object({
   backupDomain: z.string().trim().max(255).default(''),
   entryIp: z.string().trim().max(255).default(''),
   githubMirrorUrl: z.string().trim().max(500).default(''),
+  installWarp: z.boolean().default(false),
+  warpLicenseKey: z.string().trim().max(255).default(''),
   cfDnsToken: z.string().trim().max(500).default(''),
   argoTunnelToken: z.string().trim().max(500).default(''),
   argoTunnelDomain: z.string().trim().max(255).default(''),
   argoTunnelPort: z.number().int().min(1).max(65535).default(2053),
+  heartbeatIntervalSeconds: intervalSecondsSchema.default(15),
+  versionPullIntervalSeconds: intervalSecondsSchema.default(15),
 })
 
 export const createNodeSchema = nodeSchemaBase.superRefine((input, ctx) => {
@@ -167,33 +172,15 @@ export const updateSubscriptionSchema = createSubscriptionSchema.partial()
 
 export const subscriptionDocumentFormatSchema = z.enum(['plain', 'base64', 'json', 'v2ray', 'clash', 'singbox'])
 
-export const bootstrapOptionsSchema = z.object({
-  installWarp: z.boolean().default(false),
-  warpLicenseKey: z.string().trim().max(255).default(''),
-  heartbeatIntervalSeconds: z.number().int().min(5).max(3600).default(15),
-  versionPullIntervalSeconds: z.number().int().min(5).max(3600).default(15),
-  installSingBox: z.boolean().default(false),
-  installXray: z.boolean().default(false),
-})
-
 export const publishNodeSchema = z.object({
-  kind: z.enum(['runtime', 'bootstrap']).default('runtime'),
   templateIds: z.array(z.string().trim().min(1)).default([]),
   message: z.string().trim().max(1000).default(''),
-  bootstrapOptions: bootstrapOptionsSchema.default({
-    installWarp: false,
-    warpLicenseKey: '',
-    heartbeatIntervalSeconds: 15,
-    versionPullIntervalSeconds: 15,
-    installSingBox: false,
-    installXray: false,
-  }),
 }).superRefine((input, ctx) => {
-  if (input.kind === 'runtime' && input.templateIds.length === 0) {
+  if (input.templateIds.length === 0) {
     ctx.addIssue({
       code: 'custom',
       path: ['templateIds'],
-      message: 'Runtime releases require at least one template',
+      message: 'Template releases require at least one template',
     })
   }
 })
@@ -203,8 +190,8 @@ export const heartbeatSchema = z.object({
   bytesInTotal: z.number().nonnegative(),
   bytesOutTotal: z.number().nonnegative(),
   currentConnections: z.number().int().nonnegative(),
-  heartbeatIntervalSeconds: z.number().int().min(5).max(3600).optional(),
-  versionPullIntervalSeconds: z.number().int().min(5).max(3600).optional(),
+  heartbeatIntervalSeconds: intervalSecondsSchema.optional(),
+  versionPullIntervalSeconds: intervalSecondsSchema.optional(),
   cpuUsagePercent: z.number().min(0).max(100).nullable().default(null),
   memoryUsagePercent: z.number().min(0).max(100).nullable().default(null),
   warpStatus: z.string().trim().max(120).optional(),

@@ -2,7 +2,7 @@ export type NodeKind = 'vps' | 'edge'
 
 export type NetworkType = 'public' | 'noPublicIp'
 
-export type ReleaseKind = 'runtime' | 'bootstrap'
+export type ReleaseKind = 'runtime'
 
 export type ReleaseStatus = 'pending' | 'applying' | 'healthy' | 'failed'
 export type WarpRouteMode = 'all' | 'ipv4' | 'ipv6'
@@ -24,6 +24,7 @@ export interface NodeRecord {
   backupDomain: string
   entryIp: string
   githubMirrorUrl: string
+  installWarp: boolean
   warpLicenseKey: string
   cfDnsToken: string
   argoTunnelToken: string
@@ -51,7 +52,6 @@ export interface NodeRecord {
   memoryTotalBytes?: number
   memoryUsedBytes?: number
   configRevision: number
-  bootstrapRevision: number
   desiredReleaseRevision: number
   currentReleaseRevision: number
   currentReleaseStatus: ReleaseStatus | 'idle'
@@ -90,7 +90,6 @@ export interface ReleaseRecord {
   revision: number
   status: ReleaseStatus
   configRevision: number
-  bootstrapRevision: number
   artifactKey: string
   artifactSha256: string
   summary: string
@@ -109,7 +108,6 @@ export interface ReleasePreviewRecord {
   kind: ReleaseKind
   runtimePlans: Array<Pick<ReleaseRuntimePlan, 'engine' | 'entryConfigPath' | 'files'>>
   templateIds: string[]
-  bootstrap: BootstrapPlan
 }
 
 export interface SubscriptionRecord {
@@ -196,29 +194,6 @@ export interface SubscriptionEndpoint {
   uri?: string
 }
 
-export interface BootstrapPlan {
-  serviceName: string
-  runtimeServiceName: string
-  installWarp: boolean
-  warpLicenseKey: string
-  heartbeatIntervalSeconds: number
-  versionPullIntervalSeconds: number
-  installSingBox: boolean
-  installXray: boolean
-  runtimeBinaries: RuntimeBinaryPlan[]
-  mode: 'runtime-only' | 'bootstrap-required'
-  notes: string[]
-}
-
-export interface BootstrapOptions {
-  installWarp: boolean
-  warpLicenseKey: string
-  heartbeatIntervalSeconds: number
-  versionPullIntervalSeconds: number
-  installSingBox: boolean
-  installXray: boolean
-}
-
 export interface RuntimeBinaryPlan {
   engine: TemplateRecord['engine']
   version: string
@@ -238,7 +213,6 @@ export interface ReleaseArtifact {
   revision: number
   kind: ReleaseKind
   configRevision: number
-  bootstrapRevision: number
   summary: string
   message: string
   createdAt: string
@@ -263,7 +237,6 @@ export interface ReleaseArtifact {
     Pick<TemplateRecord, 'id' | 'name' | 'engine' | 'protocol' | 'transport' | 'tlsMode' | 'warpExit' | 'warpRouteMode' | 'defaults'>
   >
   runtimes: ReleaseRuntimePlan[]
-  bootstrap: BootstrapPlan
   subscriptionEndpoints: SubscriptionEndpoint[]
 }
 

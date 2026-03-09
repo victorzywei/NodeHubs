@@ -3,7 +3,6 @@ import {
   createTemplateSchema,
 } from '@contracts/index'
 import type {
-  BootstrapOptions,
   CreateNodeInput,
   CreateSubscriptionInput,
   CreateTemplateInput,
@@ -48,9 +47,7 @@ type NodeRow = {
   argo_tunnel_domain: string
   argo_tunnel_port: number
   install_warp: number
-  install_argo: number
   config_revision: number
-  bootstrap_revision: number
   desired_release_revision: number
   current_release_revision: number
   current_release_status: string
@@ -110,7 +107,6 @@ type ReleaseRow = {
   revision: number
   status: string
   config_revision: number
-  bootstrap_revision: number
   template_ids_json: string
   artifact_key: string
   artifact_sha256: string
@@ -142,10 +138,15 @@ type TotalsRow = {
   bytes_out: number
 }
 
-const RUNTIME_FIELDS = new Set<string>()
-const SHARED_FIELDS = new Set(['networkType', 'primaryDomain', 'backupDomain', 'entryIp'])
-const BOOTSTRAP_ONLY_FIELDS = new Set([
+const CONFIG_IMPACT_FIELDS = new Set([
+  'name',
   'nodeType',
+  'region',
+  'tags',
+  'networkType',
+  'primaryDomain',
+  'backupDomain',
+  'entryIp',
   'githubMirrorUrl',
   'cfDnsToken',
   'argoTunnelToken',
@@ -175,13 +176,13 @@ function toNodeRecord(row: NodeRow): NodeRecord {
     backupDomain: row.backup_domain,
     entryIp: row.entry_ip,
     githubMirrorUrl: row.github_mirror_url || '',
+    installWarp: toBool(row.install_warp),
     warpLicenseKey: row.warp_license_key || '',
     cfDnsToken: row.cf_dns_token || '',
     argoTunnelToken: row.argo_tunnel_token || '',
     argoTunnelDomain: row.argo_tunnel_domain || '',
     argoTunnelPort: Number(row.argo_tunnel_port || 2053),
     configRevision: Number(row.config_revision || 1),
-    bootstrapRevision: Number(row.bootstrap_revision || 1),
     desiredReleaseRevision: Number(row.desired_release_revision || 0),
     currentReleaseRevision: Number(row.current_release_revision || 0),
     currentReleaseStatus: String(row.current_release_status || 'idle') as NodeRecord['currentReleaseStatus'],
@@ -224,58 +225,10 @@ function toNodeRecord(row: NodeRow): NodeRecord {
   }
 }
 
-function mergeImpact(
-  current: 'none' | 'runtime' | 'bootstrap' | 'both',
-  next: 'none' | 'runtime' | 'bootstrap' | 'both',
-): 'none' | 'runtime' | 'bootstrap' | 'both' {
-  if (current === 'both' || next === 'both') return 'both'
-  if (current === 'none') return next
-  if (next === 'none') return current
-  if (current !== next) return 'both'
-  return current
-}
-
-function normalizeBootstrapOptions(kind: ReleaseKind, input?: Partial<BootstrapOptions>): BootstrapOptions {
-  if (kind !== 'bootstrap') {
-    return {
-      installWarp: false,
-      warpLicenseKey: '',
-      heartbeatIntervalSeconds: 15,
-      versionPullIntervalSeconds: 15,
-      installSingBox: false,
-      installXray: false,
-    }
-  }
-
-  const normalizeInterval = (value: unknown, fallback: number): number => {
-    const parsed = Number(value)
-    if (!Number.isFinite(parsed)) return fallback
-    return Math.max(5, Math.min(3600, Math.trunc(parsed)))
-  }
-
-  return {
-    installWarp: input?.installWarp === true,
-    warpLicenseKey: input?.installWarp === true ? String(input?.warpLicenseKey || '').trim() : '',
-    heartbeatIntervalSeconds: normalizeInterval(input?.heartbeatIntervalSeconds, 15),
-    versionPullIntervalSeconds: normalizeInterval(input?.versionPullIntervalSeconds, 15),
-    installSingBox: input?.installSingBox === true,
-    installXray: input?.installXray === true,
-  }
-}
-
-function hasBootstrapWork(
-  node: Pick<NodeRecord, 'heartbeatIntervalSeconds' | 'versionPullIntervalSeconds'>,
-  bootstrapOptions: BootstrapOptions,
-): boolean {
-  return bootstrapOptions.installWarp
-    || bootstrapOptions.installSingBox
-    || bootstrapOptions.installXray
-    || bootstrapOptions.heartbeatIntervalSeconds !== Number(node.heartbeatIntervalSeconds || 15)
-    || bootstrapOptions.versionPullIntervalSeconds !== Number(node.versionPullIntervalSeconds || 15)
-}
-
-function canInstallWarpBootstrap(node: Pick<NodeRecord, 'permissionMode'>): boolean {
-  return node.permissionMode !== 'user'
+function normalizeIntervalSeconds(value: unknown, fallback: number): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(5, Math.min(3600, Math.trunc(parsed)))
 }
 
 function toTemplateRecord(row: TemplateRow): TemplateRecord {
@@ -322,7 +275,6 @@ function toReleaseRecord(row: ReleaseRow): ReleaseRecord {
     revision: Number(row.revision || 0),
     status: row.status as ReleaseStatus,
     configRevision: Number(row.config_revision || 0),
-    bootstrapRevision: Number(row.bootstrap_revision || 0),
     artifactKey: row.artifact_key,
     artifactSha256: row.artifact_sha256,
     summary: row.summary,
@@ -373,43 +325,13 @@ function isOnline(lastSeenAt: string | null): boolean {
   return Number.isFinite(lastSeen) && Date.now() - lastSeen <= ONLINE_WINDOW_MS
 }
 
-function summarizeRelease(
-  kind: ReleaseKind,
-  templateIds: string[],
-  bootstrapOptions: BootstrapOptions,
-  message: string,
-): string {
-  if (kind === 'bootstrap') {
-    const actions = [
-      bootstrapOptions.installWarp ? 'warp' : '',
-      bootstrapOptions.installSingBox ? 'sing-box' : '',
-      bootstrapOptions.installXray ? 'xray' : '',
-    ].filter(Boolean)
-    const actionSummary = actions.length > 0 ? `actions=${actions.join(',')}` : 'actions=none'
-    const scheduleSummary = `heartbeat=${bootstrapOptions.heartbeatIntervalSeconds}s,pull=${bootstrapOptions.versionPullIntervalSeconds}s`
-    return ['bootstrap update', actionSummary, scheduleSummary, message || 'no-message'].join(' | ')
-  }
-
+function summarizeRelease(templateIds: string[], message: string): string {
   const templates = templateIds.length > 0 ? `templates=${templateIds.join(',')}` : 'templates=none'
-  return ['runtime update', templates, message || 'no-message'].join(' | ')
+  return ['template update', templates, message || 'no-message'].join(' | ')
 }
 
-function determineNodeImpact(input: UpdateNodeInput): 'none' | 'runtime' | 'bootstrap' | 'both' {
-  let impact: 'none' | 'runtime' | 'bootstrap' | 'both' = 'none'
-  for (const key of Object.keys(input)) {
-    if (SHARED_FIELDS.has(key)) {
-      impact = mergeImpact(impact, 'both')
-      continue
-    }
-    if (BOOTSTRAP_ONLY_FIELDS.has(key)) {
-      impact = mergeImpact(impact, 'bootstrap')
-      continue
-    }
-    if (RUNTIME_FIELDS.has(key)) {
-      impact = mergeImpact(impact, 'runtime')
-    }
-  }
-  return impact
+function determineNodeImpact(input: UpdateNodeInput): boolean {
+  return Object.keys(input).some((key) => CONFIG_IMPACT_FIELDS.has(key))
 }
 
 function uniqueIds(values: string[]): string[] {
@@ -484,16 +406,27 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
   const nextNode = parseNodeInput(input)
   const id = createId('node')
   const now = nowIso()
+  const installWarp = nextNode.installWarp === true ? 1 : 0
+  const warpLicenseKey = installWarp ? nextNode.warpLicenseKey.trim() : ''
+  const heartbeatIntervalSeconds = normalizeIntervalSeconds(nextNode.heartbeatIntervalSeconds, 15)
+  const versionPullIntervalSeconds = normalizeIntervalSeconds(nextNode.versionPullIntervalSeconds, 15)
   await services.db.run(
     `INSERT INTO nodes (
       id, agent_token, name, node_type, region, tags_json, network_type, primary_domain, backup_domain, entry_ip,
       github_mirror_url, warp_license_key, cf_dns_token, argo_tunnel_token, argo_tunnel_domain, argo_tunnel_port,
-      install_warp, install_argo, config_revision, bootstrap_revision, desired_release_revision,
+      install_warp, config_revision, desired_release_revision,
        current_release_revision, current_release_status, heartbeat_interval_seconds, version_pull_interval_seconds, bytes_in_total, bytes_out_total,
-       current_connections, warp_status, warp_ipv6, warp_endpoint, warp_private_key, warp_reserved_json, argo_status, argo_domain,
+       current_connections, warp_status, warp_ipv4, warp_ipv6, warp_endpoint, warp_account_type, warp_tunnel_protocol, warp_private_key,
+       warp_reserved_json, argo_status, argo_domain,
        storage_total_bytes, storage_used_bytes, storage_usage_percent, cpu_core_count, memory_total_bytes, memory_used_bytes,
-       protocol_runtime_version, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       permission_mode, sing_box_version, sing_box_status, xray_version, xray_status, protocol_runtime_version, created_at, updated_at
+     ) VALUES (
+       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+     )`,
     [
       id,
       createToken(),
@@ -506,23 +439,24 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       nextNode.backupDomain,
       nextNode.entryIp,
       nextNode.githubMirrorUrl,
-      '',
+      warpLicenseKey,
       nextNode.cfDnsToken,
       nextNode.argoTunnelToken,
       nextNode.argoTunnelDomain,
       nextNode.argoTunnelPort,
-      0,
-      0,
-      1,
+      installWarp,
       1,
       0,
       0,
       'idle',
-      15,
-      15,
+      heartbeatIntervalSeconds,
+      versionPullIntervalSeconds,
       0,
       0,
       0,
+      '',
+      '',
+      '',
       '',
       '',
       '',
@@ -536,6 +470,11 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       null,
       0,
       0,
+      '',
+      '',
+      '',
+      '',
+      '',
       '',
       now,
       now,
@@ -560,30 +499,35 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
     backupDomain: input.backupDomain ?? current.backup_domain,
     entryIp: input.entryIp ?? current.entry_ip,
     githubMirrorUrl: input.githubMirrorUrl ?? current.github_mirror_url,
+    installWarp: input.installWarp ?? toBool(current.install_warp),
+    warpLicenseKey: input.warpLicenseKey ?? current.warp_license_key,
     cfDnsToken: input.cfDnsToken ?? current.cf_dns_token,
     argoTunnelToken: input.argoTunnelToken ?? current.argo_tunnel_token,
     argoTunnelDomain: input.argoTunnelDomain ?? current.argo_tunnel_domain,
     argoTunnelPort: input.argoTunnelPort ?? current.argo_tunnel_port,
+    heartbeatIntervalSeconds: input.heartbeatIntervalSeconds ?? current.heartbeat_interval_seconds,
+    versionPullIntervalSeconds: input.versionPullIntervalSeconds ?? current.version_pull_interval_seconds,
   })
-  const impact = determineNodeImpact(input)
-  const nextConfigRevision = impact === 'runtime' || impact === 'both'
+  const configChanged = determineNodeImpact(input)
+  const nextConfigRevision = configChanged
     ? Number(current.config_revision || 1) + 1
     : Number(current.config_revision || 1)
-  const nextBootstrapRevision = impact === 'bootstrap' || impact === 'both'
-    ? Number(current.bootstrap_revision || 1) + 1
-    : Number(current.bootstrap_revision || 1)
+  const installWarp = nextNode.installWarp === true ? 1 : 0
+  const warpLicenseKey = installWarp ? nextNode.warpLicenseKey.trim() : ''
+  const heartbeatIntervalSeconds = normalizeIntervalSeconds(nextNode.heartbeatIntervalSeconds, 15)
+  const versionPullIntervalSeconds = normalizeIntervalSeconds(nextNode.versionPullIntervalSeconds, 15)
 
   await services.db.run(
     `UPDATE nodes
      SET name = ?, node_type = ?, region = ?, tags_json = ?, network_type = ?, primary_domain = ?, backup_domain = ?, entry_ip = ?,
          github_mirror_url = ?, warp_license_key = ?, cf_dns_token = ?, argo_tunnel_token = ?, argo_tunnel_domain = ?, argo_tunnel_port = ?,
-         install_warp = ?, install_argo = ?, bytes_in_total = ?, bytes_out_total = ?, current_connections = ?,
+         install_warp = ?, bytes_in_total = ?, bytes_out_total = ?, current_connections = ?,
          cpu_usage_percent = ?, memory_usage_percent = ?, warp_status = ?, warp_ipv4 = ?, warp_ipv6 = ?, warp_endpoint = ?,
          warp_account_type = ?, warp_tunnel_protocol = ?, warp_private_key = ?, warp_reserved_json = ?,
          argo_status = ?, argo_domain = ?, storage_total_bytes = ?, storage_used_bytes = ?, storage_usage_percent = ?,
          cpu_core_count = ?, memory_total_bytes = ?, memory_used_bytes = ?,
          protocol_runtime_version = ?, last_seen_at = ?, heartbeat_interval_seconds = ?, version_pull_interval_seconds = ?,
-         config_revision = ?, bootstrap_revision = ?, updated_at = ?
+         config_revision = ?, updated_at = ?
      WHERE id = ?`,
     [
       nextNode.name,
@@ -595,13 +539,12 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       nextNode.backupDomain,
       nextNode.entryIp,
       nextNode.githubMirrorUrl,
-      current.warp_license_key,
+      warpLicenseKey,
       nextNode.cfDnsToken,
       nextNode.argoTunnelToken,
       nextNode.argoTunnelDomain,
       nextNode.argoTunnelPort,
-      current.install_warp,
-      current.install_argo,
+      installWarp,
       input.bytesInTotal ?? current.bytes_in_total,
       input.bytesOutTotal ?? current.bytes_out_total,
       input.currentConnections ?? current.current_connections,
@@ -625,10 +568,9 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       input.memoryUsedBytes ?? current.memory_used_bytes ?? 0,
       input.protocolRuntimeVersion ?? current.protocol_runtime_version,
       input.lastSeenAt ?? current.last_seen_at,
-      current.heartbeat_interval_seconds ?? 15,
-      current.version_pull_interval_seconds ?? 15,
+      heartbeatIntervalSeconds,
+      versionPullIntervalSeconds,
       nextConfigRevision,
-      nextBootstrapRevision,
       nowIso(),
       nodeId,
     ],
@@ -832,31 +774,19 @@ async function reserveNodeReleaseSlot(services: AppServices, nodeId: string): Pr
 export async function publishNodeRelease(
   services: AppServices,
   nodeId: string,
-  kind: ReleaseKind,
   templateIds: string[],
-  bootstrapOptionsInput: BootstrapOptions,
   message: string,
 ): Promise<ReleaseRecord | null> {
   const node = await getNodeById(services, nodeId)
   if (!node) return null
 
-  const bootstrapOptions = normalizeBootstrapOptions(kind, bootstrapOptionsInput)
   const uniqueTemplateIds = uniqueIds(templateIds)
-  if (kind === 'bootstrap' && uniqueTemplateIds.length > 0) {
-    throw new Error('Bootstrap releases do not accept protocol templates')
-  }
   const templateRows = await getTemplateRows(services, uniqueTemplateIds)
   if (uniqueTemplateIds.length !== templateRows.length) {
     throw new Error('One or more selected templates do not exist')
   }
-  if (kind === 'runtime' && templateRows.length === 0) {
-    throw new Error('Runtime releases require at least one protocol template')
-  }
-  if (kind === 'bootstrap' && bootstrapOptions.installWarp && !canInstallWarpBootstrap(node)) {
-    throw new Error('Bootstrap WARP installation requires root-mode node permissions')
-  }
-  if (kind === 'bootstrap' && !hasBootstrapWork(node, bootstrapOptions)) {
-    throw new Error('Bootstrap releases require at least one selected action or a schedule change')
+  if (templateRows.length === 0) {
+    throw new Error('Template releases require at least one protocol template')
   }
 
   const reserved = await reserveNodeReleaseSlot(services, nodeId)
@@ -864,16 +794,15 @@ export async function publishNodeRelease(
 
   const releaseId = createId('rel')
   const artifactKey = `releases/${nodeId}/r${reserved.revision}.json`
-  const summary = summarizeRelease(kind, uniqueTemplateIds, bootstrapOptions, message)
+  const summary = summarizeRelease(uniqueTemplateIds, message)
   const repairedTemplates = await persistRepairedTemplates(services, templateRows)
 
   try {
     const artifact = renderReleaseArtifact({
       releaseId,
       revision: reserved.revision,
-      kind,
+      kind: 'runtime',
       configRevision: Number(reserved.row.config_revision || 0),
-      bootstrapRevision: Number(reserved.row.bootstrap_revision || 0),
       createdAt: reserved.updatedAt,
       message,
       summary,
@@ -883,24 +812,22 @@ export async function publishNodeRelease(
         currentReleaseStatus: 'pending',
       },
       templates: repairedTemplates,
-      bootstrapOptions,
     }, services.runtimeCatalog)
     const stored = await services.artifacts.putJson(artifactKey, artifact)
 
     await services.db.run(
       `INSERT INTO releases (
-        id, node_id, kind, revision, status, config_revision, bootstrap_revision,
+        id, node_id, kind, revision, status, config_revision,
         template_ids_json, artifact_key, artifact_sha256, summary, message,
         apply_log, apply_log_status, apply_log_updated_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         releaseId,
         nodeId,
-        kind,
+        'runtime',
         reserved.revision,
         'pending',
         Number(reserved.row.config_revision || 0),
-        Number(reserved.row.bootstrap_revision || 0),
         JSON.stringify(uniqueTemplateIds),
         artifactKey,
         stored.etag,
@@ -935,44 +862,31 @@ export async function publishNodeRelease(
 export async function previewNodeRelease(
   services: AppServices,
   nodeId: string,
-  kind: ReleaseKind,
   templateIds: string[],
-  bootstrapOptionsInput: BootstrapOptions,
   message: string,
 ): Promise<ReleasePreviewRecord | null> {
   const node = await getNodeById(services, nodeId)
   if (!node) return null
 
-  const bootstrapOptions = normalizeBootstrapOptions(kind, bootstrapOptionsInput)
   const uniqueTemplateIds = uniqueIds(templateIds)
-  if (kind === 'bootstrap' && uniqueTemplateIds.length > 0) {
-    throw new Error('Bootstrap releases do not accept protocol templates')
-  }
   const templateRows = await getTemplateRows(services, uniqueTemplateIds)
   if (uniqueTemplateIds.length !== templateRows.length) {
     throw new Error('One or more selected templates do not exist')
   }
-  if (kind === 'runtime' && templateRows.length === 0) {
-    throw new Error('Runtime releases require at least one protocol template')
-  }
-  if (kind === 'bootstrap' && bootstrapOptions.installWarp && !canInstallWarpBootstrap(node)) {
-    throw new Error('Bootstrap WARP installation requires root-mode node permissions')
-  }
-  if (kind === 'bootstrap' && !hasBootstrapWork(node, bootstrapOptions)) {
-    throw new Error('Bootstrap releases require at least one selected action or a schedule change')
+  if (templateRows.length === 0) {
+    throw new Error('Template releases require at least one protocol template')
   }
 
   const previewRevision = Number(node.desiredReleaseRevision || 0) + 1
   const createdAt = nowIso()
-  const summary = summarizeRelease(kind, uniqueTemplateIds, bootstrapOptions, message)
+  const summary = summarizeRelease(uniqueTemplateIds, message)
   const repairedTemplates = templateRows.map((row) => repairTemplateRecord(toTemplateRecord(row)))
   const artifact = renderReleaseArtifact(
     {
       releaseId: createId('preview'),
       revision: previewRevision,
-      kind,
+      kind: 'runtime',
       configRevision: Number(node.configRevision || 0),
-      bootstrapRevision: Number(node.bootstrapRevision || 0),
       createdAt,
       message,
       summary,
@@ -982,7 +896,6 @@ export async function previewNodeRelease(
         currentReleaseStatus: 'pending',
       },
       templates: repairedTemplates,
-      bootstrapOptions,
     },
     services.runtimeCatalog,
   )
@@ -995,7 +908,6 @@ export async function previewNodeRelease(
       files: runtime.files,
     })),
     templateIds: uniqueTemplateIds,
-    bootstrap: artifact.bootstrap,
   }
 }
 
@@ -1161,6 +1073,10 @@ export async function getNodeInstallTarget(
   backupDomain: string
   entryIp: string
   githubMirrorUrl: string
+  installWarp: boolean
+  warpLicenseKey: string
+  heartbeatIntervalSeconds: number
+  versionPullIntervalSeconds: number
   cfDnsToken: string
   argoTunnelToken: string
   argoTunnelDomain: string
@@ -1177,6 +1093,10 @@ export async function getNodeInstallTarget(
     backupDomain: row.backup_domain || '',
     entryIp: row.entry_ip || '',
     githubMirrorUrl: row.github_mirror_url || '',
+    installWarp: toBool(row.install_warp),
+    warpLicenseKey: row.warp_license_key || '',
+    heartbeatIntervalSeconds: Number(row.heartbeat_interval_seconds || 15),
+    versionPullIntervalSeconds: Number(row.version_pull_interval_seconds || 15),
     cfDnsToken: row.cf_dns_token || '',
     argoTunnelToken: row.argo_tunnel_token || '',
     argoTunnelDomain: row.argo_tunnel_domain || '',
@@ -1222,36 +1142,27 @@ export async function acknowledgeRelease(
 
   const updatedAt = nowIso()
   const applyLog = sanitizeApplyLog(applyLogInput)
-  const shouldWriteApplyLog = Boolean(applyLog) && release.apply_log_status !== status
-  const isDuplicateResultStatus = release.status === status && !shouldWriteApplyLog
+  const shouldWriteApplyLog = Boolean(applyLog)
+  const shouldUpdateRelease = release.status !== status || release.message !== message || shouldWriteApplyLog
 
-  if (isDuplicateResultStatus) {
+  if (!shouldUpdateRelease) {
     return toReleaseRecord(release)
   }
 
-  if (release.status !== status) {
-    await services.db.run(
-      `UPDATE releases
-       SET status = ?, message = ?, updated_at = ?, apply_log = ?, apply_log_status = ?, apply_log_updated_at = ?
-       WHERE id = ?`,
-      [
-        status,
-        message,
-        updatedAt,
-        shouldWriteApplyLog ? applyLog : release.apply_log,
-        shouldWriteApplyLog ? status : (release.apply_log_status || ''),
-        shouldWriteApplyLog ? updatedAt : release.apply_log_updated_at,
-        releaseId,
-      ],
-    )
-  } else if (shouldWriteApplyLog) {
-    await services.db.run(
-      `UPDATE releases
-       SET updated_at = ?, apply_log = ?, apply_log_status = ?, apply_log_updated_at = ?
-       WHERE id = ?`,
-      [updatedAt, applyLog, status, updatedAt, releaseId],
-    )
-  }
+  await services.db.run(
+    `UPDATE releases
+     SET status = ?, message = ?, updated_at = ?, apply_log = ?, apply_log_status = ?, apply_log_updated_at = ?
+     WHERE id = ?`,
+    [
+      status,
+      message,
+      updatedAt,
+      shouldWriteApplyLog ? applyLog : release.apply_log,
+      shouldWriteApplyLog ? status : (release.apply_log_status || ''),
+      shouldWriteApplyLog ? updatedAt : release.apply_log_updated_at,
+      releaseId,
+    ],
+  )
 
   if (status === 'healthy') {
     await services.db.run(

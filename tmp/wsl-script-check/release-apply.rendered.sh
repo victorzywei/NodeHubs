@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RELEASE_ID=__RELEASE_ID__
-RELEASE_REVISION=__RELEASE_REVISION__
-RELEASE_KIND=__RELEASE_KIND__
-RUNTIME_PRIMARY_SERVICE_NAME=__RUNTIME_PRIMARY_SERVICE_NAME__
-RUNTIME_PLAN_COUNT=__RUNTIME_PLAN_COUNT__
+RELEASE_ID='rel_demo'
+RELEASE_REVISION='2'
+RELEASE_KIND='runtime'
+RUNTIME_PRIMARY_SERVICE_NAME='nodehubsapi-runtime-sing-box'
+RUNTIME_PLAN_COUNT=1
 ETC_DIR="${ETC_DIR:-/etc/nodehubsapi}"
 STATE_DIR="${STATE_DIR:-/opt/nodehubsapi}"
 RUNTIME_BIN_DIR="${RUNTIME_BIN_DIR:-/usr/local/bin}"
@@ -14,13 +14,24 @@ USE_SYSTEMD="${USE_SYSTEMD:-0}"
 SYSTEMCTL_USER_FLAG="${SYSTEMCTL_USER_FLAG:-}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 SYSTEMD_WANTED_BY="${SYSTEMD_WANTED_BY:-multi-user.target}"
-GITHUB_MIRROR_URL=__GITHUB_MIRROR_URL__
-NODE_CF_DNS_TOKEN=__NODE_CF_DNS_TOKEN__
-NODE_WARP_LICENSE_KEY=__NODE_WARP_LICENSE_KEY__
-NODE_ARGO_TUNNEL_TOKEN=__NODE_ARGO_TUNNEL_TOKEN__
-NODE_ARGO_TUNNEL_DOMAIN=__NODE_ARGO_TUNNEL_DOMAIN__
-NODE_ARGO_ORIGIN_PORT=__NODE_ARGO_ORIGIN_PORT__
+GITHUB_MIRROR_URL=''
+BOOTSTRAP_NEEDS_CERTS=1
+BOOTSTRAP_CERT_PATH='/etc/nodehubsapi/certs/server.crt'
+BOOTSTRAP_KEY_PATH='/etc/nodehubsapi/certs/server.key'
+BOOTSTRAP_PRIMARY_TLS_DOMAIN='edge.example.com'
+NODE_CF_DNS_TOKEN='cf-token-demo'
+NODE_WARP_LICENSE_KEY=''
+NODE_ARGO_TUNNEL_TOKEN=''
+NODE_ARGO_TUNNEL_DOMAIN=''
+NODE_ARGO_ORIGIN_PORT='2053'
+CONTROL_PLANE_AGENT_VERSION='0.1.17'
+AGENT_UPGRADED=0
 APPLY_LOG_FILE=""
+BOOTSTRAP_TLS_DOMAINS=$(cat <<'BOOTSTRAP_TLS_DOMAINS_EOF'
+edge.example.com
+backup.example.com
+BOOTSTRAP_TLS_DOMAINS_EOF
+)
 
 json_escape() {
   local value="$1"
@@ -32,12 +43,22 @@ json_escape() {
   printf '"%s"' "$value"
 }
 
+append_apply_log() {
+  [ -n "$APPLY_LOG_FILE" ] || return 0
+  mkdir -p "$(dirname "$APPLY_LOG_FILE")"
+  printf '%s\n' "$1" >>"$APPLY_LOG_FILE"
+}
+
 log() {
-  printf '%s\n' "[nodehubsapi] $*"
+  local line="[nodehubsapi] $*"
+  printf '%s\n' "$line"
+  append_apply_log "$line"
 }
 
 warn() {
-  printf '%s\n' "[nodehubsapi] WARN: $*" >&2
+  local line="[nodehubsapi] WARN: $*"
+  printf '%s\n' "$line" >&2
+  append_apply_log "$line"
 }
 
 is_root() {
@@ -51,43 +72,68 @@ run_systemctl() {
   systemctl $SYSTEMCTL_USER_FLAG "$@"
 }
 
-load_apply_context() {
-  [ -n "$INSTALL_MODE" ] || {
-    echo "INSTALL_MODE is missing from agent install context." >&2
-    exit 1
-  }
-  [ -n "$ETC_DIR" ] || {
-    echo "ETC_DIR is missing from agent install context." >&2
-    exit 1
-  }
-  [ -n "$STATE_DIR" ] || {
-    echo "STATE_DIR is missing from agent install context." >&2
-    exit 1
-  }
-  [ -n "$RUNTIME_BIN_DIR" ] || {
-    echo "RUNTIME_BIN_DIR is missing from agent install context." >&2
-    exit 1
-  }
+detect_execution_mode() {
+  if [ -z "$INSTALL_MODE" ]; then
+    if is_root; then
+      INSTALL_MODE="system"
+    else
+      INSTALL_MODE="user"
+    fi
+  fi
 
   if [ "$INSTALL_MODE" = "user" ]; then
+    case "$ETC_DIR" in
+      ''|/etc/nodehubsapi) ETC_DIR="$HOME/.config/nodehubsapi" ;;
+    esac
+    case "$STATE_DIR" in
+      ''|/opt/nodehubsapi) STATE_DIR="$HOME/.local/share/nodehubsapi" ;;
+    esac
+    case "$RUNTIME_BIN_DIR" in
+      ''|/usr/local/bin) RUNTIME_BIN_DIR="$HOME/.local/bin" ;;
+    esac
     SYSTEMCTL_USER_FLAG="--user"
-    SYSTEMD_DIR="${SYSTEMD_DIR:-$HOME/.config/systemd/user}"
-    SYSTEMD_WANTED_BY="${SYSTEMD_WANTED_BY:-default.target}"
+    SYSTEMD_DIR="$HOME/.config/systemd/user"
+    SYSTEMD_WANTED_BY="default.target"
+  fi
+
+  if ! mkdir -p "$ETC_DIR" "$STATE_DIR" "$RUNTIME_BIN_DIR" >/dev/null 2>&1; then
+    if [ "$INSTALL_MODE" = "system" ]; then
+      warn "No permission for system directories; switching release apply to user mode."
+      INSTALL_MODE="user"
+      ETC_DIR="$HOME/.config/nodehubsapi"
+      STATE_DIR="$HOME/.local/share/nodehubsapi"
+      RUNTIME_BIN_DIR="$HOME/.local/bin"
+      SYSTEMCTL_USER_FLAG="--user"
+      SYSTEMD_DIR="$HOME/.config/systemd/user"
+      SYSTEMD_WANTED_BY="default.target"
+      mkdir -p "$ETC_DIR" "$STATE_DIR" "$RUNTIME_BIN_DIR"
+    else
+      echo "Cannot create directories for release apply." >&2
+      exit 1
+    fi
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    if [ "$INSTALL_MODE" = "user" ]; then
+      if systemctl --user show-environment >/dev/null 2>&1; then
+        USE_SYSTEMD=1
+      else
+        USE_SYSTEMD=0
+        warn "systemd --user unavailable; runtime processes will run in background mode."
+      fi
+    elif [ -d /run/systemd/system ]; then
+      USE_SYSTEMD=1
+      SYSTEMCTL_USER_FLAG=""
+      SYSTEMD_DIR="/etc/systemd/system"
+      SYSTEMD_WANTED_BY="multi-user.target"
+    else
+      USE_SYSTEMD=0
+      warn "systemd unavailable; runtime processes will run in background mode."
+    fi
   else
-    SYSTEMCTL_USER_FLAG=""
-    SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
-    SYSTEMD_WANTED_BY="${SYSTEMD_WANTED_BY:-multi-user.target}"
+    USE_SYSTEMD=0
+    warn "systemctl command not found; runtime processes will run in background mode."
   fi
-
-  mkdir -p "$ETC_DIR" "$STATE_DIR" "$RUNTIME_BIN_DIR"
-}
-
-attach_apply_log() {
-  if command -v tee >/dev/null 2>&1; then
-    exec > >(tee -a "$APPLY_LOG_FILE") 2>&1
-    return 0
-  fi
-  exec >>"$APPLY_LOG_FILE" 2>&1
 }
 
 resolve_runtime_install_path() {
@@ -207,6 +253,38 @@ post_json() {
   fi
   echo "A POST-capable downloader is required." >&2
   return 1
+}
+
+refresh_agent_installation_if_needed() {
+  if [ "${AGENT_VERSION:-}" = "$CONTROL_PLANE_AGENT_VERSION" ]; then
+    return 0
+  fi
+  local install_url script_file
+  install_url="$API_BASE/api/nodes/agent/install?nodeId=$NODE_ID"
+  script_file="$(mktemp)"
+  if ! http_get_to_file "$install_url" "$script_file"; then
+    rm -f "$script_file"
+    echo "Failed to download the nodehubsapi agent installer." >&2
+    return 1
+  fi
+  chmod +x "$script_file"
+  if ! bash "$script_file"; then
+    rm -f "$script_file"
+    echo "Failed to refresh the nodehubsapi agent." >&2
+    return 1
+  fi
+  rm -f "$script_file"
+  AGENT_UPGRADED=1
+}
+
+schedule_agent_restart_if_needed() {
+  if [ "$AGENT_UPGRADED" != "1" ]; then
+    return 0
+  fi
+  if [ "$USE_SYSTEMD" = "1" ]; then
+    /bin/sh -lc 'sleep 2; true' >/dev/null 2>&1
+    run_systemctl restart nodehubsapi-agent.service >/dev/null 2>&1 || true
+  fi
 }
 
 ack_release() {
@@ -482,6 +560,18 @@ ensure_runtime_binary_ready() {
   install_runtime_binary
 }
 
+resolve_lego_arch() {
+  case "$(uname -m 2>/dev/null || true)" in
+    x86_64|amd64) echo amd64 ;;
+    aarch64|arm64) echo arm64 ;;
+    armv7l|armv7) echo armv7 ;;
+    i386|i686) echo 386 ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 resolve_cloudflared_arch() {
   case "$(uname -m 2>/dev/null || true)" in
     x86_64|amd64) echo amd64 ;;
@@ -492,6 +582,148 @@ resolve_cloudflared_arch() {
       return 1
       ;;
   esac
+}
+
+guess_acme_email() {
+  local domain="$1"
+  local zone="$domain"
+  if [ "$(printf '%s' "$domain" | awk -F '.' '{ print NF }')" -gt 2 ]; then
+    zone="${domain#*.}"
+  fi
+  if [ -z "$zone" ]; then
+    zone="example.com"
+  fi
+  printf 'hostmaster@%s' "$zone"
+}
+
+install_lego_binary() {
+  local target="$RUNTIME_BIN_DIR/lego"
+  local version
+  local fallback_version="v4.32.0"
+  local arch asset archive_file unpack_dir
+  if [ -x "$target" ]; then
+    printf '%s' "$target"
+    return 0
+  fi
+  arch="$(resolve_lego_arch)" || {
+    warn "lego is not available for this architecture."
+    return 1
+  }
+  ensure_command tar tar || {
+    warn "tar is required to install lego."
+    return 1
+  }
+  version="$(get_latest_github_tag "go-acme/lego" "$fallback_version")"
+  [ -n "$version" ] || version="$fallback_version"
+  asset="lego_${version}_linux_${arch}.tar.gz"
+  archive_file="$TMP_DIR/$asset"
+  unpack_dir="$TMP_DIR/lego"
+  mkdir -p "$unpack_dir"
+  http_download_to_file "https://github.com/go-acme/lego/releases/download/${version}/${asset}" "$archive_file"
+  tar -xzf "$archive_file" -C "$unpack_dir"
+  install_binary_file "$unpack_dir/lego" "$target"
+  printf '%s' "$target"
+}
+
+issue_cloudflare_certificate() {
+  local lego_bin="$1"
+  local primary_domain="$BOOTSTRAP_PRIMARY_TLS_DOMAIN"
+  local certs_dir="$STATE_DIR/lego"
+  local cert_source key_source email
+  if [ -z "$primary_domain" ]; then
+    primary_domain="$(printf '%s\n' "$BOOTSTRAP_TLS_DOMAINS" | awk 'NF { print; exit }')"
+  fi
+  [ -n "$primary_domain" ] || return 1
+  email="$(guess_acme_email "$primary_domain")"
+  mkdir -p "$certs_dir"
+  local args=(--accept-tos --path "$certs_dir" --email "$email" --dns cloudflare)
+  while IFS= read -r domain; do
+    [ -n "$domain" ] || continue
+    args+=(--domains "$domain")
+  done <<< "$BOOTSTRAP_TLS_DOMAINS"
+  CLOUDFLARE_DNS_API_TOKEN="$NODE_CF_DNS_TOKEN" "$lego_bin" "${args[@]}" run >/dev/null
+  cert_source="$certs_dir/certificates/${primary_domain}.crt"
+  key_source="$certs_dir/certificates/${primary_domain}.key"
+  [ -s "$cert_source" ] && [ -s "$key_source" ] || return 1
+  mkdir -p "$(dirname "$BOOTSTRAP_CERT_PATH")"
+  cp "$cert_source" "$BOOTSTRAP_CERT_PATH"
+  cp "$key_source" "$BOOTSTRAP_KEY_PATH"
+}
+
+issue_standalone_certificate() {
+  local lego_bin="$1"
+  local primary_domain="$BOOTSTRAP_PRIMARY_TLS_DOMAIN"
+  local certs_dir="$STATE_DIR/lego"
+  local cert_source key_source email
+  if [ -z "$primary_domain" ]; then
+    primary_domain="$(printf '%s\n' "$BOOTSTRAP_TLS_DOMAINS" | awk 'NF { print; exit }')"
+  fi
+  [ -n "$primary_domain" ] || return 1
+  if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    warn "Standalone ACME requires root to bind port 80."
+    return 1
+  fi
+  email="$(guess_acme_email "$primary_domain")"
+  mkdir -p "$certs_dir"
+  local args=(--accept-tos --path "$certs_dir" --email "$email" --http --http.port :80)
+  while IFS= read -r domain; do
+    [ -n "$domain" ] || continue
+    args+=(--domains "$domain")
+  done <<< "$BOOTSTRAP_TLS_DOMAINS"
+  "$lego_bin" "${args[@]}" run >/dev/null
+  cert_source="$certs_dir/certificates/${primary_domain}.crt"
+  key_source="$certs_dir/certificates/${primary_domain}.key"
+  [ -s "$cert_source" ] && [ -s "$key_source" ] || return 1
+  mkdir -p "$(dirname "$BOOTSTRAP_CERT_PATH")"
+  cp "$cert_source" "$BOOTSTRAP_CERT_PATH"
+  cp "$key_source" "$BOOTSTRAP_KEY_PATH"
+}
+
+existing_certificate_is_self_signed() {
+  if [ ! -s "$BOOTSTRAP_CERT_PATH" ] || ! command -v openssl >/dev/null 2>&1; then
+    return 1
+  fi
+  local issuer subject
+  issuer="$(openssl x509 -in "$BOOTSTRAP_CERT_PATH" -noout -issuer 2>/dev/null | sed 's/^issuer= *//')"
+  subject="$(openssl x509 -in "$BOOTSTRAP_CERT_PATH" -noout -subject 2>/dev/null | sed 's/^subject= *//')"
+  [ -n "$issuer" ] && [ "$issuer" = "$subject" ]
+}
+
+ensure_tls_certificate() {
+  if [ "$BOOTSTRAP_NEEDS_CERTS" != "1" ]; then
+    return 0
+  fi
+  if [ -s "$BOOTSTRAP_CERT_PATH" ] && [ -s "$BOOTSTRAP_KEY_PATH" ]; then
+    if existing_certificate_is_self_signed; then
+      warn "Existing TLS certificate is self-signed; replacing via lego."
+    else
+      return 0
+    fi
+  fi
+
+  if [ -z "$BOOTSTRAP_TLS_DOMAINS" ]; then
+    warn "TLS domains are empty; skipping certificate issuance."
+    return 1
+  fi
+
+  local lego_bin
+  lego_bin="$(install_lego_binary)" || return 1
+
+  if [ -n "$NODE_CF_DNS_TOKEN" ] && [ -n "$BOOTSTRAP_TLS_DOMAINS" ]; then
+    if issue_cloudflare_certificate "$lego_bin"; then
+      log "Issued TLS certificate via lego + Cloudflare DNS."
+      return 0
+    fi
+    warn "lego certificate issuance via Cloudflare DNS failed."
+  fi
+
+  if issue_standalone_certificate "$lego_bin"; then
+    log "Issued TLS certificate via lego standalone HTTP challenge."
+    return 0
+  fi
+
+  warn "lego standalone certificate issuance failed."
+  return 1
 }
 
 decode_base64_flexible() {
@@ -880,7 +1112,63 @@ ensure_argo_bootstrap() {
 }
 
 write_runtime_files() {
-__RUNTIME_FILE_BLOCKS__
+mkdir -p "$(dirname "${ETC_DIR}/runtime/sing-box.json")"
+cat >"${ETC_DIR}/runtime/sing-box.json" <<'NODESHUB_FILE_1'
+{
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "vless",
+      "tag": "in-1",
+      "listen": "::",
+      "listen_port": 443,
+      "users": [
+        {
+          "uuid": "11111111-1111-4111-8111-111111111111"
+        }
+      ],
+      "transport": {
+        "type": "ws",
+        "path": "/ws",
+        "headers": {
+          "Host": "cdn.example.com"
+        }
+      },
+      "tls": {
+        "enabled": true,
+        "server_name": "edge.example.com",
+        "certificate_path": "/etc/nodehubsapi/certs/server.crt",
+        "key_path": "/etc/nodehubsapi/certs/server.key"
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "final": "direct"
+  }
+}
+NODESHUB_FILE_1
+
+mkdir -p "$(dirname "${ETC_DIR}/runtime/release.json")"
+cat >"${ETC_DIR}/runtime/release.json" <<'NODESHUB_FILE_2'
+{
+  "releaseId": "rel_demo",
+  "revision": 2,
+  "kind": "runtime",
+  "configRevision": 2,
+  "message": "demo release",
+  "summary": "template update",
+  "createdAt": "2026-03-10T00:00:00.000Z"
+}
+NODESHUB_FILE_2
 }
 
 write_runtime_service() {
@@ -964,7 +1252,18 @@ prepare_runtime_plans() {
   if [ "$RUNTIME_PLAN_COUNT" -le 0 ]; then
     return 0
   fi
-__RUNTIME_PREPARE_BLOCKS__
+  RUNTIME_ENGINE='sing-box'
+  RUNTIME_VERSION='1.13.0'
+  RUNTIME_BINARY_NAME='sing-box'
+  RUNTIME_INSTALL_PATH_DEFAULT='/usr/local/bin/sing-box'
+  RUNTIME_ASSET_TEMPLATE='sing-box-1.13.0-linux-{arch}.tar.gz'
+  RUNTIME_BINARY_PATH_TEMPLATE='sing-box-1.13.0-linux-{arch}/sing-box'
+  RUNTIME_RUN_ARGS_TEMPLATE='run -c {config_path}'
+  RUNTIME_ARCHIVE_FORMAT='tar.gz'
+  RUNTIME_CONFIG_PATH="${ETC_DIR}/runtime/sing-box.json"
+  RUNTIME_SERVICE_NAME='nodehubsapi-runtime-sing-box'
+  RUNTIME_SERVICE_FILE="${SYSTEMD_DIR}/nodehubsapi-runtime-sing-box.service"
+  ensure_runtime_binary_ready
 }
 
 apply_runtime_plans() {
@@ -972,7 +1271,32 @@ apply_runtime_plans() {
     warn "No runtime plans in release artifact."
     return 0
   fi
-__RUNTIME_APPLY_BLOCKS__
+  RUNTIME_ENGINE='sing-box'
+  RUNTIME_VERSION='1.13.0'
+  RUNTIME_BINARY_NAME='sing-box'
+  RUNTIME_INSTALL_PATH_DEFAULT='/usr/local/bin/sing-box'
+  RUNTIME_ASSET_TEMPLATE='sing-box-1.13.0-linux-{arch}.tar.gz'
+  RUNTIME_BINARY_PATH_TEMPLATE='sing-box-1.13.0-linux-{arch}/sing-box'
+  RUNTIME_RUN_ARGS_TEMPLATE='run -c {config_path}'
+  RUNTIME_ARCHIVE_FORMAT='tar.gz'
+  RUNTIME_CONFIG_PATH="${ETC_DIR}/runtime/sing-box.json"
+  RUNTIME_SERVICE_NAME='nodehubsapi-runtime-sing-box'
+  RUNTIME_SERVICE_FILE="${SYSTEMD_DIR}/nodehubsapi-runtime-sing-box.service"
+  resolve_runtime_install_path
+  write_runtime_service
+  restart_runtime_service
+}
+
+run_hooks() {
+  local directory="$1"
+  if [ ! -d "$directory" ]; then
+    return 0
+  fi
+  for hook in "$directory"/*; do
+    [ -e "$hook" ] || continue
+    [ -x "$hook" ] || continue
+    "$hook"
+  done
 }
 
 cleanup() {
@@ -988,24 +1312,29 @@ fail_apply() {
 }
 
 main() {
-  load_apply_context
+  detect_execution_mode
 
   TMP_DIR="$(mktemp -d)"
   trap fail_apply ERR
 
-  mkdir -p "$ETC_DIR/runtime" "$ETC_DIR/certs" "$STATE_DIR/releases" "$STATE_DIR/warp" "$STATE_DIR/argo" "$STATE_DIR/lego"
+  mkdir -p "$ETC_DIR/runtime" "$ETC_DIR/certs" "$STATE_DIR/releases" "$STATE_DIR/warp" "$STATE_DIR/argo" "$STATE_DIR/lego" "$ETC_DIR/hooks/pre-apply.d" "$ETC_DIR/hooks/post-apply.d"
   APPLY_LOG_FILE="$STATE_DIR/releases/apply-$RELEASE_ID.log"
   : > "$APPLY_LOG_FILE"
-  attach_apply_log
   log "Release apply start: release=$RELEASE_ID revision=$RELEASE_REVISION kind=$RELEASE_KIND"
   log "Release apply mode: $INSTALL_MODE"
 
+  refresh_agent_installation_if_needed
+  ack_release "applying" "release apply started"
+  run_hooks "$ETC_DIR/hooks/pre-apply.d"
   prepare_runtime_plans
   stop_runtime_kernels
   write_runtime_files
+  ensure_tls_certificate
   apply_runtime_plans
   cp "$ETC_DIR/runtime/release.json" "$STATE_DIR/releases/current.json"
+  run_hooks "$ETC_DIR/hooks/post-apply.d"
   ack_release "healthy" "release applied"
+  schedule_agent_restart_if_needed
   trap - ERR
   cleanup
 }

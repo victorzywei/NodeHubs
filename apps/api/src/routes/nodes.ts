@@ -96,9 +96,7 @@ nodeRoutes.post('/:id/releases/preview', async (c) => {
     preview = await previewNodeRelease(
       c.get('services'),
       c.req.param('id'),
-      parsed.data.kind,
       parsed.data.templateIds,
-      parsed.data.bootstrapOptions,
       parsed.data.message,
     )
   } catch (error) {
@@ -119,9 +117,7 @@ nodeRoutes.post('/:id/releases', async (c) => {
     release = await publishNodeRelease(
       c.get('services'),
       c.req.param('id'),
-      parsed.data.kind,
       parsed.data.templateIds,
-      parsed.data.bootstrapOptions,
       parsed.data.message,
     )
   } catch (error) {
@@ -155,6 +151,10 @@ nodeRoutes.get('/agent/install', async (c) => {
     backupDomain: nodeRow.backup_domain || '',
     entryIp: nodeRow.entry_ip || '',
     githubMirrorUrl: nodeRow.github_mirror_url || '',
+    installWarp: Number(nodeRow.install_warp || 0) === 1,
+    warpLicenseKey: nodeRow.warp_license_key || '',
+    heartbeatIntervalSeconds: Number(nodeRow.heartbeat_interval_seconds || 15),
+    versionPullIntervalSeconds: Number(nodeRow.version_pull_interval_seconds || 15),
     cfDnsToken: nodeRow.cf_dns_token || '',
     argoTunnelToken: nodeRow.argo_tunnel_token || '',
     argoTunnelDomain: nodeRow.argo_tunnel_domain || '',
@@ -184,6 +184,10 @@ nodeRoutes.get('/:id/install-script', async (c) => {
     backupDomain: target.backupDomain,
     entryIp: target.entryIp,
     githubMirrorUrl: target.githubMirrorUrl,
+    installWarp: target.installWarp,
+    warpLicenseKey: target.warpLicenseKey,
+    heartbeatIntervalSeconds: target.heartbeatIntervalSeconds,
+    versionPullIntervalSeconds: target.versionPullIntervalSeconds,
     cfDnsToken: target.cfDnsToken,
     argoTunnelToken: target.argoTunnelToken,
     argoTunnelDomain: target.argoTunnelDomain,
@@ -208,6 +212,19 @@ nodeRoutes.get('/:id/deploy-command', async (c) => {
     publicBaseUrl: c.get('services').publicBaseUrl,
     nodeId: target.id,
     agentToken: target.agentToken,
+    networkType: target.networkType,
+    primaryDomain: target.primaryDomain,
+    backupDomain: target.backupDomain,
+    entryIp: target.entryIp,
+    githubMirrorUrl: target.githubMirrorUrl,
+    installWarp: target.installWarp,
+    warpLicenseKey: target.warpLicenseKey,
+    heartbeatIntervalSeconds: target.heartbeatIntervalSeconds,
+    versionPullIntervalSeconds: target.versionPullIntervalSeconds,
+    cfDnsToken: target.cfDnsToken,
+    argoTunnelToken: target.argoTunnelToken,
+    argoTunnelDomain: target.argoTunnelDomain,
+    argoTunnelPort: target.argoTunnelPort,
   })
   return ok({ command })
 })
@@ -275,7 +292,6 @@ nodeRoutes.get('/agent/reconcile', async (c) => {
   }
 
   const applyUrl = `${c.get('services').publicBaseUrl}/api/nodes/agent/releases/${desired.release.id}/apply-script?nodeId=${encodeURIComponent(nodeId)}`
-  const artifactUrl = `${c.get('services').publicBaseUrl}/api/nodes/agent/releases/${desired.release.id}/artifact?nodeId=${encodeURIComponent(nodeId)}`
   if (format === 'env') {
     return new Response(
       buildAgentReconcileEnv({
@@ -285,7 +301,6 @@ nodeRoutes.get('/agent/reconcile', async (c) => {
         desiredReleaseRevision: desired.node.desiredReleaseRevision,
         releaseId: desired.release.id,
         applyUrl,
-        artifactUrl,
         status: desired.release.status,
         agentVersion: c.get('services').appVersion,
         installUrl,
@@ -307,32 +322,9 @@ nodeRoutes.get('/agent/reconcile', async (c) => {
     desiredReleaseRevision: desired.node.desiredReleaseRevision,
     releaseId: desired.release.id,
     applyUrl,
-    artifactUrl,
     status: desired.release.status,
     agentVersion: c.get('services').appVersion,
     installUrl,
-  })
-})
-
-nodeRoutes.get('/agent/releases/:releaseId/artifact', async (c) => {
-  const nodeId = c.req.query('nodeId') || ''
-  if (!nodeId) return fail('VALIDATION', 'nodeId is required', 400)
-  const nodeRow = await resolveAgentNode(c.get('services'), nodeId, c.req.header('X-Agent-Token') || '')
-  if (!nodeRow) return fail('UNAUTHORIZED', 'Invalid node credentials', 401)
-  const auth = requireAgentToken(c, nodeRow.agent_token)
-  if (auth) return auth
-
-  const release = await getReleaseById(c.get('services'), c.req.param('releaseId'))
-  if (!release || release.node_id !== nodeId) return fail('NOT_FOUND', 'Release not found', 404)
-  const artifact = await c.get('services').artifacts.get(release.artifact_key)
-  if (!artifact) return fail('NOT_FOUND', 'Artifact not found', 404)
-  return new Response(artifact.body, {
-    status: 200,
-    headers: {
-      'Content-Type': artifact.contentType,
-      ETag: `"${artifact.etag}"`,
-      'Cache-Control': 'no-store',
-    },
   })
 })
 
