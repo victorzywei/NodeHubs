@@ -23,6 +23,11 @@ describe('heartbeat schema', () => {
       warpReserved: null,
       argoStatus: 'running',
       argoDomain: 'example.trycloudflare.com',
+      permissionMode: 'root',
+      singBoxVersion: 'sing-box version 1.13.0',
+      singBoxStatus: 'running',
+      xrayVersion: 'Xray 26.2.6',
+      xrayStatus: 'stopping',
       storageTotalBytes: 1,
       storageUsedBytes: 1,
       storageUsagePercent: 100,
@@ -30,5 +35,8 @@ describe('heartbeat schema', () => {
     })
 
     expect(parsed.success).toBe(true)
+    expect(parsed.success && parsed.data.permissionMode).toBe('root')
+    expect(parsed.success && parsed.data.singBoxStatus).toBe('running')
+    expect(parsed.success && parsed.data.xrayStatus).toBe('stopping')
   })
 })

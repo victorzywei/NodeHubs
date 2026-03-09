@@ -855,9 +855,20 @@ install_warp_cli() {
 }
 
 run_warp_cli() {
+  local output rc
   command -v warp-cli >/dev/null 2>&1 || return 127
-  warp-cli --accept-tos "$@" >/dev/null 2>&1 && return 0
-  warp-cli "$@" >/dev/null 2>&1
+  output="$(warp-cli --accept-tos "$@" 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    return 0
+  fi
+  if printf '%s' "$output" | grep -qi -- 'accept-tos'; then
+    output="$(warp-cli "$@" 2>&1)"
+    rc=$?
+    [ "$rc" -eq 0 ] && return 0
+  fi
+  [ -n "$output" ] && warn "warp-cli $*: $(printf '%s' "$output" | tail -n 1)"
+  return "$rc"
 }
 
 capture_warp_cli() {
@@ -889,6 +900,23 @@ wait_for_warp_connected() {
     attempt=$((attempt + 1))
   done
   warn "warp-cli failed to reach connected state: $(printf '%s' "$status_output" | tail -n 1)"
+  return 1
+}
+
+wait_for_warp_service_ready() {
+  local status_output status_lower attempt=0
+  while [ "$attempt" -lt 15 ]; do
+    if warp_service_running; then
+      status_output="$(capture_warp_cli status | tr -d '\r' || true)"
+      status_lower="$(printf '%s' "$status_output" | tr '[:upper:]' '[:lower:]')"
+      if [ -n "$status_lower" ] && ! printf '%s' "$status_lower" | grep -Eq 'failed to connect|unable to connect|could not connect|not connected to the local daemon|service is not ready'; then
+        return 0
+      fi
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+  warn "warp-cli daemon is not ready: $(printf '%s' "$status_output" | tail -n 1)"
   return 1
 }
 
@@ -949,8 +977,9 @@ configure_warp_cli() {
   if [ -n "$account_type" ]; then
     log "warp-cli account type: $account_type"
   fi
+  wait_for_warp_service_ready || return 1
   run_warp_cli connect || {
-    warn "warp-cli connect command failed."
+    warn "warp-cli connect command failed. Current status: $(capture_warp_cli status | tr -d '\r' | tail -n 1)"
     return 1
   }
   wait_for_warp_connected

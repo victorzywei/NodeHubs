@@ -276,11 +276,32 @@ echo '== nodehubsapi-agent log =='
 show_service_logs nodehubsapi-agent.service "$STATE_DIR/agent.log"`,
     },
     {
+      title: 'Agent 心跳连接测试',
+      description: '使用当前 agent token 对 heartbeat 接口发起一次真实请求，验证 API 连通性与鉴权。',
+      command: `${prelude}
+echo '== heartbeat request =='
+if [ -n "\${API_BASE:-}" ] && [ -n "\${NODE_ID:-}" ] && [ -n "\${AGENT_TOKEN:-}" ]; then
+  PAYLOAD="{\"nodeId\":\"$NODE_ID\",\"bytesInTotal\":0,\"bytesOutTotal\":0,\"currentConnections\":0,\"heartbeatIntervalSeconds\":\${HEARTBEAT_INTERVAL_SECONDS:-15},\"versionPullIntervalSeconds\":\${VERSION_PULL_INTERVAL_SECONDS:-15}}"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS -X POST -H "Content-Type: application/json" -H "X-Agent-Token: $AGENT_TOKEN" "$API_BASE/api/nodes/agent/heartbeat" --data "$PAYLOAD"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- --header="Content-Type: application/json" --header="X-Agent-Token: $AGENT_TOKEN" --method=POST --body-data="$PAYLOAD" "$API_BASE/api/nodes/agent/heartbeat"
+  else
+    echo 'missing downloader: curl/wget'
+  fi
+else
+  echo 'missing API_BASE/NODE_ID/AGENT_TOKEN'
+fi`,
+    },
+    {
       title: 'WARP 全量排查',
-      description: '查看官方 warp-cli 的注册、连接状态、WARP 网卡和相关 runtime 日志。',
+      description: '查看官方 warp-cli、warp-svc、WARP 网卡、路由和相关 runtime 日志。',
       command: `${prelude}
 echo '== warp-svc status =='
 show_service_status warp-svc.service || show_process warp-svc
+echo
+echo '== warp-svc log =='
+show_service_logs warp-svc.service "$STATE_DIR/warp/warp-svc.log"
 echo
 echo '== warp-cli registration =='
 if command -v warp-cli >/dev/null 2>&1; then
@@ -310,6 +331,14 @@ elif command -v ifconfig >/dev/null 2>&1; then
   ifconfig CloudflareWARP 2>/dev/null || echo 'interface not found: CloudflareWARP'
 else
   echo 'missing ip/ifconfig'
+fi
+echo
+echo '== routes =='
+if command -v ip >/dev/null 2>&1; then
+  ip route show 2>/dev/null || true
+  ip -6 route show 2>/dev/null || true
+else
+  echo 'missing ip'
 fi
 echo
 echo '== sing-box runtime =='
