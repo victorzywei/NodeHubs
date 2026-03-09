@@ -889,7 +889,7 @@ warp_cli_account_type() {
 
 wait_for_warp_connected() {
   local status_output status_lower attempt=0
-  while [ "$attempt" -lt 15 ]; do
+  while [ "$attempt" -lt 30 ]; do
     status_output="$(capture_warp_cli status | tr -d '\r' || true)"
     status_lower="$(printf '%s' "$status_output" | tr '[:upper:]' '[:lower:]')"
     if printf '%s' "$status_lower" | grep -q 'connected'; then
@@ -899,6 +899,10 @@ wait_for_warp_connected() {
     sleep 2
     attempt=$((attempt + 1))
   done
+  if printf '%s' "$status_lower" | grep -q 'connecting'; then
+    log "warp-cli is still connecting; bootstrap will continue and let the daemon finish in background."
+    return 0
+  fi
   warn "warp-cli failed to reach connected state: $(printf '%s' "$status_output" | tail -n 1)"
   return 1
 }
@@ -961,12 +965,17 @@ ensure_warp_service() {
 }
 
 configure_warp_cli() {
-  local account_type
+  local account_type attempt=0
   command -v warp-cli >/dev/null 2>&1 || {
     warn "warp-cli is not available after installation."
     return 1
   }
-  run_warp_cli registration new || true
+  wait_for_warp_service_ready || return 1
+  while [ "$attempt" -lt 3 ]; do
+    run_warp_cli registration new && break
+    sleep 3
+    attempt=$((attempt + 1))
+  done
   if [ -n "$NODE_WARP_LICENSE_KEY" ]; then
     run_warp_cli registration license "$NODE_WARP_LICENSE_KEY" || {
       warn "Failed to apply the provided WARP License Key."
@@ -977,7 +986,6 @@ configure_warp_cli() {
   if [ -n "$account_type" ]; then
     log "warp-cli account type: $account_type"
   fi
-  wait_for_warp_service_ready || return 1
   run_warp_cli connect || {
     warn "warp-cli connect command failed. Current status: $(capture_warp_cli status | tr -d '\r' | tail -n 1)"
     return 1
