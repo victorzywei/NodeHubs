@@ -65,6 +65,17 @@ warn() {
   printf '%s\n' "[nodehubsapi] WARN: $*" >&2
 }
 
+INSTALL_STEP_INDEX=0
+
+run_step() {
+  local label="$1"
+  shift
+  INSTALL_STEP_INDEX=$((INSTALL_STEP_INDEX + 1))
+  log "Step ${INSTALL_STEP_INDEX}: ${label}"
+  "$@"
+  log "Step ${INSTALL_STEP_INDEX} completed: ${label}"
+}
+
 cleanup_tmp_dir() {
   if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
     rm -rf "$TMP_DIR"
@@ -136,6 +147,13 @@ detect_install_context() {
     elif [ -d /run/systemd/system ]; then
       USE_SYSTEMD=1
     fi
+  fi
+
+  log "Install context: mode=$INSTALL_MODE, config=$ETC_DIR, state=$STATE_DIR, runtime-bin=$RUNTIME_BIN_DIR"
+  if [ "$USE_SYSTEMD" = "1" ]; then
+    log "Agent startup mode: systemd"
+  else
+    log "Agent startup mode: background autostart"
   fi
 }
 
@@ -1899,6 +1917,12 @@ start_agent_background() {
   echo "$!" > "$pid_file"
 }
 
+configure_background_agent_startup() {
+  install_user_login_autostart
+  install_system_boot_autostart
+  start_agent_background
+}
+
 write_background_autostart_launcher() {
   mkdir -p "$(dirname "$USER_AUTOSTART_SCRIPT")"
   cat >"$USER_AUTOSTART_SCRIPT" <<EOF
@@ -2127,17 +2151,19 @@ parse_args() {
 }
 
 parse_args "$@"
+log "Starting nodehubsapi install: node=$NODE_ID network=$NODE_NETWORK_TYPE api=$API_BASE"
 ensure_downloader
-detect_install_context
-write_agent_env
-write_agent_binary
-run_network_bootstrap
-install_runtime_binaries
-ensure_warp_bootstrap
-if ! write_service; then
-  install_user_login_autostart
-  install_system_boot_autostart
-  start_agent_background
+run_step "Detect install context" detect_install_context
+run_step "Write agent environment" write_agent_env
+run_step "Install or update agent binary" write_agent_binary
+run_step "Prepare network bootstrap" run_network_bootstrap
+run_step "Install runtime binaries" install_runtime_binaries
+run_step "Install WARP when enabled" ensure_warp_bootstrap
+if [ "$USE_SYSTEMD" = "1" ]; then
+  run_step "Register and start agent service" write_service
+else
+  run_step "Configure background autostart and start agent" configure_background_agent_startup
 fi
 cleanup_tmp_dir
+log "Install finished. Printing summary."
 print_summary

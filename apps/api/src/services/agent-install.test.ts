@@ -119,6 +119,9 @@ describe('agent install scripts', () => {
     })
 
     expect(script).toContain('parse_args() {')
+    expect(script).toContain('run_step() {')
+    expect(script).toContain('Starting nodehubsapi install:')
+    expect(script).toContain('Step ${INSTALL_STEP_INDEX}: ${label}')
     expect(script).toContain('recompute_bootstrap_tls_domains')
     expect(script).toContain("NODE_INSTALL_WARP=1")
     expect(script).toContain("NODE_WARP_LICENSE_KEY='warp-license'")
@@ -127,6 +130,7 @@ describe('agent install scripts', () => {
     expect(script).toContain('run_network_bootstrap')
     expect(script).toContain('install_runtime_binaries')
     expect(script).toContain('ensure_warp_bootstrap')
+    expect(script).toContain('configure_background_agent_startup')
     expect(script).toContain('install_xray_binary')
     expect(script).toContain('install_sing_box_binary')
     expect(script).toContain('install_warp_cli')
