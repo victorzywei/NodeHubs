@@ -200,6 +200,8 @@ describe('agent install scripts', () => {
     expect(script).toContain('install_xray_binary')
     expect(script).toContain('install_sing_box_binary')
     expect(script).toContain('install_warp_cli')
+    expect(script).toContain('ExecStart=/bin/sh -lc \'exec ${cloudflared_bin} tunnel --url "\\$ARGO_ORIGIN_URL" --edge-ip-version auto --no-autoupdate --protocol http2 >>"\\$ARGO_LOG_FILE" 2>&1\'')
+    expect(script).toContain('curl -fL --http1.1 --connect-timeout 20 --retry 3 --retry-delay 1 --retry-all-errors "$resolved_url" -o "$target"')
     expect(script).toContain('/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env')
     expect(script).not.toContain('hooks/bootstrap.d')
   })

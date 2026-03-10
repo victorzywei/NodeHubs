@@ -223,16 +223,27 @@ http_download_to_file() {
   resolved_url="$(wrap_github_url "$url")"
   log_stderr "Downloading file: $resolved_url"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$resolved_url" -o "$target"
-    return 0
+    if curl -fL --connect-timeout 20 --retry 3 --retry-delay 1 --retry-all-errors "$resolved_url" -o "$target"; then
+      [ -s "$target" ] && return 0
+      rm -f "$target"
+    fi
+    warn "curl download failed, retrying with HTTP/1.1: $resolved_url"
+    if curl -fL --http1.1 --connect-timeout 20 --retry 3 --retry-delay 1 --retry-all-errors "$resolved_url" -o "$target"; then
+      [ -s "$target" ] && return 0
+      rm -f "$target"
+    fi
   fi
   if command -v wget >/dev/null 2>&1; then
-    wget -qO "$target" "$resolved_url"
-    return 0
+    if wget -qO "$target" "$resolved_url" && [ -s "$target" ]; then
+      return 0
+    fi
+    rm -f "$target"
   fi
   if command -v busybox >/dev/null 2>&1; then
-    busybox wget -qO "$target" "$resolved_url"
-    return 0
+    if busybox wget -qO "$target" "$resolved_url" && [ -s "$target" ]; then
+      return 0
+    fi
+    rm -f "$target"
   fi
   echo "A downloader is required: curl, wget, or busybox wget." >&2
   return 1
@@ -574,7 +585,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=${env_file}
-ExecStart=/bin/sh -lc 'exec ${cloudflared_bin} tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token "$ARGO_TUNNEL_TOKEN" >>"$ARGO_LOG_FILE" 2>&1'
+ExecStart=/bin/sh -lc 'exec ${cloudflared_bin} tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token "\$ARGO_TUNNEL_TOKEN" >>"\$ARGO_LOG_FILE" 2>&1'
 Restart=always
 RestartSec=5
 
@@ -591,7 +602,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=${env_file}
-ExecStart=/bin/sh -lc 'exec ${cloudflared_bin} tunnel --url "$ARGO_ORIGIN_URL" --edge-ip-version auto --no-autoupdate --protocol http2 >>"$ARGO_LOG_FILE" 2>&1'
+ExecStart=/bin/sh -lc 'exec ${cloudflared_bin} tunnel --url "\$ARGO_ORIGIN_URL" --edge-ip-version auto --no-autoupdate --protocol http2 >>"\$ARGO_LOG_FILE" 2>&1'
 Restart=always
 RestartSec=5
 
@@ -706,7 +717,7 @@ runtime_binary_exists() {
 
 install_xray_binary() {
   local target="$RUNTIME_BIN_DIR/xray"
-  local arch zip_file unpack_dir
+  local arch tag zip_file unpack_dir
   runtime_binary_exists xray && {
     log "Reusing existing xray binary."
     return 0
@@ -719,12 +730,22 @@ install_xray_binary() {
     warn "unzip is required to install xray."
     return 1
   }
+  tag="$(get_latest_github_tag "XTLS/Xray-core" "v25.1.30")"
+  [ -n "$tag" ] || tag="v25.1.30"
   zip_file="$TMP_DIR/xray.zip"
   unpack_dir="$TMP_DIR/xray"
   mkdir -p "$unpack_dir"
-  log "Installing xray binary."
-  http_download_to_file "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip" "$zip_file"
+  log "Installing xray binary: $tag"
+  http_download_to_file "https://github.com/XTLS/Xray-core/releases/download/${tag}/Xray-linux-${arch}.zip" "$zip_file"
+  [ -s "$zip_file" ] || {
+    warn "xray archive download failed."
+    return 1
+  }
   unzip -q -o "$zip_file" -d "$unpack_dir"
+  [ -x "$unpack_dir/xray" ] || {
+    warn "xray archive did not contain an executable binary."
+    return 1
+  }
   install_binary_file "$unpack_dir/xray" "$target"
 }
 
