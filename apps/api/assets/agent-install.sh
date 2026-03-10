@@ -1570,6 +1570,7 @@ warp_status() {
 
 argo_domain() {
   local value
+  sync_argo_domain_state || true
   value="$(cat "$STATE_DIR/argo/domain" 2>/dev/null | head -n 1 | tr -d '\r' || true)"
   if [ -z "$value" ] && [ -f "$STATE_DIR/argo/cloudflared.log" ]; then
     value="$(grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$STATE_DIR/argo/cloudflared.log" 2>/dev/null | tail -n 1 | sed 's|https://||' || true)"
@@ -1667,6 +1668,8 @@ ensure_argo_background() {
     return 0
   fi
   mkdir -p "$STATE_DIR/argo"
+  rm -f "$STATE_DIR/argo/domain"
+  : > "$log_file"
   if [ -n "${NODE_ARGO_TUNNEL_TOKEN:-}" ]; then
     nohup /bin/sh -lc "exec \"$CLOUDFLARED_BIN_PATH\" tunnel --no-autoupdate --edge-ip-version auto --protocol http2 run --token \"$NODE_ARGO_TUNNEL_TOKEN\" >>\"$log_file\" 2>&1" >/dev/null 2>&1 &
   else
