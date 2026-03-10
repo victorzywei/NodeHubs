@@ -1,3 +1,7 @@
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   buildAgentInstallScript,
@@ -69,6 +73,56 @@ function createTemplate(): TemplateRecord {
   }
 }
 
+function toWslPath(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/')
+  const driveMatch = normalized.match(/^([A-Za-z]):(\/.*)$/)
+  if (!driveMatch) return normalized
+  return `/mnt/${driveMatch[1].toLowerCase()}${driveMatch[2]}`
+}
+
+function bashSyntaxRunner(filePath: string): { command: string; args: string[] } | null {
+  if (process.platform === 'win32') {
+    const probe = spawnSync('wsl', ['bash', '-lc', 'exit 0'], { encoding: 'utf8' })
+    if (probe.status === 0) {
+      return {
+        command: 'wsl',
+        args: ['bash', '-n', toWslPath(filePath)],
+      }
+    }
+    return null
+  }
+
+  const probe = spawnSync('bash', ['-lc', 'exit 0'], { encoding: 'utf8' })
+  if (probe.status === 0) {
+    return {
+      command: 'bash',
+      args: ['-n', filePath],
+    }
+  }
+  return null
+}
+
+function expectScriptToPassBashSyntax(script: string, fileName: string): void {
+  const tempDir = mkdtempSync(join(tmpdir(), 'nodehubsapi-shell-'))
+  const scriptPath = join(tempDir, fileName)
+  writeFileSync(scriptPath, script, 'utf8')
+
+  try {
+    const runner = bashSyntaxRunner(scriptPath)
+    if (!runner) {
+      throw new Error('No Bash runtime available for shell syntax validation.')
+    }
+
+    const result = spawnSync(runner.command, runner.args, {
+      encoding: 'utf8',
+    })
+
+    expect(result.status, result.stderr || result.stdout).toBe(0)
+  } finally {
+    rmSync(tempDir, { force: true, recursive: true })
+  }
+}
+
 describe('agent install scripts', () => {
   it('builds a parameterized deploy command', () => {
     const command = buildDeployCommand({
@@ -136,6 +190,43 @@ describe('agent install scripts', () => {
     expect(script).toContain('install_warp_cli')
     expect(script).toContain('/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env')
     expect(script).not.toContain('hooks/bootstrap.d')
+  })
+
+  it('renders shell scripts that pass bash syntax checks', () => {
+    const installScript = buildAgentInstallScript({
+      publicBaseUrl: 'https://control.example.com/',
+      nodeId: 'node_1',
+      agentToken: 'token_123',
+      networkType: 'public',
+      primaryDomain: 'edge.example.com',
+      backupDomain: 'backup.example.com',
+      entryIp: '203.0.113.1',
+      githubMirrorUrl: 'https://ghproxy.example.com/https://github.com',
+      installWarp: true,
+      warpLicenseKey: 'warp-license',
+      heartbeatIntervalSeconds: 30,
+      versionPullIntervalSeconds: 60,
+      cfDnsToken: 'cf-token',
+      argoTunnelToken: '',
+      argoTunnelDomain: '',
+      argoTunnelPort: 2053,
+    })
+
+    const artifact = renderReleaseArtifact({
+      releaseId: 'rel_1',
+      revision: 2,
+      kind: 'runtime',
+      configRevision: 2,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: 'ship it',
+      summary: 'template update',
+      node: createNode(),
+      templates: [createTemplate()],
+    }, buildRuntimeCatalog())
+    const releaseScript = buildReleaseApplyScript(artifact)
+
+    expectScriptToPassBashSyntax(installScript, 'agent-install.sh')
+    expectScriptToPassBashSyntax(releaseScript, 'release-apply.sh')
   })
 
   it('builds reconcile env documents for shell sourcing', () => {
