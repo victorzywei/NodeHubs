@@ -248,24 +248,29 @@ async function openNodeReleaseLog(node: NodeRecord, revision?: number) {
   await openReleaseLog(node, release.id)
 }
 
-function buildCheckCommandPrelude() {
-  return [
-    'ETC_DIR="$(if [ -d /etc/nodehubsapi ]; then echo /etc/nodehubsapi; else echo "$HOME/.config/nodehubsapi"; fi)"',
-    'STATE_DIR="$(if [ -d /opt/nodehubsapi ]; then echo /opt/nodehubsapi; else echo "$HOME/.local/share/nodehubsapi"; fi)"',
-    'AGENT_ENV="$ETC_DIR/agent.env"',
-    '[ -f "$AGENT_ENV" ] && . "$AGENT_ENV"',
-    'show_file() { local file="$1"; [ -f "$file" ] && sed -n \'1,200p\' "$file" || echo "missing: $file"; }',
-    'show_dir() { local dir="$1"; [ -d "$dir" ] && ls -lah "$dir" || echo "missing: $dir"; }',
-    'show_process() { local pattern="$1"; pgrep -af "$pattern" 2>/dev/null || echo "process not found: $pattern"; }',
-    'show_service_status() { local service="$1"; if command -v systemctl >/dev/null 2>&1; then systemctl status "$service" --no-pager 2>/dev/null && return 0; systemctl --user status "$service" --no-pager 2>/dev/null && return 0; fi; return 1; }',
-    'emit_service_logs() { local service="$1"; local fallback="$2"; local content=""; if command -v journalctl >/dev/null 2>&1; then content="$(journalctl -u "$service" -n 120 --no-pager 2>/dev/null || true)"; if [ -n "$content" ]; then printf \'%s\\n\' "$content"; return 0; fi; content="$(journalctl --user -u "$service" -n 120 --no-pager 2>/dev/null || true)"; if [ -n "$content" ]; then printf \'%s\\n\' "$content"; return 0; fi; fi; [ -f "$fallback" ] && tail -n 120 "$fallback" && return 0; return 1; }',
-    'show_service_logs() { local service="$1"; local fallback="$2"; emit_service_logs "$service" "$fallback" || echo "missing log: $fallback"; }',
-    'show_latest_trycloudflare_domain() { local state_file="$1"; local service="$2"; local fallback="$3"; local latest=""; latest="$(emit_service_logs "$service" "$fallback" | grep -ao \'https://[a-z0-9-]*\\.trycloudflare\\.com\' 2>/dev/null | tail -n 1 | sed \'s|https://||\' || true)"; if [ -z "$latest" ] && [ -f "$state_file" ]; then latest="$(cat "$state_file" 2>/dev/null | head -n 1 | tr -d \'\\r\' || true)"; fi; [ -n "$latest" ] && echo "$latest" || echo "argo domain not found"; }',
-  ].join('\n')
+function joinCheckCommand(parts: string[]) {
+  return parts.filter(Boolean).join('; ')
+}
+
+function buildCheckCommand(parts: string[]) {
+  return joinCheckCommand([
+    'ETC_DIR=/etc/nodehubsapi',
+    '[ -d "$ETC_DIR" ] || ETC_DIR="$HOME/.config/nodehubsapi"',
+    'STATE_DIR=/opt/nodehubsapi',
+    '[ -d "$STATE_DIR" ] || STATE_DIR="$HOME/.local/share/nodehubsapi"',
+    ...parts,
+  ])
+}
+
+function buildServiceStatusCommand(service: string, processPattern: string) {
+  return `systemctl status ${service} --no-pager 2>/dev/null || systemctl --user status ${service} --no-pager 2>/dev/null || pgrep -af "${processPattern}" || echo "${processPattern} not running"`
+}
+
+function buildServiceLogCommand(service: string, fallback: string) {
+  return `journalctl -u ${service} -n 120 --no-pager 2>/dev/null || journalctl --user -u ${service} -n 120 --no-pager 2>/dev/null || tail -n 120 "${fallback}" 2>/dev/null || echo "missing: ${fallback}"`
 }
 
 function buildRuntimeCheckCommand(
-  prelude: string,
   {
     title,
     description,
@@ -287,115 +292,81 @@ function buildRuntimeCheckCommand(
   return {
     title,
     description,
-    command: `${prelude}
-echo '== ${label} config =='
-show_file "$ETC_DIR/runtime/${configFile}"
-echo
-echo '== ${label} process args =='
-show_process "${processPattern}"
-echo
-echo '== ${label} status =='
-show_service_status ${service} || echo "service not managed by systemd, inspect process args above"
-echo
-echo '== ${label} log =='
-show_service_logs ${service} "$STATE_DIR/runtime/${logFile}"`,
+    command: buildCheckCommand([
+      `echo '== ${label} config =='`,
+      `sed -n '1,120p' "$ETC_DIR/runtime/${configFile}" 2>/dev/null || echo "missing: $ETC_DIR/runtime/${configFile}"`,
+      'echo',
+      `echo '== ${label} process =='`,
+      `pgrep -af "${processPattern}" 2>/dev/null || echo "${processPattern} not running"`,
+      'echo',
+      `echo '== ${label} status =='`,
+      buildServiceStatusCommand(service, processPattern),
+      'echo',
+      `echo '== ${label} log =='`,
+      buildServiceLogCommand(service, `$STATE_DIR/runtime/${logFile}`),
+    ]),
   }
 }
 
 function getNodeCheckCommands(node: NodeRecord) {
-  const prelude = buildCheckCommandPrelude()
   const commands = [
     {
       title: 'Agent 全量排查',
-      description: '查看 agent 参数、运行状态和最近日志。',
-      command: `${prelude}
-echo '== agent.env =='
-show_file "$ETC_DIR/agent.env"
-echo
-echo '== nodehubsapi-agent status =='
-show_service_status nodehubsapi-agent.service || show_process nodehubsapi-agent
-echo
-echo '== nodehubsapi-agent log =='
-show_service_logs nodehubsapi-agent.service "$STATE_DIR/agent.log"`,
+      description: '单行查看 agent 参数、状态和最近日志。',
+      command: buildCheckCommand([
+        `echo '== agent.env =='`,
+        `sed -n '1,120p' "$ETC_DIR/agent.env" 2>/dev/null || echo "missing: $ETC_DIR/agent.env"`,
+        'echo',
+        `echo '== agent process =='`,
+        `pgrep -af "nodehubsapi-agent" 2>/dev/null || echo "nodehubsapi-agent not running"`,
+        'echo',
+        `echo '== agent status =='`,
+        buildServiceStatusCommand('nodehubsapi-agent.service', 'nodehubsapi-agent'),
+        'echo',
+        `echo '== agent log =='`,
+        buildServiceLogCommand('nodehubsapi-agent.service', '$STATE_DIR/agent.log'),
+      ]),
     },
     {
       title: 'Agent 心跳连接测试',
-      description: '使用当前 agent token 对 heartbeat 接口发起一次真实请求，验证 API 连通性与鉴权。',
-      command: `${prelude}
-echo '== heartbeat request =='
-if [ -n "\${API_BASE:-}" ] && [ -n "\${NODE_ID:-}" ] && [ -n "\${AGENT_TOKEN:-}" ]; then
-  PAYLOAD="{\"nodeId\":\"$NODE_ID\",\"bytesInTotal\":0,\"bytesOutTotal\":0,\"currentConnections\":0,\"heartbeatIntervalSeconds\":\${HEARTBEAT_INTERVAL_SECONDS:-15},\"versionPullIntervalSeconds\":\${VERSION_PULL_INTERVAL_SECONDS:-15}}"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsS -X POST -H "Content-Type: application/json" -H "X-Agent-Token: $AGENT_TOKEN" "$API_BASE/api/nodes/agent/heartbeat" --data "$PAYLOAD"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO- --header="Content-Type: application/json" --header="X-Agent-Token: $AGENT_TOKEN" --method=POST --body-data="$PAYLOAD" "$API_BASE/api/nodes/agent/heartbeat"
-  else
-    echo 'missing downloader: curl/wget'
-  fi
-else
-  echo 'missing API_BASE/NODE_ID/AGENT_TOKEN'
-fi`,
+      description: '单行使用当前 agent 环境对 heartbeat 接口发起真实请求。',
+      command: buildCheckCommand([
+        '[ -f "$ETC_DIR/agent.env" ] && . "$ETC_DIR/agent.env"',
+        `if [ -n "\${API_BASE:-}" ] && [ -n "\${NODE_ID:-}" ] && [ -n "\${AGENT_TOKEN:-}" ] && command -v curl >/dev/null 2>&1; then PAYLOAD="{\\"nodeId\\":\\"$NODE_ID\\",\\"bytesInTotal\\":0,\\"bytesOutTotal\\":0,\\"currentConnections\\":0,\\"heartbeatIntervalSeconds\\":\${HEARTBEAT_INTERVAL_SECONDS:-15},\\"versionPullIntervalSeconds\\":\${VERSION_PULL_INTERVAL_SECONDS:-15}}"; curl -fsS -X POST -H "Content-Type: application/json" -H "X-Agent-Token: $AGENT_TOKEN" "$API_BASE/api/nodes/agent/heartbeat" --data "$PAYLOAD"; else echo 'missing API_BASE/NODE_ID/AGENT_TOKEN or curl'; fi`,
+      ]),
     },
     {
       title: 'WARP 全量排查',
-      description: '查看官方 warp-cli、warp-svc、WARP 网卡和当前路由。',
-      command: `${prelude}
-echo '== warp-svc status =='
-show_service_status warp-svc.service || show_process warp-svc
-echo
-echo '== warp-svc log =='
-show_service_logs warp-svc.service "$STATE_DIR/warp/warp-svc.log"
-echo
-echo '== warp-cli registration =='
-if command -v warp-cli >/dev/null 2>&1; then
-  warp-cli --accept-tos registration show 2>/dev/null || warp-cli registration show 2>/dev/null || true
-else
-  echo 'warp-cli not installed'
-fi
-echo
-echo '== warp-cli status =='
-if command -v warp-cli >/dev/null 2>&1; then
-  warp-cli --accept-tos status 2>/dev/null || warp-cli status 2>/dev/null || true
-else
-  echo 'warp-cli not installed'
-fi
-echo
-echo '== warp-cli tunnel stats =='
-if command -v warp-cli >/dev/null 2>&1; then
-  warp-cli --accept-tos tunnel stats 2>/dev/null || warp-cli tunnel stats 2>/dev/null || true
-else
-  echo 'warp-cli not installed'
-fi
-echo
-echo '== CloudflareWARP interface =='
-if command -v ip >/dev/null 2>&1; then
-  ip addr show dev CloudflareWARP 2>/dev/null || echo 'interface not found: CloudflareWARP'
-elif command -v ifconfig >/dev/null 2>&1; then
-  ifconfig CloudflareWARP 2>/dev/null || echo 'interface not found: CloudflareWARP'
-else
-  echo 'missing ip/ifconfig'
-fi
-echo
-echo '== routes =='
-if command -v ip >/dev/null 2>&1; then
-  ip route show 2>/dev/null || true
-  ip -6 route show 2>/dev/null || true
-else
-  echo 'missing ip'
-fi`,
+      description: '单行查看 warp-svc、warp-cli、WARP 网卡和路由。',
+      command: buildCheckCommand([
+        `echo '== warp-svc status =='`,
+        buildServiceStatusCommand('warp-svc.service', 'warp-svc'),
+        'echo',
+        `echo '== warp-svc log =='`,
+        buildServiceLogCommand('warp-svc.service', '$STATE_DIR/warp/warp-svc.log'),
+        'echo',
+        `echo '== warp-cli status =='`,
+        `command -v warp-cli >/dev/null 2>&1 && (warp-cli --accept-tos registration show 2>/dev/null || warp-cli registration show 2>/dev/null || true; echo; warp-cli --accept-tos status 2>/dev/null || warp-cli status 2>/dev/null || true) || echo 'warp-cli not installed'`,
+        'echo',
+        `echo '== CloudflareWARP interface =='`,
+        `ip addr show dev CloudflareWARP 2>/dev/null || ifconfig CloudflareWARP 2>/dev/null || echo 'interface not found: CloudflareWARP'`,
+        'echo',
+        `echo '== routes =='`,
+        `ip route show 2>/dev/null || echo 'missing ip route'`,
+      ]),
     },
-    buildRuntimeCheckCommand(prelude, {
+    buildRuntimeCheckCommand({
       title: 'sing-box 参数和日志',
-      description: '查看 sing-box 当前配置、进程参数、运行状态和最近日志。',
+      description: '单行查看 sing-box 配置、进程参数、状态和日志。',
       label: 'sing-box',
       service: 'nodehubsapi-runtime-sing-box.service',
       processPattern: 'sing-box',
       configFile: 'sing-box.json',
       logFile: 'sing-box.log',
     }),
-    buildRuntimeCheckCommand(prelude, {
+    buildRuntimeCheckCommand({
       title: 'xray 参数和日志',
-      description: '查看 xray 当前配置、进程参数、运行状态和最近日志。',
+      description: '单行查看 xray 配置、进程参数、状态和日志。',
       label: 'xray',
       service: 'nodehubsapi-runtime-xray.service',
       processPattern: 'xray',
@@ -404,74 +375,56 @@ fi`,
     }),
     {
       title: '版本拉取 / 应用排查',
-      description: '查看 reconcile 返回、本地当前版本、版本目录和最近应用日志。',
-      command: `${prelude}
-echo '== reconcile env =='
-if [ -n "\${API_BASE:-}" ] && [ -n "\${NODE_ID:-}" ] && [ -n "\${AGENT_TOKEN:-}" ]; then
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL -H "X-Agent-Token: $AGENT_TOKEN" "$API_BASE/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env" || true
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO- --header="X-Agent-Token: $AGENT_TOKEN" "$API_BASE/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env" || true
-  elif command -v busybox >/dev/null 2>&1; then
-    busybox wget -qO- --header="X-Agent-Token: $AGENT_TOKEN" "$API_BASE/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env" || true
-  else
-    echo 'missing downloader: curl/wget/busybox wget'
-  fi
-else
-  echo 'missing API_BASE/NODE_ID/AGENT_TOKEN'
-fi
-echo
-echo '== local release metadata =='
-show_file "$ETC_DIR/runtime/release.json"
-[ -f "$STATE_DIR/releases/current.json" ] && sed -n '1,200p' "$STATE_DIR/releases/current.json"
-echo
-echo '== release files =='
-show_dir "$STATE_DIR/releases"
-LATEST_APPLY_LOG="$(ls -1t "$STATE_DIR"/releases/apply-*.log 2>/dev/null | head -n 1 || true)"
-if [ -n "$LATEST_APPLY_LOG" ]; then
-  echo
-  echo "== latest apply log: $LATEST_APPLY_LOG =="
-  tail -n 120 "$LATEST_APPLY_LOG"
-else
-  echo 'no apply log found'
-fi`,
+      description: '单行查看 reconcile 返回、本地版本文件和最新应用日志。',
+      command: buildCheckCommand([
+        '[ -f "$ETC_DIR/agent.env" ] && . "$ETC_DIR/agent.env"',
+        `echo '== reconcile env =='`,
+        `if [ -n "\${API_BASE:-}" ] && [ -n "\${NODE_ID:-}" ] && [ -n "\${AGENT_TOKEN:-}" ] && command -v curl >/dev/null 2>&1; then curl -fsSL -H "X-Agent-Token: $AGENT_TOKEN" "$API_BASE/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env" || true; else echo 'missing API_BASE/NODE_ID/AGENT_TOKEN or curl'; fi`,
+        'echo',
+        `echo '== local release metadata =='`,
+        `sed -n '1,120p' "$ETC_DIR/runtime/release.json" 2>/dev/null || echo "missing: $ETC_DIR/runtime/release.json"`,
+        `[ -f "$STATE_DIR/releases/current.json" ] && sed -n '1,120p' "$STATE_DIR/releases/current.json" || echo "missing: $STATE_DIR/releases/current.json"`,
+        'echo',
+        `echo '== release files =='`,
+        `ls -lah "$STATE_DIR/releases" 2>/dev/null || echo "missing: $STATE_DIR/releases"`,
+        `LATEST_APPLY_LOG="$(ls -1t "$STATE_DIR"/releases/apply-*.log 2>/dev/null | head -n 1)"`,
+        `[ -n "$LATEST_APPLY_LOG" ] && echo "== latest apply log: $LATEST_APPLY_LOG ==" && tail -n 120 "$LATEST_APPLY_LOG" || echo 'no apply log found'`,
+      ]),
     },
   ]
 
   if (node.networkType === 'public') {
     commands.push({
       title: 'TLS 证书排查',
-      description: '查看证书文件与有效期。',
-      command: `${prelude}
-echo '== cert files =='
-show_dir "$ETC_DIR/certs"
-echo
-echo '== cert detail =='
-[ -f "$ETC_DIR/certs/server.crt" ] && openssl x509 -in "$ETC_DIR/certs/server.crt" -noout -issuer -subject -dates || echo "missing: $ETC_DIR/certs/server.crt"`,
+      description: '单行查看证书文件和证书有效期。',
+      command: buildCheckCommand([
+        `echo '== cert files =='`,
+        `ls -lah "$ETC_DIR/certs" 2>/dev/null || echo "missing: $ETC_DIR/certs"`,
+        'echo',
+        `echo '== cert detail =='`,
+        `[ -f "$ETC_DIR/certs/server.crt" ] && openssl x509 -in "$ETC_DIR/certs/server.crt" -noout -issuer -subject -dates || echo "missing: $ETC_DIR/certs/server.crt"`,
+      ]),
     })
   } else {
     commands.push({
       title: 'Argo 参数和最新日志',
-      description: '查看 cloudflared 参数、最新域名、运行状态和最近日志。',
-      command: `${prelude}
-echo '== cloudflared env =='
-show_file "$ETC_DIR/cloudflared.env"
-echo
-echo '== latest argo domain =='
-show_latest_trycloudflare_domain "$STATE_DIR/argo/domain" nodehubsapi-cloudflared.service "$STATE_DIR/argo/cloudflared.log"
-echo
-echo '== argo state =='
-show_dir "$STATE_DIR/argo"
-[ -f "$STATE_DIR/argo/domain" ] && { echo '-- state domain --'; cat "$STATE_DIR/argo/domain"; }
-echo
-echo '== cloudflared process args =='
-show_process cloudflared
-echo
-echo '== cloudflared status =='
-show_service_status nodehubsapi-cloudflared.service || show_process cloudflared
-echo
-echo '== cloudflared latest log =='
-show_service_logs nodehubsapi-cloudflared.service "$STATE_DIR/argo/cloudflared.log"`,
+      description: '单行查看 cloudflared 参数、最新域名、状态和日志。',
+      command: buildCheckCommand([
+        `echo '== cloudflared env =='`,
+        `sed -n '1,120p' "$ETC_DIR/cloudflared.env" 2>/dev/null || echo "missing: $ETC_DIR/cloudflared.env"`,
+        'echo',
+        `echo '== latest argo domain =='`,
+        `ARGO_DOMAIN="$(grep -ao 'https://[a-z0-9-]*\\.trycloudflare\\.com' "$STATE_DIR/argo/cloudflared.log" 2>/dev/null | tail -n 1 | sed 's|https://||')"; [ -n "$ARGO_DOMAIN" ] && echo "$ARGO_DOMAIN" || cat "$STATE_DIR/argo/domain" 2>/dev/null || echo 'argo domain not found'`,
+        'echo',
+        `echo '== cloudflared process =='`,
+        `pgrep -af "cloudflared" 2>/dev/null || echo 'cloudflared not running'`,
+        'echo',
+        `echo '== cloudflared status =='`,
+        buildServiceStatusCommand('nodehubsapi-cloudflared.service', 'cloudflared'),
+        'echo',
+        `echo '== cloudflared log =='`,
+        buildServiceLogCommand('nodehubsapi-cloudflared.service', '$STATE_DIR/argo/cloudflared.log'),
+      ]),
     })
   }
 
@@ -1783,7 +1736,7 @@ onMounted(() => { if (adminKey.value) login() })
           <div class="detail-section">
             <div class="detail-section-title">检查命令</div>
             <div class="text-muted" style="margin-bottom:8px;font-size:12px">
-              下列命令会自动兼容 system、user、systemd 与后台进程模式，可直接复制到 VPS 执行。
+              下列命令均为单行命令，可整行复制到 VPS 直接执行。
             </div>
             <div v-for="item in getNodeCheckCommands(selectedNode)" :key="item.title" class="card mb-md" style="padding:12px">
               <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
