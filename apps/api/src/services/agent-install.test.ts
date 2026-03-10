@@ -11,7 +11,6 @@ import {
   buildUninstallCommand,
 } from './agent-install'
 import { renderReleaseArtifact } from './release-renderer'
-import { buildRuntimeCatalog } from './runtime-catalog'
 import type { NodeRecord, TemplateRecord } from '@contracts/index'
 
 function createNode(): NodeRecord {
@@ -80,25 +79,38 @@ function toWslPath(filePath: string): string {
   return `/mnt/${driveMatch[1].toLowerCase()}${driveMatch[2]}`
 }
 
+let cachedBashSyntaxRunner: { command: string; args: string[] } | null | undefined
+
 function bashSyntaxRunner(filePath: string): { command: string; args: string[] } | null {
+  if (cachedBashSyntaxRunner !== undefined) {
+    const resolvedPath = process.platform === 'win32' ? toWslPath(filePath) : filePath
+    return cachedBashSyntaxRunner
+      ? { command: cachedBashSyntaxRunner.command, args: [...cachedBashSyntaxRunner.args, resolvedPath] }
+      : null
+  }
+
   if (process.platform === 'win32') {
     const probe = spawnSync('wsl', ['bash', '-lc', 'exit 0'], { encoding: 'utf8' })
     if (probe.status === 0) {
-      return {
+      cachedBashSyntaxRunner = {
         command: 'wsl',
-        args: ['bash', '-n', toWslPath(filePath)],
+        args: ['bash', '-n'],
       }
+      return { command: cachedBashSyntaxRunner.command, args: [...cachedBashSyntaxRunner.args, toWslPath(filePath)] }
     }
+    cachedBashSyntaxRunner = null
     return null
   }
 
   const probe = spawnSync('bash', ['-lc', 'exit 0'], { encoding: 'utf8' })
   if (probe.status === 0) {
-    return {
+    cachedBashSyntaxRunner = {
       command: 'bash',
-      args: ['-n', filePath],
+      args: ['-n'],
     }
+    return { command: cachedBashSyntaxRunner.command, args: [...cachedBashSyntaxRunner.args, filePath] }
   }
+  cachedBashSyntaxRunner = null
   return null
 }
 
@@ -222,12 +234,12 @@ describe('agent install scripts', () => {
       summary: 'template update',
       node: createNode(),
       templates: [createTemplate()],
-    }, buildRuntimeCatalog())
+    })
     const releaseScript = buildReleaseApplyScript(artifact)
 
     expectScriptToPassBashSyntax(installScript, 'agent-install.sh')
     expectScriptToPassBashSyntax(releaseScript, 'release-apply.sh')
-  })
+  }, 15000)
 
   it('builds reconcile env documents for shell sourcing', () => {
     const body = buildAgentReconcileEnv({
@@ -258,7 +270,7 @@ describe('agent install scripts', () => {
     expect(command).toContain('rm -rf /etc/nodehubsapi /opt/nodehubsapi "$HOME/.config/nodehubsapi" "$HOME/.local/share/nodehubsapi"')
   })
 
-  it('builds runtime apply scripts that self-manage runtime binaries and restart services', () => {
+  it('builds runtime apply scripts that reuse installed runtime binaries and restart services', () => {
     const artifact = renderReleaseArtifact({
       releaseId: 'rel_1',
       revision: 2,
@@ -269,18 +281,21 @@ describe('agent install scripts', () => {
       summary: 'template update',
       node: createNode(),
       templates: [createTemplate()],
-    }, buildRuntimeCatalog())
+    })
 
     const script = buildReleaseApplyScript(artifact)
 
     expect(script).toContain('RUNTIME_PLAN_COUNT=')
-    expect(script).toContain('prepare_runtime_plans')
     expect(script).toContain('load_apply_context')
     expect(script).toContain('attach_apply_log')
+    expect(script).toContain('log "Stopping runtime kernels."')
+    expect(script).toContain('stop_runtime_kernels')
+    expect(script).toContain('log "Writing runtime files."')
     expect(script).toContain('write_runtime_files')
+    expect(script).toContain('log "Applying runtime configuration."')
     expect(script).toContain('apply_runtime_plans')
-    expect(script).toContain('ensure_runtime_binary_ready() {')
-    expect(script).toContain('Installing runtime binary: $RUNTIME_ENGINE $RUNTIME_VERSION')
+    expect(script).toContain('resolve_runtime_install_path() {')
+    expect(script).toContain('Runtime binary not found for $RUNTIME_ENGINE.')
     expect(script).toContain('RUNTIME_CONFIG_PATH="${ETC_DIR}/runtime/sing-box.json"')
     expect(script).toContain('cp "$ETC_DIR/runtime/release.json" "$STATE_DIR/releases/current.json"')
     expect(script).not.toContain('Publish a bootstrap release to install it.')
@@ -290,6 +305,9 @@ describe('agent install scripts', () => {
     expect(script).not.toContain('schedule_agent_restart_if_needed')
     expect(script).not.toContain('detect_execution_mode')
     expect(script).not.toContain('ensure_tls_certificate')
+    expect(script).not.toContain('prepare_runtime_plans')
+    expect(script).not.toContain('ensure_runtime_binary_ready')
+    expect(script).not.toContain('Installing runtime binary:')
     expect(script).not.toContain('ack_release "applying"')
   })
 })

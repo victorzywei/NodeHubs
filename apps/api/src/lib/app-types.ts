@@ -1,6 +1,5 @@
 import type { ArtifactStore } from '../storage/types'
 import type { SqlAdapter } from './db'
-import type { RuntimeCatalog } from '../services/runtime-catalog'
 
 export interface AppServices {
   appVersion: string
@@ -11,5 +10,4 @@ export interface AppServices {
   publicBaseUrl: string
   db: SqlAdapter
   artifacts: ArtifactStore
-  runtimeCatalog: RuntimeCatalog
 }

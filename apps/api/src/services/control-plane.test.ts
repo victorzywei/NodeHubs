@@ -24,7 +24,6 @@ import {
   updateTemplate,
 } from './control-plane'
 import { renderSubscriptionDocument } from './release-renderer'
-import { buildRuntimeCatalog } from './runtime-catalog'
 
 function createSqliteAdapter(db: DatabaseSync): SqlAdapter {
   return {
@@ -92,7 +91,6 @@ function createServices(): AppServices {
     publicBaseUrl: 'https://control.example.com',
     db: createSqliteAdapter(db),
     artifacts: new MemoryArtifactStore(),
-    runtimeCatalog: buildRuntimeCatalog(),
   }
 }
 

@@ -3,13 +3,11 @@ import type {
   PublicSubscriptionDocument,
   ReleaseArtifact,
   ReleaseKind,
-  RuntimeBinaryPlan,
   SubscriptionDocumentFormat,
   SubscriptionEndpoint,
   TemplatePreset,
   TemplateRecord,
 } from '@contracts/index'
-import type { RuntimeCatalog } from './runtime-catalog'
 import { hydrateTemplatePreset, repairTemplateRecord } from './template-defaults'
 
 type RenderContext = {
@@ -843,12 +841,6 @@ export function listTemplatePresets(): TemplatePreset[] {
   return TEMPLATE_PRESETS.map((item) => hydrateTemplatePreset(item))
 }
 
-function cloneBinaryPlan(plan: RuntimeBinaryPlan): RuntimeBinaryPlan {
-  return {
-    ...plan,
-  }
-}
-
 function groupTemplatesByEngine(templates: NormalizedTemplate[]): Record<TemplateRecord['engine'], NormalizedTemplate[]> {
   return templates.reduce<Record<TemplateRecord['engine'], NormalizedTemplate[]>>(
     (groups, template) => {
@@ -863,7 +855,7 @@ function groupTemplatesByEngine(templates: NormalizedTemplate[]): Record<Templat
   )
 }
 
-export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: RuntimeCatalog): ReleaseArtifact {
+export function renderReleaseArtifact(context: RenderContext): ReleaseArtifact {
   const runtimeTemplates = context.templates
   const normalizedTemplates = runtimeTemplates.map((template) => normalizeTemplate(context.node, template))
   const groupedTemplates = groupTemplatesByEngine(normalizedTemplates)
@@ -874,7 +866,6 @@ export function renderReleaseArtifact(context: RenderContext, runtimeCatalog: Ru
       const entryConfigPath = `runtime/${engine}.json`
       return {
         engine,
-        binary: cloneBinaryPlan(runtimeCatalog[engine]),
         entryConfigPath,
         files: [
           {

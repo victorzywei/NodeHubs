@@ -11,8 +11,6 @@ export type StorageMode = 'cloudflare' | 'docker'
 
 export type SubscriptionDocumentFormat = 'plain' | 'base64' | 'json' | 'v2ray' | 'clash' | 'singbox'
 
-export type RuntimeArchiveFormat = 'tar.gz' | 'zip'
-
 export interface NodeRecord {
   id: string
   name: string
@@ -158,7 +156,6 @@ export interface ReleaseConfigFile {
 
 export interface ReleaseRuntimePlan {
   engine: TemplateRecord['engine']
-  binary: RuntimeBinaryPlan
   entryConfigPath: string
   files: ReleaseConfigFile[]
 }
@@ -192,18 +189,6 @@ export interface SubscriptionEndpoint {
   upMbps?: number
   downMbps?: number
   uri?: string
-}
-
-export interface RuntimeBinaryPlan {
-  engine: TemplateRecord['engine']
-  version: string
-  binaryName: string
-  installPath: string
-  archiveFormat: RuntimeArchiveFormat
-  downloadBaseUrl: string
-  assetNameTemplate: string
-  binaryPathTemplate: string
-  runArgsTemplate: string
 }
 
 export interface ReleaseArtifact {

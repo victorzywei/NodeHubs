@@ -192,28 +192,10 @@ function buildRuntimePlanSetupBlock(runtime: ReleaseArtifact['runtimes'][number]
   const serviceFile = `\${SYSTEMD_DIR}/${serviceName}.service`
   return [
     `  RUNTIME_ENGINE=${shellQuote(runtime.engine)}`,
-    `  RUNTIME_VERSION=${shellQuote(runtime.binary.version)}`,
-    `  RUNTIME_BINARY_NAME=${shellQuote(runtime.binary.binaryName)}`,
-    `  RUNTIME_INSTALL_PATH_DEFAULT=${shellQuote(runtime.binary.installPath)}`,
-    `  RUNTIME_ASSET_TEMPLATE=${shellQuote(runtime.binary.assetNameTemplate)}`,
-    `  RUNTIME_BINARY_PATH_TEMPLATE=${shellQuote(runtime.binary.binaryPathTemplate)}`,
-    `  RUNTIME_RUN_ARGS_TEMPLATE=${shellQuote(runtime.binary.runArgsTemplate)}`,
-    `  RUNTIME_ARCHIVE_FORMAT=${shellQuote(runtime.binary.archiveFormat)}`,
     `  RUNTIME_CONFIG_PATH="${configPath}"`,
     `  RUNTIME_SERVICE_NAME=${shellQuote(serviceName)}`,
     `  RUNTIME_SERVICE_FILE="${serviceFile}"`,
   ].join('\n')
-}
-
-function buildRuntimePrepareBlocks(artifact: ReleaseArtifact): string {
-  return artifact.runtimes
-    .map((runtime) => {
-      return [
-        buildRuntimePlanSetupBlock(runtime),
-        '  ensure_runtime_binary_ready',
-      ].join('\n')
-    })
-    .join('\n')
 }
 
 function buildRuntimeApplyBlocks(artifact: ReleaseArtifact): string {
@@ -221,6 +203,7 @@ function buildRuntimeApplyBlocks(artifact: ReleaseArtifact): string {
     .map((runtime) => {
       return [
         buildRuntimePlanSetupBlock(runtime),
+        '  log "Applying runtime plan: $RUNTIME_ENGINE"',
         '  resolve_runtime_install_path',
         '  write_runtime_service',
         '  restart_runtime_service',
@@ -295,26 +278,15 @@ function renderScriptAsset(name: string, replacements: Record<string, string>): 
 
 export function buildReleaseApplyScript(artifact: ReleaseArtifact): string {
   const runtimeFileBlocks = buildRuntimeFileBlocks(artifact)
-  const runtimePrepareBlocks = buildRuntimePrepareBlocks(artifact)
   const runtimeApplyBlocks = buildRuntimeApplyBlocks(artifact)
-  const primaryRuntimeServiceName = `nodehubsapi-runtime-${artifact.runtimes[0]?.engine || 'sing-box'}`
   const runtimePlanCount = artifact.runtimes.length
-  const argoOriginPort = String(artifact.node.argoTunnelPort || 2053)
 
   return renderScriptAsset('release-apply.sh', {
     __RELEASE_ID__: shellQuote(artifact.releaseId),
     __RELEASE_REVISION__: shellQuote(String(artifact.revision)),
     __RELEASE_KIND__: shellQuote('runtime'),
-    __RUNTIME_PRIMARY_SERVICE_NAME__: shellQuote(primaryRuntimeServiceName),
     __RUNTIME_PLAN_COUNT__: String(runtimePlanCount),
-    __GITHUB_MIRROR_URL__: shellQuote(artifact.node.githubMirrorUrl || ''),
-    __NODE_CF_DNS_TOKEN__: shellQuote(artifact.node.cfDnsToken || ''),
-    __NODE_WARP_LICENSE_KEY__: shellQuote(''),
-    __NODE_ARGO_TUNNEL_TOKEN__: shellQuote(artifact.node.argoTunnelToken || ''),
-    __NODE_ARGO_TUNNEL_DOMAIN__: shellQuote(artifact.node.argoTunnelDomain || ''),
-    __NODE_ARGO_ORIGIN_PORT__: shellQuote(argoOriginPort),
     __RUNTIME_FILE_BLOCKS__: runtimeFileBlocks,
-    __RUNTIME_PREPARE_BLOCKS__: runtimePrepareBlocks,
     __RUNTIME_APPLY_BLOCKS__: runtimeApplyBlocks,
   })
 }

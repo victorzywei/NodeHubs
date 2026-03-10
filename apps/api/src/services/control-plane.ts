@@ -812,7 +812,7 @@ export async function publishNodeRelease(
         currentReleaseStatus: 'pending',
       },
       templates: repairedTemplates,
-    }, services.runtimeCatalog)
+    })
     const stored = await services.artifacts.putJson(artifactKey, artifact)
 
     await services.db.run(
@@ -881,24 +881,21 @@ export async function previewNodeRelease(
   const createdAt = nowIso()
   const summary = summarizeRelease(uniqueTemplateIds, message)
   const repairedTemplates = templateRows.map((row) => repairTemplateRecord(toTemplateRecord(row)))
-  const artifact = renderReleaseArtifact(
-    {
-      releaseId: createId('preview'),
-      revision: previewRevision,
-      kind: 'runtime',
-      configRevision: Number(node.configRevision || 0),
-      createdAt,
-      message,
-      summary,
-      node: {
-        ...node,
-        desiredReleaseRevision: previewRevision,
-        currentReleaseStatus: 'pending',
-      },
-      templates: repairedTemplates,
+  const artifact = renderReleaseArtifact({
+    releaseId: createId('preview'),
+    revision: previewRevision,
+    kind: 'runtime',
+    configRevision: Number(node.configRevision || 0),
+    createdAt,
+    message,
+    summary,
+    node: {
+      ...node,
+      desiredReleaseRevision: previewRevision,
+      currentReleaseStatus: 'pending',
     },
-    services.runtimeCatalog,
-  )
+    templates: repairedTemplates,
+  })
 
   return {
     kind: artifact.kind,

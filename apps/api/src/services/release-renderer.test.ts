@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { NodeRecord, TemplateRecord } from '@contracts/index'
 import { listTemplatePresets, parseReleaseArtifact, renderReleaseArtifact, renderSubscriptionDocument } from './release-renderer'
-import { buildRuntimeCatalog } from './runtime-catalog'
 
 function createNode(): NodeRecord {
   return {
@@ -76,7 +75,6 @@ function createTemplate(): TemplateRecord {
 
 describe('release renderer', () => {
   it('renders release artifacts with runtime files and subscription entries', () => {
-    const runtimeCatalog = buildRuntimeCatalog()
     const artifact = renderReleaseArtifact({
       releaseId: 'rel_1',
       revision: 2,
@@ -87,11 +85,10 @@ describe('release renderer', () => {
       summary: 'template update',
       node: createNode(),
       templates: [createTemplate()],
-    }, runtimeCatalog)
+    })
 
     expect(artifact.runtimes.length).toBe(1)
     expect(artifact.runtimes[0]?.engine).toBe('sing-box')
-    expect(artifact.runtimes[0]?.binary.version).toBe(runtimeCatalog['sing-box'].version)
     expect(artifact.runtimes[0]?.files[0]?.path).toBe('runtime/sing-box.json')
     expect(artifact.subscriptionEndpoints[0]?.host).toBe('cdn.example.com')
     expect(artifact.subscriptionEndpoints[0]?.sni).toBe('edge.example.com')
@@ -113,7 +110,7 @@ describe('release renderer', () => {
       summary: 'template update',
       node: createNoPublicIpNode(),
       templates: [createTemplate()],
-    }, buildRuntimeCatalog())
+    })
 
     const runtimeConfig = JSON.parse(artifact.runtimes[0]?.files[0]?.content || '{}') as {
       inbounds?: Array<Record<string, unknown>>
@@ -136,7 +133,7 @@ describe('release renderer', () => {
       summary: 'template update',
       node: createNode(),
       templates: [createTemplate()],
-    }, buildRuntimeCatalog()).subscriptionEndpoints
+    }).subscriptionEndpoints
 
     const plain = renderSubscriptionDocument(
       {
@@ -172,7 +169,7 @@ describe('release renderer', () => {
       summary: 'template update',
       node: createNode(),
       templates: [createTemplate()],
-    }, buildRuntimeCatalog()).subscriptionEndpoints
+    }).subscriptionEndpoints
 
     const clash = renderSubscriptionDocument(
       {
@@ -232,7 +229,7 @@ describe('release renderer', () => {
       summary: 'template update',
       node: createNode(),
       templates: [createTemplate(), xrayTemplate],
-    }, buildRuntimeCatalog())
+    })
 
     const engines = artifact.runtimes.map((runtime) => runtime.engine).sort()
     expect(engines).toEqual(['sing-box', 'xray'])
@@ -255,7 +252,7 @@ describe('release renderer', () => {
           warpRouteMode: 'ipv4',
         },
       ],
-    }, buildRuntimeCatalog())
+    })
 
     const runtimeConfig = JSON.parse(artifact.runtimes[0]?.files[0]?.content || '{}') as {
       outbounds?: Array<Record<string, unknown>>

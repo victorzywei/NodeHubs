@@ -4,7 +4,6 @@ import { DatabaseSync } from 'node:sqlite'
 import { APP_VERSION } from './lib/constants'
 import type { AppServices } from './lib/app-types'
 import type { SqlAdapter, SqlValue } from './lib/db'
-import { buildRuntimeCatalog } from './services/runtime-catalog'
 import { MinioArtifactStore } from './storage/minio-store'
 
 let cachedServices: AppServices | null = null
@@ -95,10 +94,6 @@ export function getNodeServices(): AppServices {
     publicBaseUrl: process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${process.env.PORT || '3000'}`,
     db: createSqliteAdapter(sqlite),
     artifacts,
-    runtimeCatalog: buildRuntimeCatalog({
-      singBoxVersion: process.env.SINGBOX_VERSION,
-      xrayVersion: process.env.XRAY_VERSION,
-    }),
   }
 
   return cachedServices

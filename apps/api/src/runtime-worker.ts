@@ -1,7 +1,6 @@
 import { APP_VERSION } from './lib/constants'
 import type { AppServices } from './lib/app-types'
 import type { SqlAdapter } from './lib/db'
-import { buildRuntimeCatalog } from './services/runtime-catalog'
 import { R2ArtifactStore } from './storage/r2-store'
 
 export interface WorkerBindings {
@@ -10,8 +9,6 @@ export interface WorkerBindings {
   ASSETS?: Fetcher
   ADMIN_KEY: string
   PUBLIC_BASE_URL?: string
-  SINGBOX_VERSION?: string
-  XRAY_VERSION?: string
 }
 
 function createD1Adapter(db: D1Database): SqlAdapter {
@@ -43,9 +40,5 @@ export function getWorkerServices(bindings: WorkerBindings, requestUrl: string):
     publicBaseUrl: String(bindings.PUBLIC_BASE_URL || new URL(requestUrl).origin),
     db: createD1Adapter(bindings.DB),
     artifacts: new R2ArtifactStore(bindings.ARTIFACTS),
-    runtimeCatalog: buildRuntimeCatalog({
-      singBoxVersion: bindings.SINGBOX_VERSION,
-      xrayVersion: bindings.XRAY_VERSION,
-    }),
   }
 }

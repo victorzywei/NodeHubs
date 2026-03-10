@@ -88,11 +88,6 @@ Persistent volumes:
 - `sqlite_data`
 - `minio_data`
 
-Environment variables for runtime pinning:
-
-- `SINGBOX_VERSION`
-- `XRAY_VERSION`
-
 ## Cloudflare deployment
 
 1. Build the web assets:
