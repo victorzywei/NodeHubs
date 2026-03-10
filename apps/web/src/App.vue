@@ -258,8 +258,48 @@ function buildCheckCommandPrelude() {
     'show_dir() { local dir="$1"; [ -d "$dir" ] && ls -lah "$dir" || echo "missing: $dir"; }',
     'show_process() { local pattern="$1"; pgrep -af "$pattern" 2>/dev/null || echo "process not found: $pattern"; }',
     'show_service_status() { local service="$1"; if command -v systemctl >/dev/null 2>&1; then systemctl status "$service" --no-pager 2>/dev/null && return 0; systemctl --user status "$service" --no-pager 2>/dev/null && return 0; fi; return 1; }',
-    'show_service_logs() { local service="$1"; local fallback="$2"; if command -v journalctl >/dev/null 2>&1; then journalctl -u "$service" -n 120 --no-pager 2>/dev/null && return 0; journalctl --user -u "$service" -n 120 --no-pager 2>/dev/null && return 0; fi; [ -f "$fallback" ] && tail -n 120 "$fallback" || echo "missing log: $fallback"; }',
+    'emit_service_logs() { local service="$1"; local fallback="$2"; local content=""; if command -v journalctl >/dev/null 2>&1; then content="$(journalctl -u "$service" -n 120 --no-pager 2>/dev/null || true)"; if [ -n "$content" ]; then printf \'%s\\n\' "$content"; return 0; fi; content="$(journalctl --user -u "$service" -n 120 --no-pager 2>/dev/null || true)"; if [ -n "$content" ]; then printf \'%s\\n\' "$content"; return 0; fi; fi; [ -f "$fallback" ] && tail -n 120 "$fallback" && return 0; return 1; }',
+    'show_service_logs() { local service="$1"; local fallback="$2"; emit_service_logs "$service" "$fallback" || echo "missing log: $fallback"; }',
+    'show_latest_trycloudflare_domain() { local state_file="$1"; local service="$2"; local fallback="$3"; local latest=""; latest="$(emit_service_logs "$service" "$fallback" | grep -ao \'https://[a-z0-9-]*\\.trycloudflare\\.com\' 2>/dev/null | tail -n 1 | sed \'s|https://||\' || true)"; if [ -z "$latest" ] && [ -f "$state_file" ]; then latest="$(cat "$state_file" 2>/dev/null | head -n 1 | tr -d \'\\r\' || true)"; fi; [ -n "$latest" ] && echo "$latest" || echo "argo domain not found"; }',
   ].join('\n')
+}
+
+function buildRuntimeCheckCommand(
+  prelude: string,
+  {
+    title,
+    description,
+    label,
+    service,
+    processPattern,
+    configFile,
+    logFile,
+  }: {
+    title: string
+    description: string
+    label: string
+    service: string
+    processPattern: string
+    configFile: string
+    logFile: string
+  },
+) {
+  return {
+    title,
+    description,
+    command: `${prelude}
+echo '== ${label} config =='
+show_file "$ETC_DIR/runtime/${configFile}"
+echo
+echo '== ${label} process args =='
+show_process "${processPattern}"
+echo
+echo '== ${label} status =='
+show_service_status ${service} || echo "service not managed by systemd, inspect process args above"
+echo
+echo '== ${label} log =='
+show_service_logs ${service} "$STATE_DIR/runtime/${logFile}"`,
+  }
 }
 
 function getNodeCheckCommands(node: NodeRecord) {
@@ -298,7 +338,7 @@ fi`,
     },
     {
       title: 'WARP 全量排查',
-      description: '查看官方 warp-cli、warp-svc、WARP 网卡、路由和相关 runtime 日志。',
+      description: '查看官方 warp-cli、warp-svc、WARP 网卡和当前路由。',
       command: `${prelude}
 echo '== warp-svc status =='
 show_service_status warp-svc.service || show_process warp-svc
@@ -342,16 +382,26 @@ if command -v ip >/dev/null 2>&1; then
   ip -6 route show 2>/dev/null || true
 else
   echo 'missing ip'
-fi
-echo
-echo '== sing-box runtime =='
-show_service_status nodehubsapi-runtime-sing-box.service || show_process sing-box
-show_service_logs nodehubsapi-runtime-sing-box.service "$STATE_DIR/runtime/sing-box.log"
-echo
-echo '== xray runtime =='
-show_service_status nodehubsapi-runtime-xray.service || show_process xray
-show_service_logs nodehubsapi-runtime-xray.service "$STATE_DIR/runtime/xray.log"`,
+fi`,
     },
+    buildRuntimeCheckCommand(prelude, {
+      title: 'sing-box 参数和日志',
+      description: '查看 sing-box 当前配置、进程参数、运行状态和最近日志。',
+      label: 'sing-box',
+      service: 'nodehubsapi-runtime-sing-box.service',
+      processPattern: 'sing-box',
+      configFile: 'sing-box.json',
+      logFile: 'sing-box.log',
+    }),
+    buildRuntimeCheckCommand(prelude, {
+      title: 'xray 参数和日志',
+      description: '查看 xray 当前配置、进程参数、运行状态和最近日志。',
+      label: 'xray',
+      service: 'nodehubsapi-runtime-xray.service',
+      processPattern: 'xray',
+      configFile: 'xray.json',
+      logFile: 'xray.log',
+    }),
     {
       title: '版本拉取 / 应用排查',
       description: '查看 reconcile 返回、本地当前版本、版本目录和最近应用日志。',
@@ -401,20 +451,26 @@ echo '== cert detail =='
     })
   } else {
     commands.push({
-      title: 'Argo 全量排查',
-      description: '查看 cloudflared 参数、运行状态和最近日志。',
+      title: 'Argo 参数和最新日志',
+      description: '查看 cloudflared 参数、最新域名、运行状态和最近日志。',
       command: `${prelude}
 echo '== cloudflared env =='
 show_file "$ETC_DIR/cloudflared.env"
 echo
+echo '== latest argo domain =='
+show_latest_trycloudflare_domain "$STATE_DIR/argo/domain" nodehubsapi-cloudflared.service "$STATE_DIR/argo/cloudflared.log"
+echo
 echo '== argo state =='
 show_dir "$STATE_DIR/argo"
-[ -f "$STATE_DIR/argo/domain" ] && cat "$STATE_DIR/argo/domain"
+[ -f "$STATE_DIR/argo/domain" ] && { echo '-- state domain --'; cat "$STATE_DIR/argo/domain"; }
+echo
+echo '== cloudflared process args =='
+show_process cloudflared
 echo
 echo '== cloudflared status =='
 show_service_status nodehubsapi-cloudflared.service || show_process cloudflared
 echo
-echo '== cloudflared log =='
+echo '== cloudflared latest log =='
 show_service_logs nodehubsapi-cloudflared.service "$STATE_DIR/argo/cloudflared.log"`,
     })
   }
