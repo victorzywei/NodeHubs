@@ -31,17 +31,20 @@ export function buildDeployCommand(input: {
     `--node-id ${shellQuote(input.nodeId)}`,
     `--agent-token ${shellQuote(input.agentToken)}`,
     `--network-type ${shellQuote(input.networkType)}`,
-    `--primary-domain ${shellQuote(input.primaryDomain || '')}`,
-    `--backup-domain ${shellQuote(input.backupDomain || '')}`,
-    `--entry-ip ${shellQuote(input.entryIp || '')}`,
-    `--github-mirror-url ${shellQuote(input.githubMirrorUrl || '')}`,
-    `--heartbeat-interval ${shellQuote(String(input.heartbeatIntervalSeconds || 15))}`,
-    `--version-pull-interval ${shellQuote(String(input.versionPullIntervalSeconds || 15))}`,
-    `--cf-dns-token ${shellQuote(input.cfDnsToken || '')}`,
-    `--argo-tunnel-token ${shellQuote(input.argoTunnelToken || '')}`,
-    `--argo-tunnel-domain ${shellQuote(input.argoTunnelDomain || '')}`,
-    `--argo-tunnel-port ${shellQuote(String(input.argoTunnelPort || 2053))}`,
   ]
+  if (input.primaryDomain) args.push(`--primary-domain ${shellQuote(input.primaryDomain)}`)
+  if (input.backupDomain) args.push(`--backup-domain ${shellQuote(input.backupDomain)}`)
+  if (input.entryIp) args.push(`--entry-ip ${shellQuote(input.entryIp)}`)
+  if (input.githubMirrorUrl) args.push(`--github-mirror-url ${shellQuote(input.githubMirrorUrl)}`)
+  if (input.heartbeatIntervalSeconds) args.push(`--heartbeat-interval ${shellQuote(String(input.heartbeatIntervalSeconds))}`)
+  else args.push(`--heartbeat-interval '15'`)
+  if (input.versionPullIntervalSeconds) args.push(`--version-pull-interval ${shellQuote(String(input.versionPullIntervalSeconds))}`)
+  else args.push(`--version-pull-interval '15'`)
+  if (input.cfDnsToken) args.push(`--cf-dns-token ${shellQuote(input.cfDnsToken)}`)
+  if (input.argoTunnelToken) args.push(`--argo-tunnel-token ${shellQuote(input.argoTunnelToken)}`)
+  if (input.argoTunnelDomain) args.push(`--argo-tunnel-domain ${shellQuote(input.argoTunnelDomain)}`)
+  if (input.argoTunnelPort) args.push(`--argo-tunnel-port ${shellQuote(String(input.argoTunnelPort))}`)
+  else args.push(`--argo-tunnel-port '2053'`)
   if (input.installWarp) args.push('--install-warp')
   if (input.warpLicenseKey.trim()) args.push(`--warp-license-key ${shellQuote(input.warpLicenseKey.trim())}`)
   const argText = args.join(' ')
