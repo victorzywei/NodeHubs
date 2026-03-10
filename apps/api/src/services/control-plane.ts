@@ -9,6 +9,7 @@ import type {
   DashboardSummary,
   HeartbeatInput,
   ReleaseLogRecord,
+  ReleaseArtifact,
   NodeRecord,
   PublicSubscriptionDocument,
   ReleaseKind,
@@ -26,7 +27,7 @@ import type {
 import type { AppServices } from '../lib/app-types'
 import { APP_VERSION, ONLINE_WINDOW_MS } from '../lib/constants'
 import { createId, createToken, nowIso, parseJsonObject } from '../lib/utils'
-import { parseReleaseArtifact, renderReleaseArtifact } from './release-renderer'
+import { buildSubscriptionEntries, parseReleaseArtifact, renderReleaseArtifact } from './release-renderer'
 import { repairTemplateDefaults, repairTemplateRecord } from './template-defaults'
 
 type NodeRow = {
@@ -908,6 +909,27 @@ export async function previewNodeRelease(
   }
 }
 
+function hydrateReleaseTemplates(
+  templates: ReleaseArtifact['templates'],
+  release: Pick<ReleaseRow, 'created_at' | 'updated_at'>,
+): TemplateRecord[] {
+  return templates.map((template) =>
+    repairTemplateRecord({
+      id: template.id,
+      name: template.name,
+      engine: template.engine,
+      protocol: template.protocol,
+      transport: template.transport,
+      tlsMode: template.tlsMode,
+      warpExit: template.warpExit,
+      warpRouteMode: template.warpRouteMode,
+      defaults: { ...(template.defaults || {}) },
+      notes: '',
+      createdAt: release.created_at,
+      updatedAt: release.updated_at,
+    }))
+}
+
 export async function listNodeReleases(services: AppServices, nodeId: string): Promise<ReleaseRecord[]> {
   const rows = await services.db.all<ReleaseRow>('SELECT * FROM releases WHERE node_id = ? ORDER BY revision DESC', [nodeId])
   return rows.map(toReleaseRecord)
@@ -1207,6 +1229,11 @@ export async function buildPublicSubscriptionDocument(
     if (!artifact) continue
     const parsedArtifact = parseReleaseArtifact(artifact.body)
     if (!parsedArtifact) continue
+    const releaseTemplates = hydrateReleaseTemplates(parsedArtifact.templates || [], release)
+    if (releaseTemplates.length > 0) {
+      entries.push(...buildSubscriptionEntries(toNodeRecord(nodeRow), releaseTemplates))
+      continue
+    }
 
     entries.push(...parsedArtifact.subscriptionEndpoints)
   }

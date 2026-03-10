@@ -378,6 +378,66 @@ describe('subscription documents', () => {
     expect(document?.entries[0]?.host).toBe('cdn.snapshot.example.com')
   })
 
+  it('re-renders subscription domains from the latest node heartbeat state', async () => {
+    const services = createServices()
+    const node = await createNode(services, createNodeInput({
+      name: 'Node Argo',
+      networkType: 'noPublicIp',
+      primaryDomain: '',
+      backupDomain: '',
+      entryIp: '',
+      argoTunnelDomain: 'old-argo-domain.trycloudflare.com',
+    }))
+    const template = await createTemplate(services, createValidTemplateInput({
+      name: 'VMess Argo',
+      protocol: 'vmess',
+      defaults: {
+        serverPort: 23489,
+        path: '/ws',
+        host: '',
+        sni: '',
+        uuid: '11111111-1111-4111-8111-111111111111',
+        alterId: 0,
+      },
+    }))
+    const release = await publishNodeRelease(services, node.id, [template.id], 'ship runtime argo')
+    await acknowledgeRelease(services, node.id, String(release?.id), 'healthy', 'runtime ok')
+
+    await recordHeartbeat(services, {
+      nodeId: node.id,
+      bytesInTotal: 1,
+      bytesOutTotal: 2,
+      currentConnections: 3,
+      cpuUsagePercent: 10,
+      memoryUsagePercent: 20,
+      argoStatus: 'running',
+      argoDomain: 'new-argo-domain.trycloudflare.com',
+      protocolRuntimeVersion: 'xray 26.1.23',
+    })
+
+    const subscription = await createSubscription(services, {
+      name: 'Argo',
+      enabled: true,
+      visibleNodeIds: [node.id],
+    })
+
+    const document = await buildPublicSubscriptionDocument(services, subscription.token)
+    expect(document?.entries.length).toBe(1)
+    expect(document?.entries[0]?.server).toBe('new-argo-domain.trycloudflare.com')
+    expect(document?.entries[0]?.host).toBe('new-argo-domain.trycloudflare.com')
+    expect(document?.entries[0]?.sni).toBe('new-argo-domain.trycloudflare.com')
+
+    const plain = renderSubscriptionDocument(document!, 'plain')
+    const vmessPayload = JSON.parse(atob(plain.body.replace('vmess://', ''))) as {
+      add: string
+      host: string
+      sni: string
+    }
+    expect(vmessPayload.add).toBe('new-argo-domain.trycloudflare.com')
+    expect(vmessPayload.host).toBe('new-argo-domain.trycloudflare.com')
+    expect(vmessPayload.sni).toBe('new-argo-domain.trycloudflare.com')
+  })
+
   it('updates and deletes subscriptions', async () => {
     const services = createServices()
     const node = await createNode(services, createNodeInput({ name: 'Node Visible', primaryDomain: 'edge-visible.example.com' }))
