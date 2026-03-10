@@ -298,6 +298,8 @@ describe('agent install scripts', () => {
     expect(script).toContain('apply_runtime_plans')
     expect(script).toContain('resolve_runtime_install_path() {')
     expect(script).toContain('Runtime binary not found for $RUNTIME_ENGINE.')
+    expect(script).toContain('SYSTEMD_DIR="${SYSTEMD_DIR:-}"')
+    expect(script).toContain('SYSTEMD_WANTED_BY="${SYSTEMD_WANTED_BY:-}"')
     expect(script).toContain('RUNTIME_CONFIG_PATH="${ETC_DIR}/runtime/sing-box.json"')
     expect(script).toContain('cp "$ETC_DIR/runtime/release.json" "$STATE_DIR/releases/current.json"')
     expect(script).not.toContain('Publish a bootstrap release to install it.')
