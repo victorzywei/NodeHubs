@@ -41,10 +41,12 @@ export function buildDeployCommand(input: {
   if (input.versionPullIntervalSeconds) args.push(`--version-pull-interval ${shellQuote(String(input.versionPullIntervalSeconds))}`)
   else args.push(`--version-pull-interval '15'`)
   if (input.cfDnsToken) args.push(`--cf-dns-token ${shellQuote(input.cfDnsToken)}`)
-  if (input.argoTunnelToken) args.push(`--argo-tunnel-token ${shellQuote(input.argoTunnelToken)}`)
-  if (input.argoTunnelDomain) args.push(`--argo-tunnel-domain ${shellQuote(input.argoTunnelDomain)}`)
-  if (input.argoTunnelPort) args.push(`--argo-tunnel-port ${shellQuote(String(input.argoTunnelPort))}`)
-  else args.push(`--argo-tunnel-port '2053'`)
+  if (input.networkType !== 'public') {
+    if (input.argoTunnelToken) args.push(`--argo-tunnel-token ${shellQuote(input.argoTunnelToken)}`)
+    if (input.argoTunnelDomain) args.push(`--argo-tunnel-domain ${shellQuote(input.argoTunnelDomain)}`)
+    if (input.argoTunnelPort) args.push(`--argo-tunnel-port ${shellQuote(String(input.argoTunnelPort))}`)
+    else args.push(`--argo-tunnel-port '2053'`)
+  }
   if (input.installWarp) args.push('--install-warp')
   if (input.warpLicenseKey.trim()) args.push(`--warp-license-key ${shellQuote(input.warpLicenseKey.trim())}`)
   const argText = args.join(' ')
