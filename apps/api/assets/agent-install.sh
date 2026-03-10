@@ -221,6 +221,7 @@ http_download_to_file() {
   local target="$2"
   local resolved_url
   resolved_url="$(wrap_github_url "$url")"
+  log "Downloading file: $resolved_url"
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL "$resolved_url" -o "$target"
     return 0
