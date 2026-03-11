@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 RELEASE_ID=__RELEASE_ID__
 RELEASE_REVISION=__RELEASE_REVISION__

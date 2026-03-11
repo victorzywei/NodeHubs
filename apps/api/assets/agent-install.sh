@@ -710,9 +710,24 @@ resolve_sing_box_arch() {
   esac
 }
 
+runtime_binary_path() {
+  local name="$1"
+  if [ -x "$RUNTIME_BIN_DIR/$name" ]; then
+    printf '%s' "$RUNTIME_BIN_DIR/$name"
+    return 0
+  fi
+  command -v "$name" 2>/dev/null || return 1
+}
+
 runtime_binary_exists() {
   local name="$1"
-  [ -x "$RUNTIME_BIN_DIR/$name" ] || command -v "$name" >/dev/null 2>&1
+  local path=""
+  path="$(runtime_binary_path "$name")" || return 1
+  if "$path" version >/dev/null 2>&1; then
+    return 0
+  fi
+  warn "Existing $name binary is present but not runnable; reinstalling."
+  return 1
 }
 
 install_xray_binary() {
