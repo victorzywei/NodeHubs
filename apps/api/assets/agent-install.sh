@@ -987,6 +987,18 @@ ensure_warp_service() {
 
 set_warp_proxy_mode() {
   run_warp_cli disconnect || true
+  mkdir -p /var/lib/cloudflare-warp
+  cat >/var/lib/cloudflare-warp/mdm.xml <<EOF
+<dict>
+  <key>service_mode</key>
+  <string>proxy</string>
+  <key>proxy_port</key>
+  <integer>${WARP_PROXY_PORT}</integer>
+</dict>
+EOF
+  log "Configured WARP local proxy policy in /var/lib/cloudflare-warp/mdm.xml"
+  ensure_warp_service || return 1
+  wait_for_warp_service_ready || return 1
   run_warp_cli tunnel protocol set MASQUE || warn "Failed to switch WARP tunnel protocol to MASQUE."
   if ! run_warp_cli mode proxy; then
     run_warp_cli set-mode proxy || {
@@ -994,10 +1006,6 @@ set_warp_proxy_mode() {
       return 1
     }
   fi
-  run_warp_cli set-proxy-port "$WARP_PROXY_PORT" || {
-    warn "Failed to set warp-cli proxy port to $WARP_PROXY_PORT."
-    return 1
-  }
 }
 
 configure_warp_cli() {
