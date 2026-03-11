@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { NodeRecord, TemplateRecord } from '@contracts/index'
+import { DEFAULT_WARP_LOCAL_PROXY_PORT, type NodeRecord, type TemplateRecord } from '@contracts/index'
 import { listTemplatePresets, parseReleaseArtifact, renderReleaseArtifact, renderSubscriptionDocument } from './release-renderer'
 
 function createNode(): NodeRecord {
@@ -235,7 +235,7 @@ describe('release renderer', () => {
     expect(engines).toEqual(['sing-box', 'xray'])
   })
 
-  it('binds warp exit traffic to the CloudflareWARP interface', () => {
+  it('renders sing-box warp exit traffic through the local WARP SOCKS proxy', () => {
     const artifact = renderReleaseArtifact({
       releaseId: 'rel_warp',
       revision: 6,
@@ -261,8 +261,59 @@ describe('release renderer', () => {
     const warpOutbound = (runtimeConfig.outbounds || []).find((item) => String(item.tag || '') === 'warp-out')
     expect(runtimeConfig.route?.rules?.some((rule) => JSON.stringify(rule).includes('0.0.0.0/0'))).toBe(true)
     expect(warpOutbound).toMatchObject({
-      type: 'direct',
-      bind_interface: 'CloudflareWARP',
+      type: 'socks',
+      server: '127.0.0.1',
+      server_port: DEFAULT_WARP_LOCAL_PROXY_PORT,
+      version: '5',
+    })
+  })
+
+  it('renders xray warp exit traffic through the local WARP SOCKS proxy', () => {
+    const artifact = renderReleaseArtifact({
+      releaseId: 'rel_warp_xray',
+      revision: 7,
+      kind: 'runtime',
+      configRevision: 7,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: 'warp enabled for xray',
+      summary: 'template update',
+      node: createNode(),
+      templates: [
+        {
+          ...createTemplate(),
+          id: 'tpl_warp_xray',
+          name: 'Trojan warp',
+          engine: 'xray',
+          protocol: 'trojan',
+          transport: 'tcp',
+          tlsMode: 'tls',
+          warpExit: true,
+          warpRouteMode: 'ipv4',
+          defaults: {
+            serverPort: 443,
+            password: 'replace-me',
+            sni: 'edge.example.com',
+          },
+        },
+      ],
+    })
+
+    const runtimeConfig = JSON.parse(artifact.runtimes[0]?.files[0]?.content || '{}') as {
+      outbounds?: Array<Record<string, unknown>>
+      routing?: { rules?: Array<Record<string, unknown>> }
+    }
+    const warpOutbound = (runtimeConfig.outbounds || []).find((item) => String(item.tag || '') === 'warp-out')
+    expect(runtimeConfig.routing?.rules?.some((rule) => JSON.stringify(rule).includes('0.0.0.0/0'))).toBe(true)
+    expect(warpOutbound).toMatchObject({
+      protocol: 'socks',
+      settings: {
+        servers: [
+          {
+            address: '127.0.0.1',
+            port: DEFAULT_WARP_LOCAL_PROXY_PORT,
+          },
+        ],
+      },
     })
   })
 })

@@ -13,6 +13,7 @@ NODE_ENTRY_IP=__NODE_ENTRY_IP__
 GITHUB_MIRROR_URL=__GITHUB_MIRROR_URL__
 NODE_INSTALL_WARP=__NODE_INSTALL_WARP__
 NODE_WARP_LICENSE_KEY=__NODE_WARP_LICENSE_KEY__
+WARP_PROXY_PORT=__WARP_LOCAL_PROXY_PORT__
 NODE_CF_DNS_TOKEN=__NODE_CF_DNS_TOKEN__
 NODE_ARGO_TUNNEL_TOKEN=__NODE_ARGO_TUNNEL_TOKEN__
 NODE_ARGO_TUNNEL_DOMAIN=__NODE_ARGO_TUNNEL_DOMAIN__
@@ -984,6 +985,21 @@ ensure_warp_service() {
   warp_service_running || return 1
 }
 
+set_warp_proxy_mode() {
+  run_warp_cli disconnect || true
+  run_warp_cli tunnel protocol set MASQUE || warn "Failed to switch WARP tunnel protocol to MASQUE."
+  if ! run_warp_cli mode proxy; then
+    run_warp_cli set-mode proxy || {
+      warn "Failed to switch warp-cli into proxy mode."
+      return 1
+    }
+  fi
+  run_warp_cli set-proxy-port "$WARP_PROXY_PORT" || {
+    warn "Failed to set warp-cli proxy port to $WARP_PROXY_PORT."
+    return 1
+  }
+}
+
 configure_warp_cli() {
   local account_type attempt=0
   wait_for_warp_service_ready || return 1
@@ -1000,8 +1016,10 @@ configure_warp_cli() {
   fi
   account_type="$(warp_cli_account_type)"
   [ -n "$account_type" ] && log "warp-cli account type: $account_type"
+  set_warp_proxy_mode || return 1
   run_warp_cli connect || return 1
-  wait_for_warp_connected
+  wait_for_warp_connected || return 1
+  log "warp-cli local proxy mode is ready on 127.0.0.1:$WARP_PROXY_PORT"
 }
 
 ensure_warp_bootstrap() {
@@ -1050,6 +1068,7 @@ NODE_ENTRY_IP=$NODE_ENTRY_IP
 GITHUB_MIRROR_URL=$GITHUB_MIRROR_URL
 NODE_INSTALL_WARP=$NODE_INSTALL_WARP
 NODE_WARP_LICENSE_KEY=$NODE_WARP_LICENSE_KEY
+WARP_PROXY_PORT=$WARP_PROXY_PORT
 NODE_CF_DNS_TOKEN=$NODE_CF_DNS_TOKEN
 NODE_ARGO_TUNNEL_TOKEN=$NODE_ARGO_TUNNEL_TOKEN
 NODE_ARGO_TUNNEL_DOMAIN=$NODE_ARGO_TUNNEL_DOMAIN

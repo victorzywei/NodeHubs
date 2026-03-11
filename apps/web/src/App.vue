@@ -1,6 +1,6 @@
 ﻿<script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
-import type { SystemStatus, NodeRecord, TemplateRecord, SubscriptionRecord, ReleaseLogRecord, ReleaseRecord, ReleasePreviewRecord } from '@contracts/index'
+import { DEFAULT_WARP_LOCAL_PROXY_PORT, type SystemStatus, type NodeRecord, type TemplateRecord, type SubscriptionRecord, type ReleaseLogRecord, type ReleaseRecord, type ReleasePreviewRecord } from '@contracts/index'
 import QRCode from 'qrcode'
 import * as api from './lib/api'
 
@@ -337,7 +337,7 @@ function getNodeCheckCommands(node: NodeRecord) {
     },
     {
       title: 'WARP 全量排查',
-      description: '单行查看 warp-svc、warp-cli、WARP 网卡和路由。',
+      description: '单行查看 warp-svc、warp-cli、本地代理模式和监听端口。',
       command: buildCheckCommand([
         `echo '== warp-svc status =='`,
         buildServiceStatusCommand('warp-svc.service', 'warp-svc'),
@@ -348,11 +348,11 @@ function getNodeCheckCommands(node: NodeRecord) {
         `echo '== warp-cli status =='`,
         `command -v warp-cli >/dev/null 2>&1 && (warp-cli --accept-tos registration show 2>/dev/null || warp-cli registration show 2>/dev/null || true; echo; warp-cli --accept-tos status 2>/dev/null || warp-cli status 2>/dev/null || true) || echo 'warp-cli not installed'`,
         'echo',
-        `echo '== CloudflareWARP interface =='`,
-        `ip addr show dev CloudflareWARP 2>/dev/null || ifconfig CloudflareWARP 2>/dev/null || echo 'interface not found: CloudflareWARP'`,
+        `echo '== warp-cli settings =='`,
+        `command -v warp-cli >/dev/null 2>&1 && (warp-cli --accept-tos settings 2>/dev/null || warp-cli settings 2>/dev/null || true) || echo 'warp-cli not installed'`,
         'echo',
-        `echo '== routes =='`,
-        `ip route show 2>/dev/null || echo 'missing ip route'`,
+        `echo '== local proxy listener =='`,
+        `ss -ltnp 2>/dev/null | grep ':${DEFAULT_WARP_LOCAL_PROXY_PORT}[[:space:]]' || netstat -ltnp 2>/dev/null | grep ':${DEFAULT_WARP_LOCAL_PROXY_PORT}[[:space:]]' || echo 'port ${DEFAULT_WARP_LOCAL_PROXY_PORT} not listening'`,
       ]),
     },
     buildRuntimeCheckCommand({
@@ -1906,11 +1906,12 @@ onMounted(() => { if (adminKey.value) login() })
           </div>
           <div class="form-checkbox-group mb-md">
             <input type="checkbox" class="form-checkbox" v-model="newNode.installWarp" id="node-install-warp">
-            <label for="node-install-warp" class="form-label" style="margin:0">首次部署时安装 WARP</label>
+            <label for="node-install-warp" class="form-label" style="margin:0">首次部署时安装 WARP（本地代理模式）</label>
           </div>
           <div v-if="newNode.installWarp" class="form-group">
             <label class="form-label">WARP License Key</label>
             <input class="form-input" v-model="newNode.warpLicenseKey" placeholder="可选，填写后会在首次部署时一起注册" />
+            <div class="text-muted" style="margin-top:8px;font-size:12px">安装脚本会把 WARP 配置为本地 SOCKS5 代理，监听 <span class="text-mono">127.0.0.1:{{ DEFAULT_WARP_LOCAL_PROXY_PORT }}</span>，不会接管整机默认路由。</div>
           </div>
 
           <div class="form-section-divider">服务器网络</div>
@@ -2058,7 +2059,7 @@ onMounted(() => { if (adminKey.value) login() })
           </div>
           <div v-if="newTemplate.warpExit" class="form-group">
             <div class="text-muted" style="margin-top:8px;font-size:12px">
-              勾选后，该模板命中的流量会绑定到节点上的 `CloudflareWARP` 系统网卡；不再需要填写 WARP 私钥、Endpoint 或 Reserved。
+              勾选后，该模板命中的流量会通过节点上的 WARP 本地 SOCKS5 代理 <span class="text-mono">127.0.0.1:{{ DEFAULT_WARP_LOCAL_PROXY_PORT }}</span> 出站，不再依赖 `CloudflareWARP` 系统网卡。
             </div>
           </div>
         </div>

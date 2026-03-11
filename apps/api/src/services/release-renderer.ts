@@ -1,3 +1,4 @@
+import { DEFAULT_WARP_LOCAL_PROXY_PORT } from '@contracts/index'
 import type {
   NodeRecord,
   PublicSubscriptionDocument,
@@ -56,7 +57,7 @@ type NormalizedTemplate = {
 
 const SUPPORTED_PROTOCOLS = new Set(['vless', 'trojan', 'shadowsocks', 'vmess', 'hysteria2'])
 const SUPPORTED_TRANSPORTS = new Set(['ws', 'grpc', 'tcp', 'h2', 'hysteria2', 'xhttp'])
-const WARP_INTERFACE_NAME = 'CloudflareWARP'
+const WARP_LOCAL_PROXY_HOST = '127.0.0.1'
 const DEFAULT_REALITY_FLOW = 'xtls-rprx-vision'
 const DEFAULT_REALITY_FINGERPRINT = 'chrome'
 
@@ -250,7 +251,8 @@ function resolveInboundTagsByWarp(templates: NormalizedTemplate[]): { warpTags: 
 type ResolvedWarpRoute = {
   routeMode: TemplateRecord['warpRouteMode']
   ipCidrs: string[]
-  interfaceName: string
+  proxyHost: string
+  proxyPort: number
 }
 
 function resolveWarpRoute(templates: NormalizedTemplate[]): ResolvedWarpRoute | null {
@@ -259,7 +261,8 @@ function resolveWarpRoute(templates: NormalizedTemplate[]): ResolvedWarpRoute | 
   return {
     routeMode: primaryTemplate.warpRouteMode,
     ipCidrs: resolveWarpRouteCidrs(primaryTemplate.warpRouteMode),
-    interfaceName: WARP_INTERFACE_NAME,
+    proxyHost: WARP_LOCAL_PROXY_HOST,
+    proxyPort: DEFAULT_WARP_LOCAL_PROXY_PORT,
   }
 }
 
@@ -736,12 +739,14 @@ function buildRuntimeConfig(
 
       outbounds.push({
         tag: 'warp-out',
-        protocol: 'freedom',
-        settings: {},
-        streamSettings: {
-          sockopt: {
-            interface: warp.interfaceName,
-          },
+        protocol: 'socks',
+        settings: {
+          servers: [
+            {
+              address: warp.proxyHost,
+              port: warp.proxyPort,
+            },
+          ],
         },
       })
       if (warp.routeMode !== 'all') {
@@ -801,9 +806,11 @@ function buildRuntimeConfig(
     const rules: Array<Record<string, unknown>> = []
 
     outbounds.push({
-      type: 'direct',
+      type: 'socks',
       tag: 'warp-out',
-      bind_interface: warp.interfaceName,
+      server: warp.proxyHost,
+      server_port: warp.proxyPort,
+      version: '5',
     })
     if (inboundTags.warpTags.length > 0) {
       rules.push({

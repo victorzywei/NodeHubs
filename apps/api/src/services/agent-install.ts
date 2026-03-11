@@ -1,4 +1,4 @@
-import type { ReleaseArtifact } from '@contracts/index'
+import { DEFAULT_WARP_LOCAL_PROXY_PORT, type ReleaseArtifact } from '@contracts/index'
 import { AGENT_INSTALL_SCRIPT_TEMPLATE, RELEASE_APPLY_SCRIPT_TEMPLATE } from '../generated/script-assets'
 import { APP_VERSION } from '../lib/constants'
 
@@ -350,6 +350,7 @@ export function buildAgentInstallScript(input: {
     __GITHUB_MIRROR_URL__: shellQuote(input.githubMirrorUrl || ''),
     __NODE_INSTALL_WARP__: input.installWarp ? '1' : '0',
     __NODE_WARP_LICENSE_KEY__: shellQuote(input.warpLicenseKey || ''),
+    __WARP_LOCAL_PROXY_PORT__: String(DEFAULT_WARP_LOCAL_PROXY_PORT),
     __HEARTBEAT_INTERVAL_SECONDS__: shellQuote(String(input.heartbeatIntervalSeconds || 15)),
     __VERSION_PULL_INTERVAL_SECONDS__: shellQuote(String(input.versionPullIntervalSeconds || 15)),
     __NODE_CF_DNS_TOKEN__: shellQuote(input.cfDnsToken || ''),

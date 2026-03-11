@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_WARP_LOCAL_PROXY_PORT } from '@contracts/index'
 import {
   buildAgentInstallScript,
   buildAgentReconcileEnv,
@@ -203,6 +204,10 @@ describe('agent install scripts', () => {
     expect(script).toContain('"$path" version >/dev/null 2>&1')
     expect(script).toContain('Existing $name binary is present but not runnable; reinstalling.')
     expect(script).toContain('install_warp_cli')
+    expect(script).toContain('set_warp_proxy_mode() {')
+    expect(script).toContain('run_warp_cli mode proxy')
+    expect(script).toContain('run_warp_cli set-proxy-port "$WARP_PROXY_PORT"')
+    expect(script).toContain(`WARP_PROXY_PORT=${DEFAULT_WARP_LOCAL_PROXY_PORT}`)
     expect(script).toContain('ExecStart=/bin/sh -lc \'exec ${cloudflared_bin} tunnel --url "\\$ARGO_ORIGIN_URL" --edge-ip-version auto --no-autoupdate --protocol http2 >>"\\$ARGO_LOG_FILE" 2>&1\'')
     expect(script).toContain('curl -fL --http1.1 --connect-timeout 20 --retry 3 --retry-delay 1 --retry-all-errors "$resolved_url" -o "$target"')
     expect(script).toContain('/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env')

@@ -11,6 +11,8 @@ export type StorageMode = 'cloudflare' | 'docker'
 
 export type SubscriptionDocumentFormat = 'plain' | 'base64' | 'json' | 'v2ray' | 'clash' | 'singbox'
 
+export const DEFAULT_WARP_LOCAL_PROXY_PORT = 23499
+
 export interface NodeRecord {
   id: string
   name: string
