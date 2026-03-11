@@ -4,12 +4,16 @@ import { DEFAULT_WARP_LOCAL_PROXY_PORT, type SystemStatus, type NodeRecord, type
 import QRCode from 'qrcode'
 import * as api from './lib/api'
 
+type UiTheme = 'midnight' | 'legacy'
+const THEME_STORAGE_KEY = 'nh_ui_theme'
+
 // ---- State ----
 const adminKey = ref(localStorage.getItem('nh_admin_key') || '')
 const loggedIn = ref(false)
 const currentPage = ref<'dashboard'|'nodes'|'templates'|'subscriptions'>('dashboard')
 const loading = ref(false)
 const error = ref('')
+const uiTheme = ref<UiTheme>((localStorage.getItem(THEME_STORAGE_KEY) as UiTheme) || 'midnight')
 
 // Data
 const status = ref<SystemStatus|null>(null)
@@ -52,6 +56,15 @@ function toast(type:string, msg:string) {
   const id = ++toastId
   toasts.value.push({id,type,msg})
   setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id) }, 4000)
+}
+
+function applyTheme(theme: UiTheme) {
+  document.documentElement.dataset.theme = theme
+  localStorage.setItem(THEME_STORAGE_KEY, theme)
+}
+
+function setUiTheme(theme: UiTheme) {
+  uiTheme.value = theme
 }
 
 // ---- Auth ----
@@ -1392,12 +1405,20 @@ watch(
   },
 )
 
+watch(uiTheme, (theme) => {
+  applyTheme(theme)
+}, { immediate: true })
+
 const onlineCount = computed(() => nodes.value.filter(isOnline).length)
 
-onMounted(() => { if (adminKey.value) login() })
+onMounted(() => {
+  applyTheme(uiTheme.value)
+  if (adminKey.value) login()
+})
 </script>
 
 <template>
+  <div class="theme-root" :data-theme="uiTheme">
   <!-- Toast -->
   <div class="toast-container">
     <div v-for="t in toasts" :key="t.id" class="toast" :class="t.type">
@@ -1409,6 +1430,10 @@ onMounted(() => { if (adminKey.value) login() })
   <!-- Login -->
   <div v-if="!loggedIn" class="login-page">
     <div class="login-card">
+      <div class="theme-switcher login-theme-switcher">
+        <button class="theme-chip" :class="{active: uiTheme==='legacy'}" @click="setUiTheme('legacy')">浅色</button>
+        <button class="theme-chip" :class="{active: uiTheme==='midnight'}" @click="setUiTheme('midnight')">深色</button>
+      </div>
       <div class="login-logo-row">
         <div class="login-logo">N</div>
         <div class="login-brand-name">NodeHub</div>
@@ -1460,6 +1485,10 @@ onMounted(() => { if (adminKey.value) login() })
       <div class="sidebar-footer">
         <div class="sidebar-mode-badge" :class="status?.mode||'docker'">
           {{ status?.mode === 'cloudflare' ? '☁️ Cloudflare' : '🐳 Docker' }}
+        </div>
+        <div class="theme-switcher sidebar-theme-switcher">
+          <button class="theme-chip" :class="{active: uiTheme==='legacy'}" @click="setUiTheme('legacy')">浅色</button>
+          <button class="theme-chip" :class="{active: uiTheme==='midnight'}" @click="setUiTheme('midnight')">深色</button>
         </div>
         <button class="btn btn-ghost btn-sm mt-md" @click="logout" style="width:100%;justify-content:flex-start;gap:8px">
           🚪 <span>退出登录</span>
@@ -2149,7 +2178,7 @@ onMounted(() => { if (adminKey.value) login() })
       </div>
     </div>
   </div>
-
+  </div>
 </template>
 
 

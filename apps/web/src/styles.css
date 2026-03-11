@@ -2,7 +2,7 @@
    NodeHub Admin Dashboard - Design System
    ======================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap');
 
 /* ---- CSS Custom Properties ---- */
 :root {
@@ -56,6 +56,8 @@
     /* Typography */
     --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    --body-gradient-top: rgba(99, 102, 241, 0.08);
+    --body-gradient-bottom: rgba(139, 92, 246, 0.06);
 
     /* Spacing */
     --spacing-xs: 4px;
@@ -81,6 +83,46 @@
     /* Sidebar */
     --sidebar-width: 260px;
     --sidebar-collapsed-width: 72px;
+}
+
+html[data-theme='legacy'] {
+    --color-bg-primary: #f5f5ef;
+    --color-bg-secondary: #ffffff;
+    --color-bg-tertiary: #f1f2ea;
+    --color-bg-card: rgba(255, 255, 255, 0.92);
+    --color-bg-card-hover: rgba(249, 250, 244, 0.98);
+    --color-bg-input: #ffffff;
+    --color-bg-overlay: rgba(19, 24, 30, 0.54);
+    --glass-bg: rgba(255, 255, 255, 0.82);
+    --glass-border: rgba(185, 195, 179, 0.7);
+    --glass-shadow: 0 12px 30px rgba(8, 20, 36, 0.08);
+    --glass-blur: blur(10px);
+    --color-accent: #0e7e6f;
+    --color-accent-hover: #0a6358;
+    --color-accent-glow: rgba(14, 126, 111, 0.18);
+    --color-accent-subtle: rgba(14, 126, 111, 0.1);
+    --color-success: #2f8f4e;
+    --color-success-bg: rgba(47, 143, 78, 0.12);
+    --color-warning: #c07711;
+    --color-warning-bg: rgba(192, 119, 17, 0.12);
+    --color-danger: #c7413a;
+    --color-danger-bg: rgba(199, 65, 58, 0.12);
+    --color-info: #c85b1a;
+    --color-info-bg: rgba(200, 91, 26, 0.12);
+    --color-text-primary: #16202a;
+    --color-text-secondary: #4a5a66;
+    --color-text-tertiary: #6f7f8a;
+    --color-text-muted: #8b978d;
+    --color-border: rgba(185, 195, 179, 0.7);
+    --color-border-hover: rgba(14, 126, 111, 0.35);
+    --color-border-active: rgba(14, 126, 111, 0.45);
+    --gradient-accent: linear-gradient(130deg, #0e7e6f 0%, #0a6358 100%);
+    --gradient-card: linear-gradient(180deg, #ffffff 0%, #f9faf4 100%);
+    --gradient-glow: radial-gradient(520px at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(14, 126, 111, 0.08), transparent 48%);
+    --font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+    --body-gradient-top: rgba(14, 126, 111, 0.14);
+    --body-gradient-bottom: rgba(200, 91, 26, 0.12);
 }
 
 /* ---- Reset & Base ---- */
@@ -115,7 +157,7 @@ body::before {
     right: -200px;
     width: 600px;
     height: 600px;
-    background: radial-gradient(circle, rgba(99, 102, 241, 0.08) 0%, transparent 70%);
+    background: radial-gradient(circle, var(--body-gradient-top) 0%, transparent 70%);
     pointer-events: none;
     z-index: 0;
 }
@@ -127,7 +169,7 @@ body::after {
     left: -100px;
     width: 500px;
     height: 500px;
-    background: radial-gradient(circle, rgba(139, 92, 246, 0.06) 0%, transparent 70%);
+    background: radial-gradient(circle, var(--body-gradient-bottom) 0%, transparent 70%);
     pointer-events: none;
     z-index: 0;
 }
@@ -323,6 +365,44 @@ a:hover {
 .sidebar-footer {
     padding: var(--spacing-md) var(--spacing-lg);
     border-top: 1px solid var(--glass-border);
+}
+
+.theme-switcher {
+    display: flex;
+    gap: 6px;
+}
+
+.sidebar-theme-switcher {
+    margin-top: var(--spacing-md);
+}
+
+.login-theme-switcher {
+    justify-content: flex-end;
+    margin-bottom: var(--spacing-md);
+}
+
+.theme-chip {
+    padding: 5px 10px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--color-border);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--color-text-secondary);
+    font-family: var(--font-family);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.theme-chip:hover {
+    border-color: var(--color-border-hover);
+    color: var(--color-text-primary);
+}
+
+.theme-chip.active {
+    background: var(--color-accent-subtle);
+    color: var(--color-accent-hover);
+    border-color: var(--color-border-active);
 }
 
 .sidebar-mode-badge {
@@ -1731,4 +1811,65 @@ a:hover {
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-md);
     background: rgba(255, 255, 255, 0.02);
+}
+
+html[data-theme='legacy'] body {
+    background:
+        radial-gradient(circle at 15% 0%, var(--body-gradient-top), transparent 45%),
+        radial-gradient(circle at 90% 20%, var(--body-gradient-bottom), transparent 40%),
+        var(--color-bg-primary);
+}
+
+html[data-theme='legacy'] .app-sidebar {
+    background: color-mix(in srgb, var(--color-bg-secondary) 82%, #eef2e2);
+    box-shadow: none;
+}
+
+html[data-theme='legacy'] .card,
+html[data-theme='legacy'] .stat-card,
+html[data-theme='legacy'] .table-wrapper,
+html[data-theme='legacy'] .login-card,
+html[data-theme='legacy'] .modal-content,
+html[data-theme='legacy'] .detail-panel,
+html[data-theme='legacy'] .toast {
+    box-shadow: var(--glass-shadow);
+}
+
+html[data-theme='legacy'] .card::before,
+html[data-theme='legacy'] .login-card::before {
+    opacity: 0.45;
+}
+
+html[data-theme='legacy'] .nav-item.active {
+    background: linear-gradient(120deg, rgba(14, 126, 111, 0.16), rgba(14, 126, 111, 0.08));
+    color: var(--color-accent-hover);
+}
+
+html[data-theme='legacy'] .nav-badge,
+html[data-theme='legacy'] .sidebar-logo,
+html[data-theme='legacy'] .login-logo {
+    background: linear-gradient(140deg, #0e7e6f, #c85b1a);
+}
+
+html[data-theme='legacy'] .btn-secondary,
+html[data-theme='legacy'] .btn-ghost:hover,
+html[data-theme='legacy'] .publish-template-row,
+html[data-theme='legacy'] .subscription-visible-nodes,
+html[data-theme='legacy'] .publish-preview,
+html[data-theme='legacy'] .code-block {
+    background: #fff;
+}
+
+html[data-theme='legacy'] .data-table thead th {
+    background: #fbfdf8;
+}
+
+html[data-theme='legacy'] .stat-card-icon.accent,
+html[data-theme='legacy'] .stat-glow.accent {
+    background: rgba(14, 126, 111, 0.16);
+}
+
+html[data-theme='legacy'] .publish-template-row:hover {
+    background: rgba(14, 126, 111, 0.08);
+    border-color: rgba(14, 126, 111, 0.22);
 }
