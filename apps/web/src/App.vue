@@ -1065,6 +1065,14 @@ function togglePublishTemplate(templateId: string) {
   publishTemplateIds.value = [...publishTemplateIds.value, templateId]
 }
 
+function toggleAllPublishTemplates() {
+  if (publishTemplateIds.value.length === templates.value.length) {
+    publishTemplateIds.value = []
+    return
+  }
+  publishTemplateIds.value = sortedTemplates.value.map((template) => template.id)
+}
+
 async function loadPublishPreview() {
   if (!publishNode.value) {
     publishPreview.value = null
@@ -1323,6 +1331,7 @@ function getNodeVersionPullInterval(node: NodeRecord | null) {
 }
 
 const publishBlocked = computed(() => publishTemplateIds.value.length === 0)
+const allPublishTemplatesSelected = computed(() => templates.value.length > 0 && publishTemplateIds.value.length === templates.value.length)
 const sortedNodes = computed(() => sortByCreatedAtDesc(nodes.value))
 const sortedTemplates = computed(() => sortByCreatedAtDesc(templates.value))
 const sortedSubscriptions = computed(() => sortByCreatedAtDesc(subscriptions.value))
@@ -1834,7 +1843,17 @@ onMounted(() => { if (adminKey.value) login() })
         <div class="modal-body" style="display:grid;gap:16px">
           <template v-if="publishNode">
             <div class="form-group">
-              <label class="form-label">模板选择</label>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px">
+                <label class="form-label" style="margin:0">模板选择</label>
+                <button
+                  v-if="templates.length"
+                  type="button"
+                  class="btn btn-xs btn-secondary"
+                  @click="toggleAllPublishTemplates"
+                >
+                  {{ allPublishTemplatesSelected ? '取消全选' : '全选' }}
+                </button>
+              </div>
               <div v-if="templates.length===0" class="empty-state" style="padding:20px 12px">
                 <div class="empty-state-title">暂无模板</div>
                 <div class="empty-state-text" style="margin-bottom:0">请先创建协议模板。</div>
