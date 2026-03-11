@@ -109,25 +109,12 @@ async function refreshStatus() {
 }
 
 // ---- Node Actions ----
-const newNode = ref({
-  name:'', nodeType:'vps' as 'vps'|'edge', region:'',
-  networkType:'public' as 'public'|'noPublicIp',
-  primaryDomain:'', backupDomain:'', entryIp:'',
-  useGithubMirror:false, githubMirrorUrl:'',
-  installWarp:false,
-  warpLicenseKey:'',
-  heartbeatIntervalSeconds:15,
-  versionPullIntervalSeconds:15,
-  cfDnsToken:'',
-  argoTunnelToken:'',
-  argoTunnelDomain:'',
-  argoTunnelPort:2053,
-})
+const DEFAULT_GITHUB_MIRROR_URL = 'https://gh-proxy.org'
 
-function resetNewNode() {
-  newNode.value = {
-    name:'', nodeType:'vps', region:'',
-    networkType:'public',
+function createDefaultNewNode() {
+  return {
+    name:'', nodeType:'vps' as 'vps'|'edge', region:'',
+    networkType:'public' as 'public'|'noPublicIp',
     primaryDomain:'', backupDomain:'', entryIp:'',
     useGithubMirror:false, githubMirrorUrl:'',
     installWarp:false,
@@ -141,8 +128,21 @@ function resetNewNode() {
   }
 }
 
+const newNode = ref(createDefaultNewNode())
+
+function ensureGithubMirrorUrl() {
+  if (newNode.value.useGithubMirror && !newNode.value.githubMirrorUrl.trim()) {
+    newNode.value.githubMirrorUrl = DEFAULT_GITHUB_MIRROR_URL
+  }
+}
+
+function resetNewNode() {
+  newNode.value = createDefaultNewNode()
+}
+
 async function createNode() {
   const n = newNode.value
+  const githubMirrorUrl = n.useGithubMirror ? (n.githubMirrorUrl.trim() || DEFAULT_GITHUB_MIRROR_URL) : ''
   try {
     await api.createNode(adminKey.value, {
       name: n.name,
@@ -152,7 +152,7 @@ async function createNode() {
       primaryDomain: n.networkType === 'public' ? n.primaryDomain.trim() : '',
       backupDomain: n.networkType === 'public' ? n.backupDomain.trim() : '',
       entryIp: n.networkType === 'public' ? n.entryIp.trim() : '',
-      githubMirrorUrl: n.useGithubMirror ? n.githubMirrorUrl : '',
+      githubMirrorUrl,
       installWarp: n.installWarp,
       warpLicenseKey: n.installWarp ? n.warpLicenseKey.trim() : '',
       heartbeatIntervalSeconds: n.heartbeatIntervalSeconds || 15,
@@ -677,6 +677,10 @@ watch(
     void hydrateTemplateDefaults('repair')
   },
 )
+
+watch(() => newNode.value.useGithubMirror, (enabled) => {
+  if (enabled) ensureGithubMirrorUrl()
+})
 
 async function openCreateTemplate() {
   resetTemplateForm()
@@ -1721,7 +1725,7 @@ onMounted(() => { if (adminKey.value) login() })
             </div>
             <button v-if="!deployCommand" class="btn btn-secondary btn-sm w-full" @click="loadDeployCommand">生成部署命令</button>
             <div v-else>
-              <div class="code-block" style="max-height:120px;overflow-y:auto;font-size:11px;word-break:break-all">{{ deployCommand }}</div>
+              <div class="code-block command-block" style="max-height:120px;font-size:11px">{{ deployCommand }}</div>
               <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(deployCommand)">📋 复制部署命令</button>
             </div>
           </div>
@@ -1729,7 +1733,7 @@ onMounted(() => { if (adminKey.value) login() })
             <div class="detail-section-title">一键卸载</div>
             <button v-if="!uninstallCommand" class="btn btn-danger btn-sm w-full" style="--btn-bg:var(--color-danger);--btn-hover:var(--color-danger)" @click="loadUninstallCommand">生成卸载命令</button>
             <div v-else>
-              <div class="code-block" style="max-height:120px;overflow-y:auto;font-size:11px;word-break:break-all">{{ uninstallCommand }}</div>
+              <div class="code-block command-block" style="max-height:120px;font-size:11px">{{ uninstallCommand }}</div>
               <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(uninstallCommand)">📋 复制卸载命令</button>
             </div>
           </div>
@@ -1746,7 +1750,7 @@ onMounted(() => { if (adminKey.value) login() })
                 </div>
                 <button class="btn btn-secondary btn-xs" @click="copyToClipboard(item.command)">复制</button>
               </div>
-              <pre class="code-block" style="margin-top:10px;max-height:180px;overflow-y:auto;font-size:11px;white-space:pre-wrap">{{ item.command }}</pre>
+              <div class="code-block command-block" style="margin-top:10px;max-height:180px;font-size:11px">{{ item.command }}</div>
             </div>
           </div>
         </div>
@@ -1886,7 +1890,7 @@ onMounted(() => { if (adminKey.value) login() })
           </div>
           <div v-if="newNode.useGithubMirror" class="form-group">
             <label class="form-label">GitHub 镜像地址</label>
-            <input class="form-input" v-model="newNode.githubMirrorUrl" placeholder="https://ghproxy.com/https://github.com" />
+            <input class="form-input" v-model="newNode.githubMirrorUrl" @blur="ensureGithubMirrorUrl" placeholder="默认 https://gh-proxy.org，可自定义" />
           </div>
 
           <div class="form-section-divider">部署参数</div>

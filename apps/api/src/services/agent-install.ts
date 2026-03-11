@@ -6,6 +6,26 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`
 }
 
+function continuesShellStatement(line: string): boolean {
+  return line.endsWith('\\')
+    || line.endsWith('{')
+    || line.endsWith('then')
+    || line.endsWith('do')
+    || line === 'else'
+}
+
+function compactShellCommand(lines: string[]): string {
+  const normalized = lines
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  return normalized.reduce((command, line, index) => {
+    if (index === 0) return line
+    const separator = continuesShellStatement(normalized[index - 1]!) ? ' ' : '; '
+    return `${command}${separator}${line}`
+  }, '')
+}
+
 export function buildDeployCommand(input: {
   publicBaseUrl: string
   nodeId: string
@@ -61,7 +81,7 @@ export function buildDeployCommand(input: {
 }
 
 export function buildUninstallCommand(): string {
-  return [
+  return compactShellCommand([
     'set +e',
     'log() { printf \'%s\\n\' "[nodehubsapi] $*"; }',
     'warn() { printf \'%s\\n\' "[nodehubsapi] WARN: $*" >&2; }',
@@ -148,7 +168,7 @@ export function buildUninstallCommand(): string {
     'log "Removing configuration and state directories."',
     'rm -rf /etc/nodehubsapi /opt/nodehubsapi "$HOME/.config/nodehubsapi" "$HOME/.local/share/nodehubsapi"',
     'log "Uninstall completed. nodehubsapi files, services, and runtime artifacts were removed."',
-  ].join('\n')
+  ])
 }
 
 function buildRuntimeFileBlocks(artifact: ReleaseArtifact): string {

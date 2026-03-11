@@ -268,11 +268,13 @@ describe('agent install scripts', () => {
   it('builds an uninstall command that removes services and files', () => {
     const command = buildUninstallCommand()
 
+    expect(command).not.toContain('\n')
     expect(command).toContain('Stopping services and background processes.')
     expect(command).toContain('nodehubsapi-cloudflared.service')
     expect(command).toContain('warp-svc')
     expect(command).toContain('remove_autostart_block "$HOME/.profile"')
     expect(command).toContain('rm -rf /etc/nodehubsapi /opt/nodehubsapi "$HOME/.config/nodehubsapi" "$HOME/.local/share/nodehubsapi"')
+    expectScriptToPassBashSyntax(`#!/usr/bin/env bash\n${command}\n`, 'uninstall-command.sh')
   })
 
   it('builds runtime apply scripts that reuse installed runtime binaries and restart services', () => {

@@ -1272,6 +1272,13 @@ a:hover {
     line-height: 1.8;
 }
 
+.command-block {
+    overflow-y: auto;
+    white-space: nowrap;
+    word-break: normal;
+    line-height: 1.6;
+}
+
 /* ---- Detail Panel ---- */
 .detail-panel {
     position: fixed;
