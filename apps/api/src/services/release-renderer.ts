@@ -233,7 +233,7 @@ function resolveWarpRouteCidrs(mode: TemplateRecord['warpRouteMode']): string[] 
   return ['0.0.0.0/0', '::/0']
 }
 
-function resolveXrayWarpDomainStrategy(mode: TemplateRecord['warpRouteMode']): 'AsIs' | 'ForceIPv4' | 'ForceIPv6' {
+function resolveXrayWarpTargetStrategy(mode: TemplateRecord['warpRouteMode']): 'AsIs' | 'ForceIPv4' | 'ForceIPv6' {
   if (mode === 'ipv4') return 'ForceIPv4'
   if (mode === 'ipv6') return 'ForceIPv6'
   return 'AsIs'
@@ -744,43 +744,18 @@ function buildRuntimeConfig(
       const rules = routing.rules as Array<Record<string, unknown>>
 
       outbounds.push({
-        tag: 'warp-socks',
+        tag: 'warp-out',
         protocol: 'socks',
+        targetStrategy: resolveXrayWarpTargetStrategy(warp.routeMode),
         settings: {
           address: warp.proxyHost,
           port: warp.proxyPort,
         },
       })
-      outbounds.push({
-        tag: 'warp-out',
-        protocol: 'freedom',
-        settings: {
-          domainStrategy: resolveXrayWarpDomainStrategy(warp.routeMode),
-        },
-        proxySettings: {
-          tag: 'warp-socks',
-        },
-      })
-      if (warp.routeMode !== 'all') {
-        routing.domainStrategy = 'IPOnDemand'
-      }
       if (inboundTags.warpTags.length > 0) {
         rules.push({
           type: 'field',
           inboundTag: inboundTags.warpTags,
-          outboundTag: 'warp-out',
-          ...(warp.routeMode === 'all'
-            ? {}
-            : {
-                ip: warp.ipCidrs,
-                network: 'tcp,udp',
-              }),
-        })
-      } else if (warp.routeMode !== 'all') {
-        rules.push({
-          type: 'field',
-          ip: warp.ipCidrs,
-          network: 'tcp,udp',
           outboundTag: 'warp-out',
         })
       }

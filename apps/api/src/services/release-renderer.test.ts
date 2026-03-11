@@ -259,7 +259,7 @@ describe('release renderer', () => {
       route?: { rules?: Array<Record<string, unknown>> }
     }
     const warpOutbound = (runtimeConfig.outbounds || []).find((item) => String(item.tag || '') === 'warp-out')
-    expect(runtimeConfig.route?.rules?.some((rule) => JSON.stringify(rule).includes('0.0.0.0/0'))).toBe(true)
+    expect(runtimeConfig.route?.rules?.some((rule) => JSON.stringify(rule).includes('warp-out'))).toBe(true)
     expect(warpOutbound).toMatchObject({
       type: 'socks',
       server: '127.0.0.1',
@@ -302,23 +302,18 @@ describe('release renderer', () => {
       outbounds?: Array<Record<string, unknown>>
       routing?: { rules?: Array<Record<string, unknown>> }
     }
-    const warpSocksOutbound = (runtimeConfig.outbounds || []).find((item) => String(item.tag || '') === 'warp-socks')
     const warpOutbound = (runtimeConfig.outbounds || []).find((item) => String(item.tag || '') === 'warp-out')
-    expect(runtimeConfig.routing?.rules?.some((rule) => JSON.stringify(rule).includes('0.0.0.0/0'))).toBe(true)
-    expect(warpSocksOutbound).toMatchObject({
+    expect(runtimeConfig.routing?.rules).toContainEqual({
+      type: 'field',
+      inboundTag: ['in-1'],
+      outboundTag: 'warp-out',
+    })
+    expect(warpOutbound).toMatchObject({
       protocol: 'socks',
+      targetStrategy: 'ForceIPv4',
       settings: {
         address: '127.0.0.1',
         port: DEFAULT_WARP_LOCAL_PROXY_PORT,
-      },
-    })
-    expect(warpOutbound).toMatchObject({
-      protocol: 'freedom',
-      settings: {
-        domainStrategy: 'ForceIPv4',
-      },
-      proxySettings: {
-        tag: 'warp-socks',
       },
     })
   })
