@@ -108,6 +108,15 @@ async function refreshStatus() {
   try { status.value = await api.getSystemStatus(adminKey.value) } catch {}
 }
 
+function getTimestamp(value: string | null | undefined) {
+  const parsed = value ? new Date(value).getTime() : 0
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function sortByCreatedAtDesc<T extends { createdAt: string }>(records: T[]) {
+  return [...records].sort((left, right) => getTimestamp(right.createdAt) - getTimestamp(left.createdAt))
+}
+
 // ---- Node Actions ----
 const DEFAULT_GITHUB_MIRROR_URL = 'https://gh-proxy.org'
 
@@ -995,7 +1004,7 @@ async function openSubscriptionQr(subscription: SubscriptionRecord, format: stri
   subscriptionQrLoading.value = true
   try {
     subscriptionQrDataUrl.value = await QRCode.toDataURL(url, {
-      width: 320,
+      width: 240,
       margin: 1,
       errorCorrectionLevel: 'M',
     })
@@ -1294,6 +1303,11 @@ function getNodeDeployStatusClass(n: NodeRecord) {
   return n.currentReleaseStatus === 'idle' ? 'offline' : getReleaseStatusClass(n.currentReleaseStatus)
 }
 
+function getNodeVersionToneClass(n: NodeRecord) {
+  if (getNodeVersionLabel(n) === '---') return 'offline'
+  return getNodeDeployStatusClass(n)
+}
+
 function normalizeIntervalSeconds(value: unknown, fallback = 15) {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return fallback
@@ -1309,6 +1323,10 @@ function getNodeVersionPullInterval(node: NodeRecord | null) {
 }
 
 const publishBlocked = computed(() => publishTemplateIds.value.length === 0)
+const sortedNodes = computed(() => sortByCreatedAtDesc(nodes.value))
+const sortedTemplates = computed(() => sortByCreatedAtDesc(templates.value))
+const sortedSubscriptions = computed(() => sortByCreatedAtDesc(subscriptions.value))
+const dashboardNodes = computed(() => sortedNodes.value.slice(0, 5))
 
 function getWarpLabel(n: NodeRecord) {
   const warpIpv4 = (n.warpIpv4 || '').trim()
@@ -1502,19 +1520,32 @@ onMounted(() => { if (adminKey.value) login() })
               <button class="btn btn-sm btn-secondary" @click="currentPage='nodes'">查看全部 →</button>
             </div>
             <div class="table-wrapper" style="border:none;background:transparent">
-              <table class="data-table">
+              <table class="data-table node-table">
                 <thead><tr>
-                  <th>名称</th><th>类型</th><th>地区</th><th>状态</th><th>最后在线</th>
+                  <th>名称</th><th>类型</th><th>版本</th><th>地区</th><th>域名/Argo</th><th>WARP IPv6</th><th>连接数</th><th>流量</th>
                 </tr></thead>
                 <tbody>
-                  <tr v-for="n in nodes.slice(0,5)" :key="n.id">
-                    <td style="font-weight:600;color:var(--color-text-primary)">{{ n.name }}</td>
+                  <tr v-for="n in dashboardNodes" :key="n.id" class="cursor-pointer" @click="selectNode(n)">
+                    <td class="node-name" :class="isOnline(n) ? 'online' : 'offline'">{{ n.name }}</td>
                     <td><span class="tag" :class="{accent:n.nodeType==='edge'}">{{ n.nodeType }}</span></td>
+                    <td>
+                      <button
+                        type="button"
+                        class="release-revision"
+                        :class="getNodeVersionToneClass(n)"
+                        :disabled="getNodeVersionLabel(n) === '---'"
+                        @click.stop="openNodeReleaseLog(n)"
+                      >
+                        {{ getNodeVersionLabel(n) }}
+                      </button>
+                    </td>
                     <td>{{ n.region || '-' }}</td>
-                    <td><span class="status-badge" :class="isOnline(n)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(n)?'在线':'离线' }}</span></td>
-                    <td class="text-muted">{{ timeAgo(n.lastSeenAt) }}</td>
+                    <td class="text-mono truncate">{{ getNodeDomainDisplay(n) }}</td>
+                    <td class="text-mono">{{ getWarpLabel(n) }}</td>
+                    <td>{{ n.currentConnections }}</td>
+                    <td class="text-muted" style="font-size:12px">↑{{ formatBytes(n.bytesOutTotal) }} ↓{{ formatBytes(n.bytesInTotal) }}</td>
                   </tr>
-                  <tr v-if="nodes.length===0"><td colspan="5" class="text-center text-muted" style="padding:32px">暂无节点</td></tr>
+                  <tr v-if="dashboardNodes.length===0"><td colspan="8" class="text-center text-muted" style="padding:32px">暂无节点</td></tr>
                 </tbody>
               </table>
             </div>
@@ -1535,22 +1566,19 @@ onMounted(() => { if (adminKey.value) login() })
                 <th>名称</th><th>类型</th><th>版本</th><th>地区</th><th>域名/Argo</th><th>WARP IPv6</th><th>连接数</th><th>流量</th><th>操作</th>
               </tr></thead>
               <tbody>
-                <tr v-for="n in nodes" :key="n.id" class="cursor-pointer" @click="selectNode(n)">
+                <tr v-for="n in sortedNodes" :key="n.id" class="cursor-pointer" @click="selectNode(n)">
                   <td class="node-name" :class="isOnline(n) ? 'online' : 'offline'">{{ n.name }}</td>
                   <td><span class="tag" :class="{accent:n.nodeType==='edge'}">{{ n.nodeType }}</span></td>
                   <td>
-                    <div style="display:grid;gap:4px">
-                      <button
-                        type="button"
-                        class="btn btn-xs btn-ghost text-mono"
-                        style="justify-content:flex-start;padding:0;font-size:12px"
-                        :disabled="getNodeVersionLabel(n) === '---'"
-                        @click.stop="openNodeReleaseLog(n)"
-                      >
-                        {{ getNodeVersionLabel(n) }}
-                      </button>
-                      <span class="status-badge" :class="getNodeDeployStatusClass(n)">{{ getNodeDeployStatusText(n) }}</span>
-                    </div>
+                    <button
+                      type="button"
+                      class="release-revision"
+                      :class="getNodeVersionToneClass(n)"
+                      :disabled="getNodeVersionLabel(n) === '---'"
+                      @click.stop="openNodeReleaseLog(n)"
+                    >
+                      {{ getNodeVersionLabel(n) }}
+                    </button>
                   </td>
                   <td>{{ n.region || '-' }}</td>
                   <td class="text-mono truncate">{{ getNodeDomainDisplay(n) }}</td>
@@ -1580,16 +1608,16 @@ onMounted(() => { if (adminKey.value) login() })
           </div>
           <div class="table-wrapper">
             <table class="data-table">
-              <thead><tr><th>名称</th><th>引擎</th><th>协议</th><th>传输</th><th>TLS</th><th>WARP</th><th>更新时间</th><th>操作</th></tr></thead>
+              <thead><tr><th>名称</th><th>引擎</th><th>协议</th><th>传输</th><th>TLS</th><th>WARP</th><th>创建时间</th><th>操作</th></tr></thead>
               <tbody>
-                <tr v-for="t in templates" :key="t.id">
+                <tr v-for="t in sortedTemplates" :key="t.id">
                   <td style="font-weight:600;color:var(--color-text-primary)">{{ t.name }}</td>
                   <td><span class="tag" :class="{accent:t.engine==='sing-box'}">{{ t.engine }}</span></td>
                   <td>{{ t.protocol }}</td>
                   <td>{{ t.transport }}</td>
                   <td><span class="status-badge" :class="t.tlsMode==='reality'?'applying':t.tlsMode==='tls'?'healthy':'offline'">{{ t.tlsMode }}</span></td>
                   <td><span class="tag" :class="{accent:t.warpExit}">{{ t.warpExit ? `on/${t.warpRouteMode}` : 'off' }}</span></td>
-                  <td class="text-muted">{{ timeAgo(t.updatedAt) }}</td>
+                  <td class="text-muted">{{ timeAgo(t.createdAt) }}</td>
                   <td>
                     <div class="table-actions">
                       <button class="btn btn-sm btn-secondary" @click="openEditTemplate(t)">编辑</button>
@@ -1614,7 +1642,7 @@ onMounted(() => { if (adminKey.value) login() })
             <table class="data-table">
               <thead><tr><th>名称</th><th>令牌</th><th>状态</th><th>可见节点</th><th>创建时间</th><th>订阅地址</th><th>操作</th></tr></thead>
               <tbody>
-                <tr v-for="s in subscriptions" :key="s.id">
+                <tr v-for="s in sortedSubscriptions" :key="s.id">
                   <td style="font-weight:600;color:var(--color-text-primary)">{{ s.name }}</td>
                   <td class="text-mono truncate">{{ s.token }}</td>
                   <td><span class="status-badge" :class="s.enabled?'online':'offline'"><span class="status-dot"></span>{{ s.enabled ? 'Enabled' : 'Disabled' }}</span></td>
@@ -1795,19 +1823,16 @@ onMounted(() => { if (adminKey.value) login() })
 
     <!-- Publish Release Modal -->
     <div v-if="showPublishRelease" class="modal-overlay" @mousedown.self="closePublishRelease">
-      <div class="modal-content" style="max-width:640px">
+      <div class="modal-content publish-release-modal">
         <div class="modal-header">
-          <h3 class="modal-title">发布节点版本</h3>
+          <div>
+            <h3 class="modal-title">发布节点版本</h3>
+            <div v-if="publishNode" class="text-muted" style="margin-top:4px;font-size:12px">{{ publishNode.name }}</div>
+          </div>
           <button class="modal-close-btn" @click="closePublishRelease">×</button>
         </div>
         <div class="modal-body" style="display:grid;gap:16px">
           <template v-if="publishNode">
-            <div class="card" style="padding:14px">
-              <div style="font-size:15px;font-weight:700">{{ publishNode.name }}</div>
-              <div class="text-muted text-mono" style="margin-top:4px">{{ publishNode.id }}</div>
-              <div class="text-muted" style="margin-top:8px;font-size:12px">这里只发布模板版本。部署参数已经收敛到节点本身，首次部署命令会按节点配置完成证书或 Argo、xray/sing-box、以及可选 WARP 安装。</div>
-            </div>
-
             <div class="form-group">
               <label class="form-label">模板选择</label>
               <div v-if="templates.length===0" class="empty-state" style="padding:20px 12px">
@@ -1816,7 +1841,7 @@ onMounted(() => { if (adminKey.value) login() })
               </div>
               <div v-else class="publish-template-list">
                 <label
-                  v-for="template in templates"
+                  v-for="template in sortedTemplates"
                   :key="template.id"
                   class="publish-template-row"
                   
@@ -1834,14 +1859,6 @@ onMounted(() => { if (adminKey.value) login() })
                   </div>
                 </label>
               </div>
-              <div class="text-muted" style="margin-top:8px;font-size:12px">
-                <span>支持同时选择多种协议和多个内核，预览会按内核分组生成。</span>
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">发布备注</label>
-              <textarea class="form-textarea" v-model="publishMessage" placeholder="可选，例如：切换到 sing-box 模板组合" />
             </div>
             <div class="form-group">
               <label class="form-label">配置预览</label>
@@ -2075,17 +2092,13 @@ onMounted(() => { if (adminKey.value) login() })
 
     <!-- Subscription QR Modal -->
     <div v-if="showSubscriptionQr" class="modal-overlay" @mousedown.self="closeSubscriptionQr">
-      <div class="modal-content" style="max-width:420px">
+      <div class="modal-content subscription-qr-modal">
         <div class="modal-header"><h3 class="modal-title">订阅二维码</h3><button class="modal-close-btn" @click="closeSubscriptionQr">×</button></div>
-        <div class="modal-body" style="display:grid;gap:12px;justify-items:center">
+        <div class="modal-body subscription-qr-body">
           <div style="font-weight:600;text-align:center">{{ subscriptionQrTitle }}</div>
           <div class="text-muted text-mono" style="word-break:break-all;font-size:12px">{{ subscriptionQrUrl }}</div>
           <div v-if="subscriptionQrLoading" class="text-muted">二维码生成中...</div>
-          <img v-else-if="subscriptionQrDataUrl" :src="subscriptionQrDataUrl" alt="subscription qr" style="width:320px;max-width:100%;border-radius:16px;background:#fff;padding:12px" />
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-secondary" @click="closeSubscriptionQr">关闭</button>
-          <button class="btn btn-primary" :disabled="!subscriptionQrUrl" @click="copyToClipboard(subscriptionQrUrl)">再次复制地址</button>
+          <img v-else-if="subscriptionQrDataUrl" :src="subscriptionQrDataUrl" alt="subscription qr" class="subscription-qr-image" />
         </div>
       </div>
     </div>
@@ -2099,8 +2112,8 @@ onMounted(() => { if (adminKey.value) login() })
           <div class="form-checkbox-group mb-md"><input type="checkbox" class="form-checkbox" v-model="newSub.enabled" id="sub-en"><label for="sub-en" class="form-label" style="margin:0">启用</label></div>
           <div class="form-group" v-if="nodes.length">
             <label class="form-label">可见节点（留空表示全部）</label>
-            <div style="max-height:150px;overflow-y:auto;border:1px solid var(--glass-border);border-radius:var(--radius-md);padding:8px">
-              <label v-for="n in nodes" :key="n.id" class="form-checkbox-group mb-md" style="cursor:pointer">
+            <div class="subscription-visible-nodes">
+              <label v-for="n in sortedNodes" :key="n.id" class="form-checkbox-group mb-md" style="cursor:pointer">
                 <input type="checkbox" class="form-checkbox" :value="n.id" v-model="newSub.visibleNodeIds" />
                 <span style="font-size:13px">{{ n.name }}</span>
               </label>

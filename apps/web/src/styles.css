@@ -612,8 +612,6 @@ a:hover {
 .publish-template-list {
     display: grid;
     gap: 10px;
-    max-height: 240px;
-    overflow-y: auto;
 }
 
 .publish-template-row {
@@ -660,8 +658,6 @@ a:hover {
     border-radius: var(--radius-md);
     background: rgba(255, 255, 255, 0.02);
     padding: 10px;
-    max-height: 260px;
-    overflow-y: auto;
 }
 
 .publish-preview-meta {
@@ -683,10 +679,11 @@ a:hover {
 
 .publish-preview-code {
     margin: 0;
-    max-height: 200px;
-    overflow-y: auto;
     font-size: 11px;
     line-height: 1.5;
+    overflow-x: auto;
+    overflow-y: visible;
+    word-break: break-word;
 }
 
 .publish-preview-error {
@@ -765,6 +762,48 @@ a:hover {
 .status-badge.applying .status-dot {
     background: var(--color-info);
     animation: pulse-dot 1s infinite;
+}
+
+.release-revision {
+    padding: 0;
+    border: none;
+    background: transparent;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    transition: color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.release-revision:hover:not(:disabled) {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.release-revision:disabled {
+    cursor: default;
+    opacity: 0.7;
+}
+
+.release-revision.healthy {
+    color: var(--color-success);
+}
+
+.release-revision.pending {
+    color: var(--color-warning);
+}
+
+.release-revision.failed {
+    color: var(--color-danger);
+}
+
+.release-revision.applying {
+    color: var(--color-info);
+}
+
+.release-revision.offline {
+    color: var(--color-text-tertiary);
 }
 
 @keyframes pulse-dot {
@@ -982,6 +1021,16 @@ a:hover {
     animation: slide-up var(--transition-base) ease-out;
 }
 
+.publish-release-modal {
+    width: min(92vw, 880px);
+    max-width: 880px;
+}
+
+.subscription-qr-modal {
+    width: min(92vw, 360px);
+    max-width: 360px;
+}
+
 .modal-header {
     padding: var(--spacing-lg) var(--spacing-lg) 0;
     display: flex;
@@ -1016,6 +1065,21 @@ a:hover {
 
 .modal-body {
     padding: var(--spacing-lg);
+}
+
+.subscription-qr-body {
+    display: grid;
+    gap: 10px;
+    justify-items: center;
+    padding-top: var(--spacing-md);
+}
+
+.subscription-qr-image {
+    width: 240px;
+    max-width: 100%;
+    border-radius: 16px;
+    background: #fff;
+    padding: 10px;
 }
 
 .modal-footer {
@@ -1658,4 +1722,13 @@ a:hover {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
+}
+
+.subscription-visible-nodes {
+    display: grid;
+    gap: 2px;
+    padding: 8px 10px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.02);
 }
