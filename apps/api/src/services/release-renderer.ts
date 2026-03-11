@@ -233,6 +233,12 @@ function resolveWarpRouteCidrs(mode: TemplateRecord['warpRouteMode']): string[] 
   return ['0.0.0.0/0', '::/0']
 }
 
+function resolveXrayWarpDomainStrategy(mode: TemplateRecord['warpRouteMode']): 'AsIs' | 'ForceIPv4' | 'ForceIPv6' {
+  if (mode === 'ipv4') return 'ForceIPv4'
+  if (mode === 'ipv6') return 'ForceIPv6'
+  return 'AsIs'
+}
+
 function resolveInboundTagsByWarp(templates: NormalizedTemplate[]): { warpTags: string[]; directTags: string[] } {
   return templates.reduce<{ warpTags: string[]; directTags: string[] }>(
     (result, template, index) => {
@@ -738,15 +744,21 @@ function buildRuntimeConfig(
       const rules = routing.rules as Array<Record<string, unknown>>
 
       outbounds.push({
-        tag: 'warp-out',
+        tag: 'warp-socks',
         protocol: 'socks',
         settings: {
-          servers: [
-            {
-              address: warp.proxyHost,
-              port: warp.proxyPort,
-            },
-          ],
+          address: warp.proxyHost,
+          port: warp.proxyPort,
+        },
+      })
+      outbounds.push({
+        tag: 'warp-out',
+        protocol: 'freedom',
+        settings: {
+          domainStrategy: resolveXrayWarpDomainStrategy(warp.routeMode),
+        },
+        proxySettings: {
+          tag: 'warp-socks',
         },
       })
       if (warp.routeMode !== 'all') {

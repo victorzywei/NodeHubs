@@ -302,17 +302,23 @@ describe('release renderer', () => {
       outbounds?: Array<Record<string, unknown>>
       routing?: { rules?: Array<Record<string, unknown>> }
     }
+    const warpSocksOutbound = (runtimeConfig.outbounds || []).find((item) => String(item.tag || '') === 'warp-socks')
     const warpOutbound = (runtimeConfig.outbounds || []).find((item) => String(item.tag || '') === 'warp-out')
     expect(runtimeConfig.routing?.rules?.some((rule) => JSON.stringify(rule).includes('0.0.0.0/0'))).toBe(true)
-    expect(warpOutbound).toMatchObject({
+    expect(warpSocksOutbound).toMatchObject({
       protocol: 'socks',
       settings: {
-        servers: [
-          {
-            address: '127.0.0.1',
-            port: DEFAULT_WARP_LOCAL_PROXY_PORT,
-          },
-        ],
+        address: '127.0.0.1',
+        port: DEFAULT_WARP_LOCAL_PROXY_PORT,
+      },
+    })
+    expect(warpOutbound).toMatchObject({
+      protocol: 'freedom',
+      settings: {
+        domainStrategy: 'ForceIPv4',
+      },
+      proxySettings: {
+        tag: 'warp-socks',
       },
     })
   })
