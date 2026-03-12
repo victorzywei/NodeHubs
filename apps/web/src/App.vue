@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import { DEFAULT_WARP_LOCAL_PROXY_PORT, type SystemStatus, type NodeRecord, type TemplateRecord, type SubscriptionRecord, type ReleaseLogRecord, type ReleaseRecord, type ReleasePreviewRecord } from '@contracts/index'
 import QRCode from 'qrcode'
@@ -1133,13 +1133,30 @@ function getSubscriptionVisibleNodesLabel(subscription: SubscriptionRecord) {
   return `${names.slice(0, 2).join(', ')} +${names.length - 2}`
 }
 
-function openPublishRelease(node: NodeRecord) {
+async function openPublishRelease(node: NodeRecord) {
   publishNode.value = node
   publishMessage.value = ''
-  publishTemplateIds.value = templates.value.map((template) => template.id)
   publishPreview.value = null
   publishPreviewError.value = ''
+  // Default to all templates, then try to use the current version's template selection
+  publishTemplateIds.value = templates.value.map((template) => template.id)
   showPublishRelease.value = true
+  try {
+    const releases = await api.listNodeReleases(adminKey.value, node.id)
+    if (releases.length > 0) {
+      const latestRelease = releases[0]
+      if (latestRelease.templateIds && latestRelease.templateIds.length > 0) {
+        // Only keep template IDs that still exist
+        const existingIds = new Set(templates.value.map((t) => t.id))
+        const validIds = latestRelease.templateIds.filter((id) => existingIds.has(id))
+        if (validIds.length > 0) {
+          publishTemplateIds.value = validIds
+        }
+      }
+    }
+  } catch {
+    // Silently fall back to all templates selected
+  }
 }
 
 function closePublishRelease() {
@@ -1951,7 +1968,13 @@ onMounted(() => {
             <h3 class="modal-title">发布节点版本</h3>
             <div v-if="publishNode" class="text-muted" style="margin-top:4px;font-size:12px">{{ publishNode.name }}</div>
           </div>
-          <button class="modal-close-btn" @click="closePublishRelease">×</button>
+          <div style="display:flex;align-items:center;gap:8px">
+            <button class="btn btn-secondary btn-sm" @click="closePublishRelease">取消</button>
+            <button class="btn btn-primary btn-sm" :disabled="publishingRelease || publishBlocked" @click="publishSelectedRelease">
+              {{ publishingRelease ? '发布中...' : '确认发布' }}
+            </button>
+            <button class="modal-close-btn" @click="closePublishRelease">×</button>
+          </div>
         </div>
         <div class="modal-body" style="display:grid;gap:16px">
           <template v-if="publishNode">
@@ -2010,12 +2033,6 @@ onMounted(() => {
               </div>
             </div>
           </template>
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-secondary" @click="closePublishRelease">取消</button>
-          <button class="btn btn-primary" :disabled="publishingRelease || publishBlocked" @click="publishSelectedRelease">
-            {{ publishingRelease ? '发布中...' : '确认发布' }}
-          </button>
         </div>
       </div>
     </div>

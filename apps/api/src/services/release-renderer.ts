@@ -207,7 +207,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
     id: 'preset-wireguard',
     name: 'WireGuard',
-    engine: 'sing-box',
+    engine: 'xray',
     protocol: 'wireguard',
     transport: 'wireguard',
     tlsMode: 'none',
@@ -226,7 +226,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
       clientPublicKey: '',
       presharedKey: '',
     },
-    notes: 'WireGuard UDP tunnel. Provide server/client key pairs before publish.',
+    notes: 'WireGuard UDP tunnel. Xray v1.8.6+ 原生支持 WireGuard inbound，也兼容 sing-box endpoints。',
   },
 ]
 
@@ -354,9 +354,6 @@ function ensureTemplateCompatibility(template: TemplateRecord): void {
   }
 
   if (protocol === 'wireguard') {
-    if (template.engine !== 'sing-box') {
-      throw new Error(`Template ${template.name} requires sing-box for the wireguard protocol`)
-    }
     if (transport !== 'wireguard') {
       throw new Error(`Template ${template.name} must use the wireguard transport`)
     }
@@ -673,7 +670,24 @@ function buildXrayInbound(node: NodeRecord, template: NormalizedTemplate, index:
     throw new Error(`Template ${template.name} cannot be rendered with the xray engine`)
   }
   if (template.protocol === 'wireguard') {
-    throw new Error(`Template ${template.name} cannot be rendered with the xray engine`)
+    // Xray v1.8.6+ supports native WireGuard inbound
+    const inbound: Record<string, unknown> = {
+      tag: `in-${index + 1}`,
+      port: template.listenPort,
+      listen: '0.0.0.0',
+      protocol: 'wireguard',
+      settings: {
+        secretKey: template.wireguardServerPrivateKey,
+        peers: [
+          {
+            publicKey: template.wireguardClientPublicKey,
+            allowedIPs: template.wireguardPeerAllowedIps,
+          },
+        ],
+        mtu: template.wireguardMtu > 0 ? template.wireguardMtu : DEFAULT_WIREGUARD_MTU,
+      },
+    }
+    return inbound
   }
 
   const inbound: Record<string, unknown> = {

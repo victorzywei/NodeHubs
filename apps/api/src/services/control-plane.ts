@@ -276,6 +276,7 @@ function toReleaseRecord(row: ReleaseRow): ReleaseRecord {
     revision: Number(row.revision || 0),
     status: row.status as ReleaseStatus,
     configRevision: Number(row.config_revision || 0),
+    templateIds: parseJsonObject<string[]>(row.template_ids_json, []),
     artifactKey: row.artifact_key,
     artifactSha256: row.artifact_sha256,
     summary: row.summary,

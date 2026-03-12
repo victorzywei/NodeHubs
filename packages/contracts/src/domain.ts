@@ -90,6 +90,7 @@ export interface ReleaseRecord {
   revision: number
   status: ReleaseStatus
   configRevision: number
+  templateIds: string[]
   artifactKey: string
   artifactSha256: string
   summary: string
