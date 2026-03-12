@@ -73,6 +73,37 @@ function createTemplate(): TemplateRecord {
   }
 }
 
+function createWireguardTemplate(overrides: Partial<TemplateRecord> = {}): TemplateRecord {
+  return {
+    id: 'tpl_wg',
+    name: 'WireGuard',
+    engine: 'xray',
+    protocol: 'wireguard',
+    transport: 'wireguard',
+    tlsMode: 'none',
+    warpExit: false,
+    warpRouteMode: 'all',
+    defaults: {
+      serverPort: 51820,
+      serverPrivateKey: 'server-private-key',
+      serverPublicKey: 'server-public-key',
+      clientPrivateKey: 'client-private-key',
+      clientPublicKey: 'client-public-key',
+      serverAddress: '10.66.0.1/24',
+      clientAddress: '10.66.0.2/32',
+      peerAllowedIps: ['10.66.0.2/32'],
+      clientAllowedIps: ['0.0.0.0/0', '::/0'],
+      dns: ['1.1.1.1', '8.8.8.8'],
+      mtu: 1408,
+      persistentKeepalive: 25,
+    },
+    notes: '',
+    updatedAt: '2026-03-06T00:00:00.000Z',
+    createdAt: '2026-03-06T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
 describe('release renderer', () => {
   it('renders release artifacts with runtime files and subscription entries', () => {
     const artifact = renderReleaseArtifact({
@@ -201,6 +232,7 @@ describe('release renderer', () => {
     expect(presets.length).toBeGreaterThan(0)
     expect(presets.find((item) => item.id === 'preset-hysteria2')?.defaults.serverPort).toBe(23485)
     expect(presets.find((item) => item.id === 'preset-vless-ws-tls')?.defaults.serverPort).toBe(23491)
+    expect(presets.find((item) => item.id === 'preset-wireguard')?.defaults.dns).toEqual(['1.1.1.1', '8.8.8.8'])
   })
 
   it('renders grouped runtime plans for mixed engines', () => {
@@ -316,5 +348,92 @@ describe('release renderer', () => {
         port: DEFAULT_WARP_LOCAL_PROXY_PORT,
       },
     })
+  })
+
+  it('renders xray wireguard runtime configs for inbound clients', () => {
+    const artifact = renderReleaseArtifact({
+      releaseId: 'rel_wg_xray',
+      revision: 8,
+      kind: 'runtime',
+      configRevision: 8,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: 'wireguard xray',
+      summary: 'template update',
+      node: createNode(),
+      templates: [createWireguardTemplate()],
+    })
+
+    const runtimeConfig = JSON.parse(artifact.runtimes[0]?.files[0]?.content || '{}') as {
+      inbounds?: Array<Record<string, unknown>>
+    }
+    const inbound = runtimeConfig.inbounds?.[0]
+
+    expect(artifact.runtimes[0]?.engine).toBe('xray')
+    expect(inbound).toMatchObject({
+      protocol: 'wireguard',
+      port: 51820,
+      settings: {
+        secretKey: 'server-private-key',
+        peers: [
+          {
+            publicKey: 'client-public-key',
+            allowedIPs: ['10.66.0.2/32'],
+          },
+        ],
+        mtu: 1408,
+      },
+    })
+  })
+
+  it('renders sing-box wireguard subscriptions with endpoint config', () => {
+    const artifact = renderReleaseArtifact({
+      releaseId: 'rel_wg_sb',
+      revision: 9,
+      kind: 'runtime',
+      configRevision: 9,
+      createdAt: '2026-03-06T00:00:00.000Z',
+      message: 'wireguard sing-box',
+      summary: 'template update',
+      node: createNode(),
+      templates: [createWireguardTemplate({ engine: 'sing-box' })],
+    })
+
+    const singbox = renderSubscriptionDocument(
+      {
+        subscriptionId: 'sub_wg',
+        name: 'WireGuard',
+        generatedAt: '2026-03-06T00:00:00.000Z',
+        entries: artifact.subscriptionEndpoints,
+      },
+      'singbox',
+    )
+
+    const parsed = JSON.parse(singbox.body) as {
+      dns?: { servers?: Array<Record<string, unknown>>; final?: string }
+      endpoints?: Array<Record<string, unknown>>
+      outbounds?: Array<Record<string, unknown>>
+    }
+
+    expect(parsed.endpoints?.[0]).toMatchObject({
+      type: 'wireguard',
+      address: ['10.66.0.2/32'],
+      private_key: 'client-private-key',
+      peers: [
+        {
+          address: 'edge.example.com',
+          port: 51820,
+          public_key: 'server-public-key',
+          allowed_ips: ['0.0.0.0/0', '::/0'],
+          persistent_keepalive_interval: 25,
+        },
+      ],
+      mtu: 1408,
+    })
+    expect(parsed.dns?.final).toBe('dns-1')
+    expect(parsed.dns?.servers).toEqual([
+      { type: 'udp', tag: 'dns-1', server: '1.1.1.1' },
+      { type: 'udp', tag: 'dns-2', server: '8.8.8.8' },
+    ])
+    expect((parsed.outbounds || []).some((outbound) => String(outbound.type || '') === 'wireguard')).toBe(false)
   })
 })

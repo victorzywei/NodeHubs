@@ -40,13 +40,6 @@ function validateTemplateCombination(
   }
 
   if (protocol === 'wireguard') {
-    if (input.engine !== 'sing-box') {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['engine'],
-        message: 'WireGuard templates require the sing-box engine',
-      })
-    }
     if (transport !== 'wireguard') {
       ctx.addIssue({
         code: 'custom',

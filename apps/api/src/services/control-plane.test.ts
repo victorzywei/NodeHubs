@@ -250,6 +250,40 @@ describe('control-plane template validation', () => {
     ).rejects.toThrow(/sing-box/i)
   })
 
+  it('accepts wireguard templates on xray in service layer create/update paths', async () => {
+    const services = createServices()
+
+    const created = await createTemplate(
+      services,
+      createValidTemplateInput({
+        name: 'WireGuard Xray',
+        engine: 'xray',
+        protocol: 'wireguard',
+        transport: 'wireguard',
+        tlsMode: 'none',
+        defaults: {
+          serverPort: 51820,
+          serverPrivateKey: 'server-private-key',
+          serverPublicKey: 'server-public-key',
+          clientPrivateKey: 'client-private-key',
+          clientPublicKey: 'client-public-key',
+          serverAddress: '10.66.0.1/24',
+          clientAddress: '10.66.0.2/32',
+        },
+      }),
+    )
+
+    expect(created.engine).toBe('xray')
+    expect(created.protocol).toBe('wireguard')
+
+    const updated = await updateTemplate(services, created.id, {
+      engine: 'sing-box',
+    })
+
+    expect(updated?.engine).toBe('sing-box')
+    expect(updated?.protocol).toBe('wireguard')
+  })
+
   it('normalizes placeholder template defaults before persisting them', async () => {
     const services = createServices()
 

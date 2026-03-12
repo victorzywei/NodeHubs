@@ -76,6 +76,7 @@ const DEFAULT_WIREGUARD_PORT = 51820
 const DEFAULT_WIREGUARD_SERVER_ADDRESS = '10.66.0.1/24'
 const DEFAULT_WIREGUARD_CLIENT_ADDRESS = '10.66.0.2/32'
 const DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS = ['0.0.0.0/0', '::/0']
+const DEFAULT_WIREGUARD_DNS = ['1.1.1.1', '8.8.8.8']
 const DEFAULT_WIREGUARD_MTU = 1408
 
 const TEMPLATE_PRESETS: TemplatePreset[] = [
@@ -219,6 +220,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
       clientAddress: DEFAULT_WIREGUARD_CLIENT_ADDRESS,
       peerAllowedIps: [DEFAULT_WIREGUARD_CLIENT_ADDRESS],
       clientAllowedIps: DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS,
+      dns: DEFAULT_WIREGUARD_DNS,
       mtu: DEFAULT_WIREGUARD_MTU,
       serverPrivateKey: '',
       serverPublicKey: '',
@@ -226,7 +228,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
       clientPublicKey: '',
       presharedKey: '',
     },
-    notes: 'WireGuard UDP tunnel. Xray v1.8.6+ 原生支持 WireGuard inbound，也兼容 sing-box endpoints。',
+    notes: 'WireGuard UDP tunnel，默认客户端全局路由到隧道并下发公共 DNS。Xray v1.8.6+ 原生支持 WireGuard inbound，也兼容 sing-box endpoints。',
   },
 ]
 
@@ -457,7 +459,7 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
   const wireguardClientAddress = readString(defaults, 'clientAddress', DEFAULT_WIREGUARD_CLIENT_ADDRESS)
   const wireguardPeerAllowedIps = readStringArray(defaults, 'peerAllowedIps', wireguardClientAddress ? [wireguardClientAddress] : [])
   const wireguardClientAllowedIps = readStringArray(defaults, 'clientAllowedIps', DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS)
-  const wireguardDns = readStringArray(defaults, 'dns', [])
+  const wireguardDns = readStringArray(defaults, 'dns', DEFAULT_WIREGUARD_DNS)
   const wireguardMtu = readNumber(defaults, ['mtu'], DEFAULT_WIREGUARD_MTU)
   const wireguardPersistentKeepalive = readNumber(defaults, ['persistentKeepalive'], 0)
   const normalized: NormalizedTemplate = {
@@ -1286,6 +1288,10 @@ function buildClashProxy(entry: ResolvedSubscriptionEntry): Record<string, unkno
 }
 
 function buildSingboxOutbound(entry: ResolvedSubscriptionEntry): Record<string, unknown> {
+  if (entry.protocol === 'wireguard') {
+    throw new Error('WireGuard entries must be rendered as sing-box endpoints')
+  }
+
   const outbound: Record<string, unknown> = {
     tag: entry.label,
     type: entry.protocol,
@@ -1299,15 +1305,6 @@ function buildSingboxOutbound(entry: ResolvedSubscriptionEntry): Record<string, 
   } else if (entry.protocol === 'vmess') {
     outbound.uuid = entry.uuid
     outbound.alter_id = entry.alterId
-  } else if (entry.protocol === 'wireguard') {
-    if (entry.wireguard) {
-      if (entry.wireguard.address) outbound.local_address = [entry.wireguard.address]
-      outbound.private_key = entry.wireguard.privateKey
-      outbound.peer_public_key = entry.wireguard.peerPublicKey
-      if (entry.wireguard.preSharedKey) outbound.pre_shared_key = entry.wireguard.preSharedKey
-      if (entry.wireguard.mtu > 0) outbound.mtu = entry.wireguard.mtu
-    }
-    return outbound
   } else if (entry.protocol === 'trojan' || entry.protocol === 'hysteria2') {
     outbound.password = entry.password
   } else if (entry.protocol === 'shadowsocks') {
@@ -1367,6 +1364,36 @@ function buildSingboxOutbound(entry: ResolvedSubscriptionEntry): Record<string, 
   return outbound
 }
 
+function buildSingboxEndpoint(entry: ResolvedSubscriptionEntry): Record<string, unknown> | null {
+  if (entry.protocol !== 'wireguard' || !entry.wireguard) return null
+  const wireguard = entry.wireguard
+  const allowedIps = wireguard.allowedIps.length > 0 ? wireguard.allowedIps : DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS
+  const endpoint: Record<string, unknown> = {
+    type: 'wireguard',
+    tag: entry.label,
+    address: [wireguard.address],
+    private_key: wireguard.privateKey,
+    peers: [
+      {
+        address: entry.server,
+        port: entry.port,
+        public_key: wireguard.peerPublicKey,
+        allowed_ips: allowedIps,
+        ...(wireguard.preSharedKey ? { pre_shared_key: wireguard.preSharedKey } : {}),
+        ...(wireguard.persistentKeepalive > 0
+          ? { persistent_keepalive_interval: wireguard.persistentKeepalive }
+          : {}),
+      },
+    ],
+  }
+
+  if (wireguard.mtu > 0) {
+    endpoint.mtu = wireguard.mtu
+  }
+
+  return endpoint
+}
+
 function buildWireguardConfig(entry: ResolvedSubscriptionEntry): string | null {
   if (entry.protocol !== 'wireguard' || !entry.wireguard) return null
   const wg = entry.wireguard
@@ -1387,6 +1414,24 @@ function buildWireguardConfig(entry: ResolvedSubscriptionEntry): string | null {
   if (wg.persistentKeepalive > 0) lines.push(`PersistentKeepalive = ${wg.persistentKeepalive}`)
 
   return lines.join('\n')
+}
+
+
+function buildSingboxDnsConfig(entries: ResolvedSubscriptionEntry[]): Record<string, unknown> | null {
+  const servers = Array.from(new Set(
+    entries.flatMap((entry) => entry.protocol === 'wireguard' && entry.wireguard
+      ? entry.wireguard.dns.filter((item) => item.trim().length > 0)
+      : []),
+  ))
+  if (servers.length === 0) return null
+  return {
+    servers: servers.map((server, index) => ({
+      type: 'udp',
+      tag: `dns-${index + 1}`,
+      server,
+    })),
+    final: 'dns-1',
+  }
 }
 
 export function renderSubscriptionDocument(
@@ -1461,8 +1506,14 @@ export function renderSubscriptionDocument(
   }
   // singbox format: JSON outbound config
   if (format === 'singbox') {
-    const outbounds = resolvedEntries.map(buildSingboxOutbound)
+    const endpoints = resolvedEntries.map(buildSingboxEndpoint).filter((item): item is Record<string, unknown> => Boolean(item))
+    const outbounds = resolvedEntries
+      .filter((entry) => entry.protocol !== 'wireguard')
+      .map(buildSingboxOutbound)
+    const dns = buildSingboxDnsConfig(resolvedEntries)
     const singboxConfig = {
+      ...(dns ? { dns } : {}),
+      ...(endpoints.length > 0 ? { endpoints } : {}),
       outbounds: [
         ...outbounds,
         { type: 'direct', tag: 'direct' },

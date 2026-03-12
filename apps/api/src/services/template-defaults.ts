@@ -29,6 +29,7 @@ const DEFAULT_REALITY_FINGERPRINT = 'chrome'
 const DEFAULT_WIREGUARD_SERVER_ADDRESS = '10.66.0.1/24'
 const DEFAULT_WIREGUARD_CLIENT_ADDRESS = '10.66.0.2/32'
 const DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS = ['0.0.0.0/0', '::/0']
+const DEFAULT_WIREGUARD_DNS = ['1.1.1.1', '8.8.8.8']
 const DEFAULT_WIREGUARD_MTU = 1408
 
 type TemplateLike = Pick<TemplateRecord, 'protocol' | 'transport' | 'tlsMode' | 'defaults'>
@@ -185,6 +186,9 @@ export function repairTemplateDefaults(template: TemplateLike): Record<string, u
     }
     if (!hasStringCollection(defaults.clientAllowedIps)) {
       defaults.clientAllowedIps = DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS
+    }
+    if (!hasStringCollection(defaults.dns)) {
+      defaults.dns = DEFAULT_WIREGUARD_DNS
     }
     const mtuValue = Number(defaults.mtu)
     if (!Number.isFinite(mtuValue) || mtuValue <= 0) {

@@ -15,6 +15,19 @@ describe('template schema validation', () => {
     expect(parsed.success).toBe(true)
   })
 
+  it('accepts wireguard templates on xray', () => {
+    const parsed = createTemplateSchema.safeParse({
+      name: 'WireGuard Xray',
+      engine: 'xray',
+      protocol: 'wireguard',
+      transport: 'wireguard',
+      tlsMode: 'none',
+      defaults: {},
+      notes: '',
+    })
+    expect(parsed.success).toBe(true)
+  })
+
   it('accepts wireguard templates on sing-box', () => {
     const parsed = createTemplateSchema.safeParse({
       name: 'WireGuard',

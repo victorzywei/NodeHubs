@@ -506,6 +506,7 @@ const defaultRealityFlow = 'xtls-rprx-vision'
 const defaultWireguardServerAddress = '10.66.0.1/24'
 const defaultWireguardClientAddress = '10.66.0.2/32'
 const defaultWireguardClientAllowedIps = '0.0.0.0/0, ::/0'
+const defaultWireguardDns = '1.1.1.1, 8.8.8.8'
 const defaultWireguardMtu = 1408
 const defaultWireguardPort = 51820
 
@@ -617,7 +618,7 @@ const templateDefaultFields = computed(() => {
     fields.push({ key:'clientAddress', label:'客户端地址', placeholder: defaultWireguardClientAddress })
     fields.push({ key:'peerAllowedIps', label:'服务端允许 IPs', placeholder: defaultWireguardClientAddress })
     fields.push({ key:'clientAllowedIps', label:'客户端 AllowedIPs', placeholder: defaultWireguardClientAllowedIps })
-    fields.push({ key:'dns', label:'DNS', placeholder:'可选，例如 1.1.1.1, 8.8.8.8' })
+    fields.push({ key:'dns', label:'DNS', placeholder: defaultWireguardDns })
     fields.push({ key:'mtu', label:'MTU', placeholder:String(defaultWireguardMtu), type:'number' })
     fields.push({ key:'persistentKeepalive', label:'Keepalive (秒)', placeholder:'可选，例如 25', type:'number' })
   }
@@ -706,7 +707,6 @@ watch(() => newTemplate.value.protocol, (p) => {
   if (p === 'wireguard') {
     newTemplate.value.transport = 'wireguard'
     newTemplate.value.tlsMode = 'none'
-    if (newTemplate.value.engine !== 'sing-box') newTemplate.value.engine = 'sing-box'
   } else if (p === 'hysteria2') {
     newTemplate.value.transport = 'hysteria2'
     newTemplate.value.tlsMode = 'tls'
@@ -896,6 +896,9 @@ async function hydrateTemplateDefaults(mode: 'repair' | 'force' = 'repair') {
     }
     if (shouldWrite(nextDefaults['clientAllowedIps'], !String(nextDefaults['clientAllowedIps'] || '').trim())) {
       nextDefaults['clientAllowedIps'] = defaultWireguardClientAllowedIps
+    }
+    if (shouldWrite(nextDefaults['dns'], !String(nextDefaults['dns'] || '').trim())) {
+      nextDefaults['dns'] = defaultWireguardDns
     }
     if (shouldWrite(nextDefaults['mtu'], !String(nextDefaults['mtu'] || '').trim())) {
       nextDefaults['mtu'] = defaultWireguardMtu
