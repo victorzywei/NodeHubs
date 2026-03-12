@@ -15,6 +15,19 @@ describe('template schema validation', () => {
     expect(parsed.success).toBe(true)
   })
 
+  it('accepts wireguard templates on sing-box', () => {
+    const parsed = createTemplateSchema.safeParse({
+      name: 'WireGuard',
+      engine: 'sing-box',
+      protocol: 'wireguard',
+      transport: 'wireguard',
+      tlsMode: 'none',
+      defaults: {},
+      notes: '',
+    })
+    expect(parsed.success).toBe(true)
+  })
+
   it('rejects invalid combinations', () => {
     const parsed = createTemplateSchema.safeParse({
       name: 'Invalid',

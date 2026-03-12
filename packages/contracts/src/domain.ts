@@ -9,7 +9,7 @@ export type WarpRouteMode = 'all' | 'ipv4' | 'ipv6'
 
 export type StorageMode = 'cloudflare' | 'docker'
 
-export type SubscriptionDocumentFormat = 'plain' | 'base64' | 'json' | 'v2ray' | 'clash' | 'singbox'
+export type SubscriptionDocumentFormat = 'plain' | 'base64' | 'json' | 'v2ray' | 'clash' | 'singbox' | 'wireguard'
 
 export const DEFAULT_WARP_LOCAL_PROXY_PORT = 23499
 
@@ -190,7 +190,20 @@ export interface SubscriptionEndpoint {
   realityShortId?: string
   upMbps?: number
   downMbps?: number
+  wireguard?: WireguardSubscription
   uri?: string
+}
+
+export interface WireguardSubscription {
+  privateKey: string
+  publicKey?: string
+  peerPublicKey: string
+  preSharedKey?: string
+  address: string
+  allowedIps: string[]
+  dns?: string[]
+  mtu?: number
+  persistentKeepalive?: number
 }
 
 export interface ReleaseArtifact {

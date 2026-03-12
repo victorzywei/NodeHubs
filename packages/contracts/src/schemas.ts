@@ -39,11 +39,43 @@ function validateTemplateCombination(
     }
   }
 
+  if (protocol === 'wireguard') {
+    if (input.engine !== 'sing-box') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['engine'],
+        message: 'WireGuard templates require the sing-box engine',
+      })
+    }
+    if (transport !== 'wireguard') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['transport'],
+        message: 'WireGuard templates must use the wireguard transport',
+      })
+    }
+    if (input.tlsMode !== 'none') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tlsMode'],
+        message: 'WireGuard templates must use no TLS mode',
+      })
+    }
+  }
+
   if (transport === 'hysteria2' && protocol !== 'hysteria2') {
     ctx.addIssue({
       code: 'custom',
       path: ['transport'],
       message: 'The hysteria2 transport can only be used with the hysteria2 protocol',
+    })
+  }
+
+  if (transport === 'wireguard' && protocol !== 'wireguard') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['transport'],
+      message: 'The wireguard transport can only be used with the wireguard protocol',
     })
   }
 
@@ -170,7 +202,7 @@ export const createSubscriptionSchema = z.object({
 
 export const updateSubscriptionSchema = createSubscriptionSchema.partial()
 
-export const subscriptionDocumentFormatSchema = z.enum(['plain', 'base64', 'json', 'v2ray', 'clash', 'singbox'])
+export const subscriptionDocumentFormatSchema = z.enum(['plain', 'base64', 'json', 'v2ray', 'clash', 'singbox', 'wireguard'])
 
 export const publishNodeSchema = z.object({
   templateIds: z.array(z.string().trim().min(1)).default([]),

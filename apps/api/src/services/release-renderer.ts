@@ -52,14 +52,31 @@ type NormalizedTemplate = {
   realityShortId: string
   certPath: string
   keyPath: string
+  wireguardServerPrivateKey: string
+  wireguardServerPublicKey: string
+  wireguardClientPrivateKey: string
+  wireguardClientPublicKey: string
+  wireguardPresharedKey: string
+  wireguardServerAddress: string
+  wireguardClientAddress: string
+  wireguardPeerAllowedIps: string[]
+  wireguardClientAllowedIps: string[]
+  wireguardDns: string[]
+  wireguardMtu: number
+  wireguardPersistentKeepalive: number
   defaults: Record<string, unknown>
 }
 
-const SUPPORTED_PROTOCOLS = new Set(['vless', 'trojan', 'shadowsocks', 'vmess', 'hysteria2'])
-const SUPPORTED_TRANSPORTS = new Set(['ws', 'grpc', 'tcp', 'h2', 'hysteria2', 'xhttp'])
+const SUPPORTED_PROTOCOLS = new Set(['vless', 'trojan', 'shadowsocks', 'vmess', 'hysteria2', 'wireguard'])
+const SUPPORTED_TRANSPORTS = new Set(['ws', 'grpc', 'tcp', 'h2', 'hysteria2', 'xhttp', 'wireguard'])
 const WARP_LOCAL_PROXY_HOST = '127.0.0.1'
 const DEFAULT_REALITY_FLOW = 'xtls-rprx-vision'
 const DEFAULT_REALITY_FINGERPRINT = 'chrome'
+const DEFAULT_WIREGUARD_PORT = 51820
+const DEFAULT_WIREGUARD_SERVER_ADDRESS = '10.66.0.1/24'
+const DEFAULT_WIREGUARD_CLIENT_ADDRESS = '10.66.0.2/32'
+const DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS = ['0.0.0.0/0', '::/0']
+const DEFAULT_WIREGUARD_MTU = 1408
 
 const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
@@ -187,6 +204,30 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
     },
     notes: 'VMESS 经典 WebSocket 组合，CDN 可用。兼容 Xray / sing-box。',
   },
+  {
+    id: 'preset-wireguard',
+    name: 'WireGuard',
+    engine: 'sing-box',
+    protocol: 'wireguard',
+    transport: 'wireguard',
+    tlsMode: 'none',
+    warpExit: false,
+    warpRouteMode: 'all',
+    defaults: {
+      serverPort: DEFAULT_WIREGUARD_PORT,
+      serverAddress: DEFAULT_WIREGUARD_SERVER_ADDRESS,
+      clientAddress: DEFAULT_WIREGUARD_CLIENT_ADDRESS,
+      peerAllowedIps: [DEFAULT_WIREGUARD_CLIENT_ADDRESS],
+      clientAllowedIps: DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS,
+      mtu: DEFAULT_WIREGUARD_MTU,
+      serverPrivateKey: '',
+      serverPublicKey: '',
+      clientPrivateKey: '',
+      clientPublicKey: '',
+      presharedKey: '',
+    },
+    notes: 'WireGuard UDP tunnel. Provide server/client key pairs before publish.',
+  },
 ]
 
 function readString(source: Record<string, unknown>, key: string, fallback = ''): string {
@@ -207,6 +248,19 @@ function readNumber(source: Record<string, unknown>, keys: string[], fallback: n
       const parsed = Number(value)
       if (Number.isFinite(parsed)) return Math.trunc(parsed)
     }
+  }
+  return fallback
+}
+
+function readStringArray(source: Record<string, unknown>, key: string, fallback: string[] = []): string[] {
+  const value = source[key]
+  if (Array.isArray(value)) {
+    const items = value.map((item) => String(item ?? '').trim()).filter(Boolean)
+    return items.length > 0 ? items : fallback
+  }
+  if (typeof value === 'string') {
+    const items = value.split(',').map((item) => item.trim()).filter(Boolean)
+    return items.length > 0 ? items : fallback
   }
   return fallback
 }
@@ -299,8 +353,24 @@ function ensureTemplateCompatibility(template: TemplateRecord): void {
     }
   }
 
+  if (protocol === 'wireguard') {
+    if (template.engine !== 'sing-box') {
+      throw new Error(`Template ${template.name} requires sing-box for the wireguard protocol`)
+    }
+    if (transport !== 'wireguard') {
+      throw new Error(`Template ${template.name} must use the wireguard transport`)
+    }
+    if (template.tlsMode !== 'none') {
+      throw new Error(`Template ${template.name} must disable TLS for wireguard`)
+    }
+  }
+
   if (transport === 'hysteria2' && protocol !== 'hysteria2') {
     throw new Error(`Template ${template.name} can only use the hysteria2 transport with the hysteria2 protocol`)
+  }
+
+  if (transport === 'wireguard' && protocol !== 'wireguard') {
+    throw new Error(`Template ${template.name} can only use the wireguard transport with the wireguard protocol`)
   }
 
   if (protocol === 'shadowsocks') {
@@ -323,6 +393,7 @@ function ensureTemplateCompatibility(template: TemplateRecord): void {
 }
 
 function defaultPort(template: TemplateRecord): number {
+  if (template.protocol.trim().toLowerCase() === 'wireguard') return DEFAULT_WIREGUARD_PORT
   if (template.tlsMode === 'none') return 80
   return 443
 }
@@ -368,6 +439,9 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
   const protocol = repairedTemplate.protocol.toLowerCase()
   const transport = repairedTemplate.transport.toLowerCase()
   const tlsMode = repairedTemplate.tlsMode
+  if (protocol === 'wireguard' && node.networkType === 'noPublicIp') {
+    throw new Error(`Template ${repairedTemplate.name} requires a public IP node for wireguard`)
+  }
   const warpExit = repairedTemplate.warpExit === true || readBoolean(defaults.warp_exit, false)
   const warpRouteModeRaw = readString(defaults, 'warp_route_mode', repairedTemplate.warpRouteMode || 'all')
   const warpRouteMode: TemplateRecord['warpRouteMode'] = warpRouteModeRaw === 'ipv4' || warpRouteModeRaw === 'ipv6' ? warpRouteModeRaw : 'all'
@@ -377,6 +451,18 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
     : templateListenPort
   const host = readString(defaults, 'host', defaultTemplateHost(node, server))
   const sni = readString(defaults, 'sni', defaultTemplateSni(node, host || server))
+  const wireguardServerPrivateKey = readString(defaults, 'serverPrivateKey')
+  const wireguardServerPublicKey = readString(defaults, 'serverPublicKey')
+  const wireguardClientPrivateKey = readString(defaults, 'clientPrivateKey')
+  const wireguardClientPublicKey = readString(defaults, 'clientPublicKey')
+  const wireguardPresharedKey = readString(defaults, 'presharedKey')
+  const wireguardServerAddress = readString(defaults, 'serverAddress', DEFAULT_WIREGUARD_SERVER_ADDRESS)
+  const wireguardClientAddress = readString(defaults, 'clientAddress', DEFAULT_WIREGUARD_CLIENT_ADDRESS)
+  const wireguardPeerAllowedIps = readStringArray(defaults, 'peerAllowedIps', wireguardClientAddress ? [wireguardClientAddress] : [])
+  const wireguardClientAllowedIps = readStringArray(defaults, 'clientAllowedIps', DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS)
+  const wireguardDns = readStringArray(defaults, 'dns', [])
+  const wireguardMtu = readNumber(defaults, ['mtu'], DEFAULT_WIREGUARD_MTU)
+  const wireguardPersistentKeepalive = readNumber(defaults, ['persistentKeepalive'], 0)
   const normalized: NormalizedTemplate = {
     id: repairedTemplate.id,
     name: repairedTemplate.name,
@@ -406,6 +492,18 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
     realityShortId: readString(defaults, 'realityShortId'),
     certPath: readString(defaults, 'certPath', '/etc/nodehubsapi/certs/server.crt'),
     keyPath: readString(defaults, 'keyPath', '/etc/nodehubsapi/certs/server.key'),
+    wireguardServerPrivateKey,
+    wireguardServerPublicKey,
+    wireguardClientPrivateKey,
+    wireguardClientPublicKey,
+    wireguardPresharedKey,
+    wireguardServerAddress,
+    wireguardClientAddress,
+    wireguardPeerAllowedIps,
+    wireguardClientAllowedIps,
+    wireguardDns,
+    wireguardMtu: wireguardMtu > 0 ? wireguardMtu : DEFAULT_WIREGUARD_MTU,
+    wireguardPersistentKeepalive: wireguardPersistentKeepalive > 0 ? wireguardPersistentKeepalive : 0,
     defaults,
   }
 
@@ -418,6 +516,20 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
   if (protocol === 'shadowsocks') {
     normalized.password = ensureField(normalized.password, 'password', template.name)
     normalized.method = ensureField(normalized.method, 'method', template.name)
+  }
+  if (protocol === 'wireguard') {
+    normalized.wireguardServerPrivateKey = ensureField(normalized.wireguardServerPrivateKey, 'serverPrivateKey', template.name)
+    normalized.wireguardServerPublicKey = ensureField(normalized.wireguardServerPublicKey, 'serverPublicKey', template.name)
+    normalized.wireguardClientPrivateKey = ensureField(normalized.wireguardClientPrivateKey, 'clientPrivateKey', template.name)
+    normalized.wireguardClientPublicKey = ensureField(normalized.wireguardClientPublicKey, 'clientPublicKey', template.name)
+    normalized.wireguardServerAddress = ensureField(normalized.wireguardServerAddress, 'serverAddress', template.name)
+    normalized.wireguardClientAddress = ensureField(normalized.wireguardClientAddress, 'clientAddress', template.name)
+    if (normalized.wireguardPeerAllowedIps.length === 0) {
+      normalized.wireguardPeerAllowedIps = [normalized.wireguardClientAddress]
+    }
+    if (normalized.wireguardClientAllowedIps.length === 0) {
+      normalized.wireguardClientAllowedIps = DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS
+    }
   }
   if (tlsMode === 'reality') {
     normalized.realityPublicKey = ensureField(normalized.realityPublicKey, 'realityPublicKey', template.name)
@@ -436,6 +548,9 @@ function shouldIgnoreNodeInboundTls(node: NodeRecord, template: NormalizedTempla
 }
 
 function buildSingBoxInbound(node: NodeRecord, template: NormalizedTemplate, index: number) {
+  if (template.protocol === 'wireguard') {
+    throw new Error(`Template ${template.name} must be rendered as a wireguard endpoint`)
+  }
   const protocol = template.protocol === 'shadowsocks' ? 'shadowsocks' : template.protocol
   const inbound: Record<string, unknown> = {
     type: protocol,
@@ -527,8 +642,37 @@ function buildSingBoxInbound(node: NodeRecord, template: NormalizedTemplate, ind
   return inbound
 }
 
+function buildSingBoxEndpoint(template: NormalizedTemplate, index: number) {
+  const endpoint: Record<string, unknown> = {
+    type: 'wireguard',
+    tag: `in-${index + 1}`,
+    address: [template.wireguardServerAddress],
+    private_key: template.wireguardServerPrivateKey,
+    listen_port: template.listenPort,
+    peers: [
+      {
+        public_key: template.wireguardClientPublicKey,
+        allowed_ips: template.wireguardPeerAllowedIps,
+        ...(template.wireguardPresharedKey ? { pre_shared_key: template.wireguardPresharedKey } : {}),
+        ...(template.wireguardPersistentKeepalive > 0
+          ? { persistent_keepalive_interval: template.wireguardPersistentKeepalive }
+          : {}),
+      },
+    ],
+  }
+
+  if (template.wireguardMtu > 0) {
+    endpoint.mtu = template.wireguardMtu
+  }
+
+  return endpoint
+}
+
 function buildXrayInbound(node: NodeRecord, template: NormalizedTemplate, index: number) {
   if (template.protocol === 'hysteria2') {
+    throw new Error(`Template ${template.name} cannot be rendered with the xray engine`)
+  }
+  if (template.protocol === 'wireguard') {
     throw new Error(`Template ${template.name} cannot be rendered with the xray engine`)
   }
 
@@ -656,10 +800,26 @@ function buildSubscriptionEntry(node: NodeRecord, template: NormalizedTemplate):
     realityShortId: template.realityShortId || undefined,
     upMbps: template.protocol === 'hysteria2' ? template.upMbps : undefined,
     downMbps: template.protocol === 'hysteria2' ? template.downMbps : undefined,
+    wireguard: template.protocol === 'wireguard'
+      ? {
+          privateKey: template.wireguardClientPrivateKey,
+          publicKey: template.wireguardClientPublicKey || undefined,
+          peerPublicKey: template.wireguardServerPublicKey,
+          preSharedKey: template.wireguardPresharedKey || undefined,
+          address: template.wireguardClientAddress,
+          allowedIps: template.wireguardClientAllowedIps,
+          dns: template.wireguardDns.length > 0 ? template.wireguardDns : undefined,
+          mtu: template.wireguardMtu > 0 ? template.wireguardMtu : undefined,
+          persistentKeepalive: template.wireguardPersistentKeepalive > 0 ? template.wireguardPersistentKeepalive : undefined,
+        }
+      : undefined,
   }
 }
 
 function buildSubscriptionUriFromEntry(entry: ResolvedSubscriptionEntry): string {
+  if (entry.protocol === 'wireguard') {
+    return ''
+  }
   const label = encodeURIComponentSafe(entry.label)
   const params = new URLSearchParams()
   params.set('type', entry.transport)
@@ -787,6 +947,15 @@ function buildRuntimeConfig(
   const route: Record<string, unknown> = {
     final: 'direct',
   }
+  const inbounds: Array<Record<string, unknown>> = []
+  const endpoints: Array<Record<string, unknown>> = []
+  templates.forEach((template, index) => {
+    if (template.protocol === 'wireguard') {
+      endpoints.push(buildSingBoxEndpoint(template, index))
+    } else {
+      inbounds.push(buildSingBoxInbound(node, template, index))
+    }
+  })
   const warp = resolveWarpRoute(templates)
   if (warp) {
     const inboundTags = resolveInboundTagsByWarp(templates)
@@ -825,7 +994,8 @@ function buildRuntimeConfig(
       level: 'warn',
       timestamp: true,
     },
-    inbounds: templates.map((template, index) => buildSingBoxInbound(node, template, index)),
+    inbounds,
+    ...(endpoints.length > 0 ? { endpoints } : {}),
     outbounds,
     route,
   }
@@ -951,6 +1121,29 @@ type ResolvedSubscriptionEntry = SubscriptionEndpoint & {
   realityShortId: string
   upMbps: number
   downMbps: number
+  wireguard?: {
+    privateKey: string
+    publicKey: string
+    peerPublicKey: string
+    preSharedKey: string
+    address: string
+    allowedIps: string[]
+    dns: string[]
+    mtu: number
+    persistentKeepalive: number
+  }
+}
+
+function normalizeEntryArray(value: unknown, fallback: string[] = []): string[] {
+  if (Array.isArray(value)) {
+    const items = value.map((item) => String(item ?? '').trim()).filter(Boolean)
+    return items.length > 0 ? items : fallback
+  }
+  if (typeof value === 'string') {
+    const items = value.split(',').map((item) => item.trim()).filter(Boolean)
+    return items.length > 0 ? items : fallback
+  }
+  return fallback
 }
 
 function resolveSubscriptionEntry(entry: SubscriptionEndpoint): ResolvedSubscriptionEntry {
@@ -965,6 +1158,19 @@ function resolveSubscriptionEntry(entry: SubscriptionEndpoint): ResolvedSubscrip
   const serviceName = String(entry.serviceName || '').trim() || (transport === 'grpc' ? 'grpc' : '')
   const flow = String(entry.flow || '').trim() || (tlsMode === 'reality' && protocol === 'vless' ? DEFAULT_REALITY_FLOW : '')
   const fingerprint = String(entry.fingerprint || '').trim() || (tlsMode === 'reality' ? DEFAULT_REALITY_FINGERPRINT : '')
+  const wireguard = entry.wireguard
+    ? {
+        privateKey: String(entry.wireguard.privateKey || '').trim(),
+        publicKey: String(entry.wireguard.publicKey || '').trim(),
+        peerPublicKey: String(entry.wireguard.peerPublicKey || '').trim(),
+        preSharedKey: String(entry.wireguard.preSharedKey || '').trim(),
+        address: String(entry.wireguard.address || '').trim(),
+        allowedIps: normalizeEntryArray(entry.wireguard.allowedIps, DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS),
+        dns: normalizeEntryArray(entry.wireguard.dns, []),
+        mtu: Number(entry.wireguard.mtu || 0),
+        persistentKeepalive: Number(entry.wireguard.persistentKeepalive || 0),
+      }
+    : undefined
 
   return {
     ...entry,
@@ -987,6 +1193,7 @@ function resolveSubscriptionEntry(entry: SubscriptionEndpoint): ResolvedSubscrip
     realityShortId: String(entry.realityShortId || '').trim(),
     upMbps: Number(entry.upMbps || 0),
     downMbps: Number(entry.downMbps || 0),
+    wireguard,
   }
 }
 
@@ -1078,6 +1285,15 @@ function buildSingboxOutbound(entry: ResolvedSubscriptionEntry): Record<string, 
   } else if (entry.protocol === 'vmess') {
     outbound.uuid = entry.uuid
     outbound.alter_id = entry.alterId
+  } else if (entry.protocol === 'wireguard') {
+    if (entry.wireguard) {
+      if (entry.wireguard.address) outbound.local_address = [entry.wireguard.address]
+      outbound.private_key = entry.wireguard.privateKey
+      outbound.peer_public_key = entry.wireguard.peerPublicKey
+      if (entry.wireguard.preSharedKey) outbound.pre_shared_key = entry.wireguard.preSharedKey
+      if (entry.wireguard.mtu > 0) outbound.mtu = entry.wireguard.mtu
+    }
+    return outbound
   } else if (entry.protocol === 'trojan' || entry.protocol === 'hysteria2') {
     outbound.password = entry.password
   } else if (entry.protocol === 'shadowsocks') {
@@ -1137,27 +1353,61 @@ function buildSingboxOutbound(entry: ResolvedSubscriptionEntry): Record<string, 
   return outbound
 }
 
+function buildWireguardConfig(entry: ResolvedSubscriptionEntry): string | null {
+  if (entry.protocol !== 'wireguard' || !entry.wireguard) return null
+  const wg = entry.wireguard
+  const lines: string[] = [
+    '[Interface]',
+    `PrivateKey = ${wg.privateKey}`,
+    `Address = ${wg.address}`,
+  ]
+
+  if (wg.dns.length > 0) lines.push(`DNS = ${wg.dns.join(', ')}`)
+  if (wg.mtu > 0) lines.push(`MTU = ${wg.mtu}`)
+
+  lines.push('', '[Peer]', `PublicKey = ${wg.peerPublicKey}`)
+  if (wg.preSharedKey) lines.push(`PresharedKey = ${wg.preSharedKey}`)
+  lines.push(`Endpoint = ${entry.server}:${entry.port}`)
+  const allowedIps = wg.allowedIps.length > 0 ? wg.allowedIps : DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS
+  lines.push(`AllowedIPs = ${allowedIps.join(', ')}`)
+  if (wg.persistentKeepalive > 0) lines.push(`PersistentKeepalive = ${wg.persistentKeepalive}`)
+
+  return lines.join('\n')
+}
+
 export function renderSubscriptionDocument(
   payload: Omit<PublicSubscriptionDocument, 'format'>,
   format: SubscriptionDocumentFormat,
 ): { body: string; contentType: string } {
-  const resolvedEntries = payload.entries.map((entry) => {
-    const resolved = resolveSubscriptionEntry(entry)
-    return {
-      ...resolved,
-      uri: buildSubscriptionUriFromEntry(resolved),
-    }
-  })
-  const plain = resolvedEntries.map((item) => item.uri).join('\n')
+  const resolvedEntries = payload.entries.map((entry) => resolveSubscriptionEntry(entry))
+  const uriEntries = resolvedEntries.filter((entry) => entry.protocol !== 'wireguard')
+  const uriEntriesWithUri = uriEntries.map((entry) => ({ ...entry, uri: buildSubscriptionUriFromEntry(entry) }))
+  const jsonEntries = resolvedEntries.map((entry) => entry.protocol === 'wireguard'
+    ? entry
+    : { ...entry, uri: buildSubscriptionUriFromEntry(entry) })
+  const plain = uriEntriesWithUri.map((item) => item.uri).filter(Boolean).join('\n')
   if (format === 'json') {
     return {
-      body: JSON.stringify({ ...payload, format, entries: resolvedEntries }, null, 2),
+      body: JSON.stringify({ ...payload, format, entries: jsonEntries }, null, 2),
       contentType: 'application/json; charset=utf-8',
     }
   }
   if (format === 'plain') {
     return {
       body: plain,
+      contentType: 'text/plain; charset=utf-8',
+    }
+  }
+  if (format === 'wireguard') {
+    const configs = resolvedEntries
+      .filter((entry) => entry.protocol === 'wireguard')
+      .map((entry) => {
+        const config = buildWireguardConfig(entry)
+        return config ? `# ${entry.label}\n${config}` : ''
+      })
+      .filter(Boolean)
+    return {
+      body: configs.join('\n\n'),
       contentType: 'text/plain; charset=utf-8',
     }
   }
@@ -1170,14 +1420,14 @@ export function renderSubscriptionDocument(
   }
   // clash format: YAML proxy config
   if (format === 'clash') {
-    const proxies = resolvedEntries.map(buildClashProxy)
+    const proxies = uriEntries.map(buildClashProxy)
     const clashConfig = {
       proxies,
       'proxy-groups': [
         {
           name: 'NodeHub',
           type: 'select',
-          proxies: resolvedEntries.map((entry) => entry.label),
+          proxies: uriEntries.map((entry) => entry.label),
         },
       ],
       rules: ['MATCH,NodeHub'],

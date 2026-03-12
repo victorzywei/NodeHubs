@@ -49,7 +49,7 @@ publicSubscriptionRoutes.get('/:token', async (c) => {
   const formatValue = c.req.query('format') || 'base64'
   const format = subscriptionDocumentFormatSchema.safeParse(formatValue)
   if (!format.success) {
-    return fail('VALIDATION', 'format must be plain, base64, json, v2ray, clash or singbox', 400)
+    return fail('VALIDATION', 'format must be plain, base64, json, v2ray, clash, singbox, or wireguard', 400)
   }
 
   const payload = await buildPublicSubscriptionDocument(c.get('services'), c.req.param('token'))

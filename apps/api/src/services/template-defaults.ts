@@ -26,6 +26,10 @@ const SAMPLE_REALITY_SNI = [
 ]
 const DEFAULT_REALITY_FLOW = 'xtls-rprx-vision'
 const DEFAULT_REALITY_FINGERPRINT = 'chrome'
+const DEFAULT_WIREGUARD_SERVER_ADDRESS = '10.66.0.1/24'
+const DEFAULT_WIREGUARD_CLIENT_ADDRESS = '10.66.0.2/32'
+const DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS = ['0.0.0.0/0', '::/0']
+const DEFAULT_WIREGUARD_MTU = 1408
 
 type TemplateLike = Pick<TemplateRecord, 'protocol' | 'transport' | 'tlsMode' | 'defaults'>
 
@@ -94,6 +98,14 @@ function isRealityShortId(value: string): boolean {
   return /^[0-9a-f]{2,32}$/i.test(value.trim())
 }
 
+function hasStringCollection(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => String(item ?? '').trim().length > 0)
+  }
+  if (typeof value === 'string') return value.trim().length > 0
+  return false
+}
+
 function isPlaceholderSni(value: string): boolean {
   return /^例如\s+/i.test(value.trim())
 }
@@ -156,6 +168,27 @@ export function repairTemplateDefaults(template: TemplateLike): Record<string, u
     const password = readString(defaults, 'password')
     if (!isValidSs2022Password(method, password) || isPlaceholderSecret(password)) {
       defaults.password = generateShadowsocksPassword(method)
+    }
+  }
+
+  if (protocol === 'wireguard') {
+    const serverAddress = readString(defaults, 'serverAddress')
+    if (!serverAddress) {
+      defaults.serverAddress = DEFAULT_WIREGUARD_SERVER_ADDRESS
+    }
+    const clientAddress = readString(defaults, 'clientAddress')
+    if (!clientAddress) {
+      defaults.clientAddress = DEFAULT_WIREGUARD_CLIENT_ADDRESS
+    }
+    if (!hasStringCollection(defaults.peerAllowedIps)) {
+      defaults.peerAllowedIps = [String(defaults.clientAddress || DEFAULT_WIREGUARD_CLIENT_ADDRESS)]
+    }
+    if (!hasStringCollection(defaults.clientAllowedIps)) {
+      defaults.clientAllowedIps = DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS
+    }
+    const mtuValue = Number(defaults.mtu)
+    if (!Number.isFinite(mtuValue) || mtuValue <= 0) {
+      defaults.mtu = DEFAULT_WIREGUARD_MTU
     }
   }
 

@@ -503,6 +503,11 @@ const realityFingerprintOptions = [
 ]
 const defaultRealityFingerprint = 'chrome'
 const defaultRealityFlow = 'xtls-rprx-vision'
+const defaultWireguardServerAddress = '10.66.0.1/24'
+const defaultWireguardClientAddress = '10.66.0.2/32'
+const defaultWireguardClientAllowedIps = '0.0.0.0/0, ::/0'
+const defaultWireguardMtu = 1408
+const defaultWireguardPort = 51820
 
 type TemplateDefaultField = {
   key: string
@@ -559,6 +564,7 @@ const protocolOptions = computed(() => {
     { value:'trojan', label:'Trojan' },
     { value:'shadowsocks', label:'Shadowsocks' },
     { value:'hysteria2', label:'Hysteria2' },
+    { value:'wireguard', label:'WireGuard' },
   ]
 })
 
@@ -566,6 +572,7 @@ const protocolOptions = computed(() => {
 const transportOptions = computed(() => {
   const p = newTemplate.value.protocol
   if (p === 'hysteria2') return [{ value:'hysteria2', label:'Hysteria2 (QUIC)' }]
+  if (p === 'wireguard') return [{ value:'wireguard', label:'WireGuard (UDP)' }]
   return [
     { value:'tcp', label:'TCP' },
     { value:'ws', label:'WebSocket' },
@@ -579,6 +586,7 @@ const tlsOptions = computed(() => {
   const p = newTemplate.value.protocol
   if (p === 'hysteria2') return [{ value:'tls', label:'TLS' }]
   if (p === 'shadowsocks') return [{ value:'none', label:'None' }]
+  if (p === 'wireguard') return [{ value:'none', label:'None' }]
   const opts = [
     { value:'none', label:'None' },
     { value:'tls', label:'TLS' },
@@ -597,7 +605,22 @@ const templateDefaultFields = computed(() => {
   const fields: TemplateDefaultField[] = []
 
   // Port
-  fields.push({ key:'serverPort', label:'端口', placeholder:'443', type:'number' })
+  fields.push({ key:'serverPort', label:'端口', placeholder: p === 'wireguard' ? String(defaultWireguardPort) : '443', type:'number' })
+
+  if (p === 'wireguard') {
+    fields.push({ key:'serverPrivateKey', label:'服务端私钥', placeholder:'点击 Generate Keypair 自动生成', generator:'wg-server-keypair' })
+    fields.push({ key:'serverPublicKey', label:'服务端公钥', placeholder:'自动生成或手动填写' })
+    fields.push({ key:'clientPrivateKey', label:'客户端私钥', placeholder:'点击 Generate Keypair 自动生成', generator:'wg-client-keypair' })
+    fields.push({ key:'clientPublicKey', label:'客户端公钥', placeholder:'自动生成或手动填写' })
+    fields.push({ key:'presharedKey', label:'预共享密钥', placeholder:'可选，base64' })
+    fields.push({ key:'serverAddress', label:'服务端地址', placeholder: defaultWireguardServerAddress })
+    fields.push({ key:'clientAddress', label:'客户端地址', placeholder: defaultWireguardClientAddress })
+    fields.push({ key:'peerAllowedIps', label:'服务端允许 IPs', placeholder: defaultWireguardClientAddress })
+    fields.push({ key:'clientAllowedIps', label:'客户端 AllowedIPs', placeholder: defaultWireguardClientAllowedIps })
+    fields.push({ key:'dns', label:'DNS', placeholder:'可选，例如 1.1.1.1, 8.8.8.8' })
+    fields.push({ key:'mtu', label:'MTU', placeholder:String(defaultWireguardMtu), type:'number' })
+    fields.push({ key:'persistentKeepalive', label:'Keepalive (秒)', placeholder:'可选，例如 25', type:'number' })
+  }
 
   // UUID for vless/vmess
   if (p === 'vless' || p === 'vmess') {
@@ -680,15 +703,21 @@ function setTemplateDefaultValue(key: string, rawValue: string, type?: TemplateD
 
 // Watch protocol changes and auto-fix transport/tls
 watch(() => newTemplate.value.protocol, (p) => {
-  if (p === 'hysteria2') {
+  if (p === 'wireguard') {
+    newTemplate.value.transport = 'wireguard'
+    newTemplate.value.tlsMode = 'none'
+    if (newTemplate.value.engine !== 'sing-box') newTemplate.value.engine = 'sing-box'
+  } else if (p === 'hysteria2') {
     newTemplate.value.transport = 'hysteria2'
     newTemplate.value.tlsMode = 'tls'
     if (newTemplate.value.engine !== 'sing-box') newTemplate.value.engine = 'sing-box'
   } else if (p === 'shadowsocks') {
     newTemplate.value.tlsMode = 'none'
     if (newTemplate.value.transport === 'hysteria2') newTemplate.value.transport = 'tcp'
+    if (newTemplate.value.transport === 'wireguard') newTemplate.value.transport = 'tcp'
   } else {
     if (newTemplate.value.transport === 'hysteria2') newTemplate.value.transport = 'tcp'
+    if (newTemplate.value.transport === 'wireguard') newTemplate.value.transport = 'tcp'
   }
   void hydrateTemplateDefaults('repair')
 })
@@ -855,6 +884,24 @@ async function hydrateTemplateDefaults(mode: 'repair' | 'force' = 'repair') {
     }
   }
 
+  if (protocol === 'wireguard') {
+    if (shouldWrite(nextDefaults['serverAddress'], !String(nextDefaults['serverAddress'] || '').trim())) {
+      nextDefaults['serverAddress'] = defaultWireguardServerAddress
+    }
+    if (shouldWrite(nextDefaults['clientAddress'], !String(nextDefaults['clientAddress'] || '').trim())) {
+      nextDefaults['clientAddress'] = defaultWireguardClientAddress
+    }
+    if (shouldWrite(nextDefaults['peerAllowedIps'], !String(nextDefaults['peerAllowedIps'] || '').trim())) {
+      nextDefaults['peerAllowedIps'] = String(nextDefaults['clientAddress'] || defaultWireguardClientAddress)
+    }
+    if (shouldWrite(nextDefaults['clientAllowedIps'], !String(nextDefaults['clientAllowedIps'] || '').trim())) {
+      nextDefaults['clientAllowedIps'] = defaultWireguardClientAllowedIps
+    }
+    if (shouldWrite(nextDefaults['mtu'], !String(nextDefaults['mtu'] || '').trim())) {
+      nextDefaults['mtu'] = defaultWireguardMtu
+    }
+  }
+
   if (tlsMode === 'reality') {
     if (shouldWrite(nextDefaults['realityShortId'], !isRealityShortId(nextDefaults['realityShortId']))) {
       nextDefaults['realityShortId'] = generateRandomHex(8)
@@ -897,6 +944,38 @@ async function generateRealityKeys(targetDefaults = newTemplate.value.defaults) 
   }
 }
 
+async function generateWireguardKeypair() {
+  const keyPair = await window.crypto.subtle.generateKey({ name: "X25519" } as any, true, ["deriveBits"])
+  const pubKeyBuf = await window.crypto.subtle.exportKey("raw", (keyPair as any).publicKey)
+  const privKeyBuf = await window.crypto.subtle.exportKey("pkcs8", (keyPair as any).privateKey)
+  const privRaw = new Uint8Array(privKeyBuf).slice(-32)
+  const toBase64 = (buf: Uint8Array) => btoa(String.fromCharCode(...Array.from(buf)))
+  return {
+    publicKey: toBase64(new Uint8Array(pubKeyBuf)),
+    privateKey: toBase64(privRaw),
+  }
+}
+
+async function generateWireguardKeys(kind: 'server' | 'client', targetDefaults = newTemplate.value.defaults) {
+  try {
+    const pair = await generateWireguardKeypair()
+    if (kind === 'server') {
+      targetDefaults['serverPublicKey'] = pair.publicKey
+      targetDefaults['serverPrivateKey'] = pair.privateKey
+    } else {
+      targetDefaults['clientPublicKey'] = pair.publicKey
+      targetDefaults['clientPrivateKey'] = pair.privateKey
+    }
+    if (targetDefaults === newTemplate.value.defaults) {
+      toast('success', `Generated new WireGuard ${kind} key pair`)
+    }
+  } catch (e) {
+    if (targetDefaults === newTemplate.value.defaults) {
+      toast('error', '当前浏览器不支持 WireGuard 密钥生成，请手动输入')
+    }
+  }
+}
+
 function handleGenerate(type: string) {
   if (type === 'uuid') {
     newTemplate.value.defaults['uuid'] = generateUUID()
@@ -906,6 +985,10 @@ function handleGenerate(type: string) {
     newTemplate.value.defaults['realityShortId'] = generateRandomHex(8)
   } else if (type === 'x25519') {
     generateRealityKeys()
+  } else if (type === 'wg-server-keypair') {
+    generateWireguardKeys('server')
+  } else if (type === 'wg-client-keypair') {
+    generateWireguardKeys('client')
   }
 }
 
@@ -1691,6 +1774,7 @@ onMounted(() => {
                       <button class="btn btn-xs btn-secondary" @click="openSubscriptionQr(s, 'v2ray', 'V2Ray')" title="复制并显示 V2Ray 订阅二维码">V2Ray</button>
                       <button class="btn btn-xs btn-secondary" @click="openSubscriptionQr(s, 'clash', 'Clash')" title="复制并显示 Clash 订阅二维码">Clash</button>
                       <button class="btn btn-xs btn-secondary" @click="openSubscriptionQr(s, 'singbox', 'SingBox')" title="复制并显示 Sing-Box 订阅二维码">SingBox</button>
+                      <button class="btn btn-xs btn-secondary" @click="openSubscriptionQr(s, 'wireguard', 'WireGuard')" title="复制并显示 WireGuard 订阅链接">WireGuard</button>
                       <button class="btn btn-xs btn-ghost" @click="openSubscriptionQr(s, 'plain', '通用')" title="复制并显示通用订阅二维码">通用</button>
                     </div>
                   </td>
