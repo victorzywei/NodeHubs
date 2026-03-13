@@ -5,7 +5,7 @@
 } from '../../src/shared/backend-profiles'
 
 export interface PanelEnv {
-  BACKENDS_KV?: {
+  NODEBACKENDS_KV?: {
     get(key: string): Promise<string | null>
     put(key: string, value: string): Promise<void>
   }
@@ -65,7 +65,7 @@ export async function requirePanelAuth(context: PanelFunctionContext) {
 
 export async function readBackendProfiles(env: PanelEnv): Promise<BackendProfile[]> {
   ensurePanelEnvOrThrow(env)
-  const raw = await env.BACKENDS_KV!.get(BACKEND_PROFILES_KV_KEY)
+  const raw = await env.NODEBACKENDS_KV!.get(BACKEND_PROFILES_KV_KEY)
   if (!raw) return []
 
   try {
@@ -78,7 +78,7 @@ export async function readBackendProfiles(env: PanelEnv): Promise<BackendProfile
 export async function writeBackendProfiles(env: PanelEnv, profiles: unknown) {
   ensurePanelEnvOrThrow(env)
   const sanitized = sanitizeBackendProfiles(profiles)
-  await env.BACKENDS_KV!.put(BACKEND_PROFILES_KV_KEY, JSON.stringify(sanitized))
+  await env.NODEBACKENDS_KV!.put(BACKEND_PROFILES_KV_KEY, JSON.stringify(sanitized))
   return sanitized
 }
 
@@ -126,8 +126,8 @@ function ensurePanelEnv(env: PanelEnv) {
   if (!env.PANEL_PASSWORD) {
     return fail('CONFIG_ERROR', 'PANEL_PASSWORD is missing', 500)
   }
-  if (!env.BACKENDS_KV) {
-    return fail('CONFIG_ERROR', 'BACKENDS_KV binding is missing', 500)
+  if (!env.NODEBACKENDS_KV) {
+    return fail('CONFIG_ERROR', 'NODEBACKENDS_KV binding is missing', 500)
   }
   return null
 }
