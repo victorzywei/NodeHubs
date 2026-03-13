@@ -63,6 +63,27 @@ If the web app should call a separate local API:
 set VITE_API_BASE=http://127.0.0.1:3000
 ```
 
+For the Pages Functions + KV panel layer in `apps/web`:
+
+1. Copy the Pages env template:
+
+```bash
+copy apps\web\.dev.vars.example apps\web\.dev.vars
+```
+
+2. Create a KV namespace and fill its id in `apps/web/wrangler.jsonc`
+3. Build the Vite app:
+
+```bash
+npm run build -w apps/web
+```
+
+4. Start Pages local dev from `apps/web`:
+
+```bash
+npm run pages:dev -w apps/web
+```
+
 ## Docker deployment
 
 1. Copy env file:
@@ -110,6 +131,30 @@ wrangler deploy --config apps/api/wrangler.jsonc
 ```
 
 Use `apps/api/.dev.vars.example` as the local Worker env template.
+
+### Pages panel with Functions + KV
+
+The Vite frontend in `apps/web` now supports a lightweight Pages Functions layer for storing backend profiles in KV. The UI still connects directly to each selected target backend; Pages Functions only handles panel auth and KV-backed backend profile persistence.
+
+1. Create a KV namespace and put its id in `apps/web/wrangler.jsonc`
+2. Set the panel secrets in your Pages project:
+
+```bash
+PANEL_PASSWORD=your-panel-password
+PANEL_SESSION_SECRET=optional-session-secret
+```
+
+3. Build the web assets:
+
+```bash
+npm run build -w apps/web
+```
+
+4. Deploy the Pages site from `apps/web/dist`:
+
+```bash
+npm run pages:deploy -w apps/web
+```
 
 ## Current release model
 

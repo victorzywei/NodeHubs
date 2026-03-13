@@ -1,4 +1,4 @@
-{
+﻿{
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "baseUrl": ".",
@@ -15,8 +15,10 @@
     }
   },
   "include": [
+    "functions/**/*.ts",
     "src/**/*.ts",
     "src/**/*.vue",
     "../../packages/contracts/src/**/*.ts"
   ]
 }
+

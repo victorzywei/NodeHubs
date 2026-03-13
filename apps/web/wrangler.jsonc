@@ -1,0 +1,13 @@
+﻿{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "nodehubsapi-web",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-03-13",
+  "kv_namespaces": [
+    {
+      "binding": "BACKENDS_KV",
+      "id": "<YOUR_KV_NAMESPACE_ID>",
+      "preview_id": "<YOUR_KV_NAMESPACE_ID>"
+    }
+  ]
+}
