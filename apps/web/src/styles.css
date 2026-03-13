@@ -1336,6 +1336,16 @@ a:hover {
     margin-bottom: var(--spacing-lg);
 }
 
+.connection-state-card {
+    max-width: 680px;
+}
+
+.connection-state-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+}
+
 /* ---- Toast Notification ---- */
 .toast-container {
     position: fixed;

@@ -38,7 +38,7 @@ function createDefaultBackendProfile(): BackendProfile | null {
 
   return {
     id: createBackendProfileId(),
-    name: import.meta.env.VITE_API_BASE ? 'Default Backend' : 'Current Site',
+    name: import.meta.env.VITE_API_BASE ? '默认后端' : '当前站点',
     apiBaseUrl,
     adminKey: legacyAdminKey,
   }
@@ -83,8 +83,8 @@ function createEmptyBackendDraft(profile?: Partial<BackendProfile>): BackendDraf
 }
 
 function getBackendBaseLabel(profile: BackendProfile | null): string {
-  if (!profile) return 'No backend configured'
-  return profile.apiBaseUrl || 'Same-origin'
+  if (!profile) return '未配置后端'
+  return profile.apiBaseUrl || '同源站点'
 }
 
 function getBackendOptionLabel(profile: BackendProfile): string {
@@ -229,11 +229,11 @@ async function loadPanelBackendProfiles() {
   } catch (panelApiError) {
     if (panelApiError instanceof PanelApiError && panelApiError.status === 401) {
       panelAuthenticated.value = false
-      panelError.value = 'Panel session expired. Unlock again.'
+      panelError.value = '面板会话已过期，请重新解锁。'
       return
     }
 
-    panelError.value = getErrorMessage(panelApiError, 'Failed to load backend profiles')
+    panelError.value = getErrorMessage(panelApiError, '加载后端配置失败')
     throw panelApiError
   } finally {
     backendProfilesLoading.value = false
@@ -242,7 +242,7 @@ async function loadPanelBackendProfiles() {
 
 async function unlockPanel() {
   if (!panelPassword.value.trim()) {
-    panelError.value = 'Enter the panel password'
+    panelError.value = '请输入面板密码'
     return
   }
 
@@ -258,7 +258,7 @@ async function unlockPanel() {
       await login()
     }
   } catch (panelApiError) {
-    panelError.value = getErrorMessage(panelApiError, 'Failed to unlock panel')
+    panelError.value = getErrorMessage(panelApiError, '面板解锁失败')
   } finally {
     panelReady.value = true
     panelLoading.value = false
@@ -278,7 +278,7 @@ async function initializePanel() {
       }
     }
   } catch (panelApiError) {
-    panelError.value = getErrorMessage(panelApiError, 'Failed to initialize panel')
+    panelError.value = getErrorMessage(panelApiError, '面板初始化失败')
   } finally {
     panelReady.value = true
     panelLoading.value = false
@@ -358,7 +358,7 @@ function closeBackendModal() {
 
 async function submitBackendProfile() {
   const nextProfile = {
-    name: backendDraft.value.name.trim() || ('Backend ' + (backendProfiles.value.length + (editingBackendId.value ? 0 : 1))),
+    name: backendDraft.value.name.trim() || ('后端 ' + (backendProfiles.value.length + (editingBackendId.value ? 0 : 1))),
     apiBaseUrl: normalizeBackendApiBase(backendDraft.value.apiBaseUrl),
     adminKey: backendDraft.value.adminKey,
   }
@@ -372,7 +372,7 @@ async function submitBackendProfile() {
           : profile
       )), targetId)
       closeBackendModal()
-      toast('success', 'Backend updated')
+      toast('success', '后端已更新')
       if (targetId === currentBackendId.value) {
         await switchBackend(targetId, loggedIn.value || Boolean(nextProfile.adminKey))
       }
@@ -385,10 +385,10 @@ async function submitBackendProfile() {
     }
     await persistBackendProfiles([...backendProfiles.value, createdProfile], createdProfile.id)
     closeBackendModal()
-    toast('success', 'Backend added')
+    toast('success', '后端已添加')
     await switchBackend(createdProfile.id, Boolean(createdProfile.adminKey))
   } catch (submitError) {
-    toast('error', getErrorMessage(submitError, 'Failed to save backend profile'))
+    toast('error', getErrorMessage(submitError, '保存后端配置失败'))
   }
 }
 
@@ -397,31 +397,31 @@ async function deleteCurrentBackendProfile() {
   const targetProfile = backendProfiles.value.find((profile) => profile.id === targetId)
   if (!targetProfile) return
   if (backendProfiles.value.length <= 1) {
-    toast('error', 'Keep at least one backend profile')
+    toast('error', '至少保留一个后端')
     return
   }
-  const confirmed = window.confirm('Delete backend "' + targetProfile.name + '"?')
+  const confirmed = window.confirm('确认删除后端“' + targetProfile.name + '”吗？')
   if (!confirmed) return
 
   try {
     const nextProfiles = backendProfiles.value.filter((profile) => profile.id !== targetId)
     await persistBackendProfiles(nextProfiles, nextProfiles[0]?.id || '')
     closeBackendModal()
-    toast('success', 'Backend deleted')
+    toast('success', '后端已删除')
 
     if (targetId === currentBackendId.value) {
       const nextBackendId = nextProfiles[0]?.id || ''
       await switchBackend(nextBackendId, Boolean(nextProfiles[0]?.adminKey))
     }
   } catch (deleteError) {
-    toast('error', getErrorMessage(deleteError, 'Failed to delete backend profile'))
+    toast('error', getErrorMessage(deleteError, '删除后端配置失败'))
   }
 }
 
 // ---- Auth ----
 async function login() {
   if (!currentBackend.value) {
-    error.value = 'Add a backend profile first'
+    error.value = '请先添加后端配置'
     return
   }
   loading.value = true; error.value = ''
@@ -432,7 +432,7 @@ async function login() {
     await updateCurrentBackendAdminKey(adminKey.value)
     clearLegacyBackendStorage()
     await loadAll()
-  } catch (e:any) { error.value = e.message || 'Authentication failed' }
+  } catch (e:any) { error.value = e.message || '连接认证失败' }
   loading.value = false
 }
 
@@ -575,7 +575,7 @@ async function loadUninstallCommand() {
 }
 
 function copyToClipboard(text: string) {
-  navigator.clipboard.writeText(text).then(() => toast('success', 'Copied to clipboard')).catch(() => toast('error', 'Copy failed'))
+  navigator.clipboard.writeText(text).then(() => toast('success', '已复制到剪贴板')).catch(() => toast('error', '复制失败'))
 }
 
 function closeReleaseLog() {
@@ -1894,66 +1894,34 @@ onMounted(() => {
   </div>
 
   <!-- Login -->
-  <div v-if="!loggedIn" class="login-page">
+  <div v-if="!panelAuthenticated" class="login-page">
     <div class="login-card">
       <div class="theme-switcher login-theme-switcher">
-        <button class="theme-chip" :class="{active: uiTheme==='legacy'}" @click="setUiTheme('legacy')">Light</button>
-        <button class="theme-chip" :class="{active: uiTheme==='midnight'}" @click="setUiTheme('midnight')">Dark</button>
+        <button class="theme-chip" :class="{active: uiTheme==='legacy'}" @click="setUiTheme('legacy')">浅色</button>
+        <button class="theme-chip" :class="{active: uiTheme==='midnight'}" @click="setUiTheme('midnight')">深色</button>
       </div>
       <div class="login-logo-row">
         <div class="login-logo">N</div>
         <div class="login-brand-name">NodeHub</div>
       </div>
-      <p class="login-description">Node management control panel</p>
+      <p class="login-description">节点管理控制台</p>
 
       <div v-if="!panelReady" class="backend-panel login-backend-panel">
-        <div class="backend-panel-title">Panel Access</div>
-        <p class="backend-form-hint">Checking Pages Functions session...</p>
+        <div class="backend-panel-title">面板访问</div>
+        <p class="backend-form-hint">正在检查 Pages Functions 会话...</p>
       </div>
 
       <form v-else-if="!panelAuthenticated" @submit.prevent="unlockPanel">
         <div class="form-group">
-          <label class="form-label">Panel Password</label>
-          <input class="form-input" type="password" v-model="panelPassword" placeholder="Enter the password configured in Pages Functions" autofocus />
+          <label class="form-label">面板密码</label>
+          <input class="form-input" type="password" v-model="panelPassword" placeholder="请输入 Pages Functions 中配置的密码" autofocus />
         </div>
-        <p class="backend-form-hint" style="margin-bottom:12px">Unlock to load and save backend profiles from KV.</p>
+        <p class="backend-form-hint" style="margin-bottom:12px">解锁后即可从 KV 加载和保存后端配置。</p>
         <p v-if="panelError" style="color:var(--color-danger);font-size:12px;margin-bottom:12px">{{ panelError }}</p>
         <button class="btn btn-primary w-full" type="submit" :disabled="panelLoading">
-          {{ panelLoading ? 'Unlocking...' : 'Unlock Panel' }}
+          {{ panelLoading ? '正在解锁...' : '解锁面板' }}
         </button>
       </form>
-
-      <template v-else>
-        <div class="backend-panel login-backend-panel">
-          <div class="backend-panel-header">
-            <div>
-              <div class="backend-panel-title">Backend Profiles</div>
-              <div class="backend-panel-meta">{{ currentBackend?.name || 'No backend selected' }}</div>
-            </div>
-            <div class="backend-panel-actions">
-              <button class="btn btn-secondary btn-xs" type="button" @click="openCreateBackendModal">Add</button>
-              <button class="btn btn-secondary btn-xs" type="button" :disabled="!currentBackend" @click="openEditBackendModal()">Edit</button>
-              <button class="btn btn-secondary btn-xs" type="button" @click="logoutPanel">Lock</button>
-            </div>
-          </div>
-          <div class="backend-panel-base">{{ getBackendBaseLabel(currentBackend) }}</div>
-          <select class="form-select" :value="currentBackendId" :disabled="backendProfilesLoading || backendProfiles.length === 0" @change="onBackendSelectionChange(($event.target as HTMLSelectElement).value)">
-            <option v-if="backendProfiles.length === 0" value="">Add a backend profile first</option>
-            <option v-for="profile in backendProfiles" :key="profile.id" :value="profile.id">{{ getBackendOptionLabel(profile) }}</option>
-          </select>
-          <p v-if="panelError" class="backend-form-hint" style="margin-top:10px;color:var(--color-danger)">{{ panelError }}</p>
-        </div>
-        <form @submit.prevent="login">
-          <div class="form-group">
-            <label class="form-label">Admin Key</label>
-            <input class="form-input" type="password" v-model="adminKey" placeholder="Enter the current backend admin key" autofocus />
-          </div>
-          <p v-if="error" style="color:var(--color-danger);font-size:12px;margin-bottom:12px">{{ error }}</p>
-          <button class="btn btn-primary w-full" type="submit" :disabled="loading || !currentBackend">
-            {{ loading ? 'Connecting...' : currentBackend ? 'Connect Backend' : 'Add a backend profile first' }}
-          </button>
-        </form>
-      </template>
     </div>
   </div>
 
@@ -1991,33 +1959,33 @@ onMounted(() => {
         <div class="backend-panel sidebar-backend-panel">
           <div class="backend-panel-header">
             <div>
-              <div class="backend-panel-title">Current Backend</div>
-              <div class="backend-panel-meta">{{ currentBackend?.name || 'No backend selected' }}</div>
+              <div class="backend-panel-title">当前后端</div>
+              <div class="backend-panel-meta">{{ currentBackend?.name || '未选择后端' }}</div>
             </div>
             <div class="backend-panel-actions">
-              <button class="btn btn-secondary btn-xs" type="button" @click="openCreateBackendModal">Add</button>
-              <button class="btn btn-secondary btn-xs" type="button" :disabled="!currentBackend" @click="openEditBackendModal()">Edit</button>
+              <button class="btn btn-secondary btn-xs" type="button" @click="openCreateBackendModal">新增</button>
+              <button class="btn btn-secondary btn-xs" type="button" :disabled="!currentBackend" @click="openEditBackendModal()">编辑</button>
             </div>
           </div>
           <div class="backend-panel-base">{{ getBackendBaseLabel(currentBackend) }}</div>
           <select class="form-select backend-select" :value="currentBackendId" :disabled="backendProfilesLoading || backendProfiles.length === 0" @change="onBackendSelectionChange(($event.target as HTMLSelectElement).value)">
-            <option v-if="backendProfiles.length === 0" value="">Add a backend profile first</option>
+            <option v-if="backendProfiles.length === 0" value="">请先添加后端配置</option>
             <option v-for="profile in backendProfiles" :key="profile.id" :value="profile.id">{{ getBackendOptionLabel(profile) }}</option>
           </select>
           <p v-if="panelError" class="backend-form-hint" style="margin-top:10px;color:var(--color-danger)">{{ panelError }}</p>
         </div>
         <div class="sidebar-mode-badge" :class="status?.mode||'docker'">
-          {{ status?.mode === 'cloudflare' ? 'Cloudflare' : 'Docker' }}
+          {{ status?.mode === 'cloudflare' ? 'Cloudflare 模式' : 'Docker 模式' }}
         </div>
         <div class="theme-switcher sidebar-theme-switcher">
-          <button class="theme-chip" :class="{active: uiTheme==='legacy'}" @click="setUiTheme('legacy')">Light</button>
-          <button class="theme-chip" :class="{active: uiTheme==='midnight'}" @click="setUiTheme('midnight')">Dark</button>
+          <button class="theme-chip" :class="{active: uiTheme==='legacy'}" @click="setUiTheme('legacy')">浅色</button>
+          <button class="theme-chip" :class="{active: uiTheme==='midnight'}" @click="setUiTheme('midnight')">深色</button>
         </div>
         <button class="btn btn-ghost btn-sm mt-md" @click="logout" style="width:100%;justify-content:flex-start;gap:8px">
-          <span>Disconnect Current Backend</span>
+          <span>断开当前后端</span>
         </button>
         <button class="btn btn-ghost btn-sm" @click="logoutPanel" style="width:100%;justify-content:flex-start;gap:8px">
-          <span>Lock Panel</span>
+          <span>锁定面板</span>
         </button>
       </div>
     </aside>
@@ -2025,6 +1993,71 @@ onMounted(() => {
     <!-- Main Content -->
     <main class="app-main">
       <div class="app-content">
+        <div v-if="!loggedIn" class="animate-fade-in">
+          <div class="page-header">
+            <div class="page-header-row">
+              <div>
+                <h1 class="page-title">{{ backendProfilesLoading ? '正在加载后端' : currentBackend ? '连接后端' : '后端配置' }}</h1>
+                <p class="page-subtitle">
+                  {{
+                    backendProfilesLoading
+                      ? '正在从 KV 加载后端配置。'
+                      : currentBackend
+                        ? `面板已解锁，默认已选中 ${currentBackend.name}。`
+                        : 'KV 中还没有保存任何后端配置。你现在可以暂时不连接后端，稍后再添加。'
+                  }}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card connection-state-card">
+            <div v-if="backendProfilesLoading" class="empty-state">
+              <div class="empty-state-icon">...</div>
+              <div class="empty-state-title">正在加载后端配置</div>
+              <div class="empty-state-text">请稍候，面板正在从 KV 读取已保存的后端。</div>
+            </div>
+
+            <div v-else-if="!currentBackend" class="empty-state">
+              <div class="empty-state-icon">+</div>
+              <div class="empty-state-title">还没有后端配置</div>
+              <div class="empty-state-text">面板已经解锁。等你准备好之后，再添加第一个后端即可。</div>
+              <button class="btn btn-primary" type="button" @click="openCreateBackendModal">添加后端</button>
+            </div>
+
+            <template v-else>
+              <div class="card-header">
+                <div>
+                  <div class="card-title">{{ currentBackend.name }}</div>
+                  <div class="card-subtitle">{{ getBackendBaseLabel(currentBackend) }}</div>
+                </div>
+                <div class="backend-panel-actions">
+                  <button class="btn btn-secondary btn-xs" type="button" @click="openCreateBackendModal">新增</button>
+                  <button class="btn btn-secondary btn-xs" type="button" @click="openEditBackendModal()">编辑</button>
+                </div>
+              </div>
+
+              <form @submit.prevent="login">
+                <div class="form-group">
+                  <label class="form-label">管理密钥</label>
+                  <input class="form-input" type="password" v-model="adminKey" placeholder="请输入当前后端的管理密钥" autofocus />
+                </div>
+                <p class="backend-form-hint" style="margin-bottom:12px">
+                  现在切换后端时会停留在主工作区。如果这个后端已经保存过密钥，可以直接连接。
+                </p>
+                <p v-if="error" style="color:var(--color-danger);font-size:12px;margin-bottom:12px">{{ error }}</p>
+                <div class="connection-state-actions">
+                  <button class="btn btn-primary" type="submit" :disabled="loading">
+                    {{ loading ? '正在连接...' : '连接后端' }}
+                  </button>
+                  <button class="btn btn-secondary" type="button" @click="openCreateBackendModal">管理后端</button>
+                </div>
+              </form>
+            </template>
+          </div>
+        </div>
+
+        <template v-else>
 
         <!-- Dashboard Page -->
         <div v-if="currentPage==='dashboard'" class="animate-fade-in">
@@ -2228,6 +2261,7 @@ onMounted(() => {
             </table>
           </div>
         </div>
+        </template>
       </div>
     </main>
 
@@ -2240,10 +2274,10 @@ onMounted(() => {
         <div class="modal-body">
           <div class="form-group">
             <label class="form-label">名称 *</label>
-            <input class="form-input" v-model="backendDraft.name" placeholder="例如 Tokyo CF Worker / Docker-HK" />
+            <input class="form-input" v-model="backendDraft.name" placeholder="例如 东京 CF Worker / Docker-HK" />
           </div>
           <div class="form-group">
-            <label class="form-label">API Base URL</label>
+            <label class="form-label">API 基础地址</label>
             <input class="form-input" v-model="backendDraft.apiBaseUrl" placeholder="留空表示当前站点同源，例如 https://api.example.com" />
           </div>
           <div class="form-group">
@@ -2745,10 +2779,6 @@ onMounted(() => {
   </div>
   </div>
 </template>
-
-
-
-
 
 
 
