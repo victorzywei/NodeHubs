@@ -5,15 +5,124 @@ import QRCode from 'qrcode'
 import * as api from './lib/api'
 
 type UiTheme = 'midnight' | 'legacy'
+
+interface BackendProfile {
+  id: string
+  name: string
+  apiBaseUrl: string
+  adminKey: string
+}
+
+interface BackendDraft {
+  name: string
+  apiBaseUrl: string
+  adminKey: string
+}
+
 const THEME_STORAGE_KEY = 'nh_ui_theme'
+const BACKEND_PROFILES_STORAGE_KEY = 'nh_backend_profiles'
+const CURRENT_BACKEND_STORAGE_KEY = 'nh_current_backend'
+const LEGACY_ADMIN_KEY_STORAGE_KEY = 'nh_admin_key'
+
+function createBackendProfileId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID()
+  }
+  return `backend-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
+}
+
+function normalizeBackendApiBase(value: string) {
+  const trimmed = value.trim()
+  return trimmed ? trimmed.replace(/\/+$/, '') : ''
+}
+
+function isBackendProfile(value: unknown): value is BackendProfile {
+  if (!value || typeof value !== 'object') return false
+  const profile = value as Record<string, unknown>
+  return typeof profile.id === 'string'
+    && typeof profile.name === 'string'
+    && typeof profile.apiBaseUrl === 'string'
+    && typeof profile.adminKey === 'string'
+}
+
+function createDefaultBackendProfile(): BackendProfile {
+  return {
+    id: createBackendProfileId(),
+    name: import.meta.env.VITE_API_BASE ? '默认后端' : '当前站点',
+    apiBaseUrl: normalizeBackendApiBase(import.meta.env.VITE_API_BASE || ''),
+    adminKey: localStorage.getItem(LEGACY_ADMIN_KEY_STORAGE_KEY) || '',
+  }
+}
+
+function loadBackendProfiles(): BackendProfile[] {
+  try {
+    const raw = localStorage.getItem(BACKEND_PROFILES_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        const profiles = parsed
+          .filter(isBackendProfile)
+          .map((profile) => ({
+            id: profile.id,
+            name: profile.name.trim() || '未命名后端',
+            apiBaseUrl: normalizeBackendApiBase(profile.apiBaseUrl),
+            adminKey: profile.adminKey,
+          }))
+        if (profiles.length > 0) {
+          return profiles
+        }
+      }
+    }
+  } catch {
+    // Ignore broken local storage payloads and fall back to a default backend.
+  }
+  return [createDefaultBackendProfile()]
+}
+
+function resolveInitialBackendId(profiles: BackendProfile[]): string {
+  const stored = localStorage.getItem(CURRENT_BACKEND_STORAGE_KEY) || ''
+  if (profiles.some((profile) => profile.id === stored)) {
+    return stored
+  }
+  return profiles[0]?.id || ''
+}
+
+function createEmptyBackendDraft(profile?: Partial<BackendProfile>): BackendDraft {
+  return {
+    name: profile?.name || '',
+    apiBaseUrl: profile?.apiBaseUrl || '',
+    adminKey: profile?.adminKey || '',
+  }
+}
+
+function getBackendBaseLabel(profile: BackendProfile | null): string {
+  if (!profile) return '未配置后端地址'
+  return profile.apiBaseUrl || '当前站点同源'
+}
+
+function getBackendOptionLabel(profile: BackendProfile): string {
+  return `${profile.name} · ${getBackendBaseLabel(profile)}`
+}
 
 // ---- State ----
-const adminKey = ref(localStorage.getItem('nh_admin_key') || '')
+const backendProfiles = ref<BackendProfile[]>(loadBackendProfiles())
+const currentBackendId = ref(resolveInitialBackendId(backendProfiles.value))
+const currentBackend = computed(() => backendProfiles.value.find((profile) => profile.id === currentBackendId.value) || backendProfiles.value[0] || null)
+const adminKey = ref(currentBackend.value?.adminKey || '')
 const loggedIn = ref(false)
 const currentPage = ref<'dashboard'|'nodes'|'templates'|'subscriptions'>('dashboard')
 const loading = ref(false)
 const error = ref('')
 const uiTheme = ref<UiTheme>((localStorage.getItem(THEME_STORAGE_KEY) as UiTheme) || 'midnight')
+const showBackendModal = ref(false)
+const editingBackendId = ref('')
+const backendDraft = ref<BackendDraft>(createEmptyBackendDraft(currentBackend.value || undefined))
+
+if (currentBackend.value && currentBackend.value.id !== currentBackendId.value) {
+  currentBackendId.value = currentBackend.value.id
+  localStorage.setItem(CURRENT_BACKEND_STORAGE_KEY, currentBackend.value.id)
+}
+api.setApiBase(currentBackend.value?.apiBaseUrl || '')
 
 // Data
 const status = ref<SystemStatus|null>(null)
@@ -67,21 +176,167 @@ function setUiTheme(theme: UiTheme) {
   uiTheme.value = theme
 }
 
+function persistBackendProfiles(nextProfiles: BackendProfile[]) {
+  backendProfiles.value = nextProfiles
+  localStorage.setItem(BACKEND_PROFILES_STORAGE_KEY, JSON.stringify(nextProfiles))
+}
+
+function persistCurrentBackendId(nextBackendId: string) {
+  currentBackendId.value = nextBackendId
+  if (nextBackendId) {
+    localStorage.setItem(CURRENT_BACKEND_STORAGE_KEY, nextBackendId)
+    return
+  }
+  localStorage.removeItem(CURRENT_BACKEND_STORAGE_KEY)
+}
+
+function syncCurrentBackendApiBase() {
+  api.setApiBase(currentBackend.value?.apiBaseUrl || '')
+}
+
+function updateCurrentBackendAdminKey(nextAdminKey: string) {
+  const activeBackend = currentBackend.value
+  if (!activeBackend) return
+  persistBackendProfiles(backendProfiles.value.map((profile) => (
+    profile.id === activeBackend.id
+      ? { ...profile, adminKey: nextAdminKey }
+      : profile
+  )))
+}
+
+function clearLoadedData() {
+  loggedIn.value = false
+  error.value = ''
+  status.value = null
+  nodes.value = []
+  templates.value = []
+  subscriptions.value = []
+  selectedNode.value = null
+  nodeReleases.value = []
+  deployCommand.value = ''
+  uninstallCommand.value = ''
+  closeReleaseLog()
+  closePublishRelease()
+  closeSubscriptionQr()
+  closeTemplateModal()
+  closeSubscriptionModal()
+  showCreateNode.value = false
+}
+
+async function switchBackend(backendId: string, reconnect = true) {
+  if (!backendId) return
+  persistCurrentBackendId(backendId)
+  syncCurrentBackendApiBase()
+  adminKey.value = currentBackend.value?.adminKey || ''
+  clearLoadedData()
+  if (reconnect && adminKey.value) {
+    await login()
+  }
+}
+
+async function onBackendSelectionChange(backendId: string) {
+  if (!backendId || backendId === currentBackendId.value) return
+  await switchBackend(backendId)
+}
+
+function openCreateBackendModal() {
+  editingBackendId.value = ''
+  backendDraft.value = createEmptyBackendDraft({
+    apiBaseUrl: currentBackend.value?.apiBaseUrl || api.getApiBase(),
+  })
+  showBackendModal.value = true
+}
+
+function openEditBackendModal(profile: BackendProfile | null = currentBackend.value) {
+  if (!profile) return
+  editingBackendId.value = profile.id
+  backendDraft.value = createEmptyBackendDraft(profile)
+  showBackendModal.value = true
+}
+
+function closeBackendModal() {
+  showBackendModal.value = false
+  editingBackendId.value = ''
+  backendDraft.value = createEmptyBackendDraft(currentBackend.value || undefined)
+}
+
+async function submitBackendProfile() {
+  const nextProfile = {
+    name: backendDraft.value.name.trim() || `后端 ${backendProfiles.value.length + (editingBackendId.value ? 0 : 1)}`,
+    apiBaseUrl: normalizeBackendApiBase(backendDraft.value.apiBaseUrl),
+    adminKey: backendDraft.value.adminKey,
+  }
+
+  if (editingBackendId.value) {
+    const targetId = editingBackendId.value
+    persistBackendProfiles(backendProfiles.value.map((profile) => (
+      profile.id === targetId
+        ? { ...profile, ...nextProfile }
+        : profile
+    )))
+    closeBackendModal()
+    toast('success', '后端配置已更新')
+    if (targetId === currentBackendId.value) {
+      await switchBackend(targetId, loggedIn.value || Boolean(nextProfile.adminKey))
+    }
+    return
+  }
+
+  const createdProfile: BackendProfile = {
+    id: createBackendProfileId(),
+    ...nextProfile,
+  }
+  persistBackendProfiles([...backendProfiles.value, createdProfile])
+  closeBackendModal()
+  toast('success', '后端配置已添加')
+  await switchBackend(createdProfile.id, Boolean(createdProfile.adminKey))
+}
+
+async function deleteCurrentBackendProfile() {
+  const targetId = editingBackendId.value || currentBackendId.value
+  const targetProfile = backendProfiles.value.find((profile) => profile.id === targetId)
+  if (!targetProfile) return
+  if (backendProfiles.value.length <= 1) {
+    toast('error', '至少保留一个后端配置')
+    return
+  }
+  const confirmed = window.confirm(`确认删除后端 "${targetProfile.name}"？`)
+  if (!confirmed) return
+
+  const nextProfiles = backendProfiles.value.filter((profile) => profile.id !== targetId)
+  persistBackendProfiles(nextProfiles)
+  closeBackendModal()
+  toast('success', '后端配置已删除')
+
+  if (targetId === currentBackendId.value) {
+    const nextBackendId = nextProfiles[0]?.id || ''
+    await switchBackend(nextBackendId, Boolean(nextProfiles[0]?.adminKey))
+  }
+}
+
 // ---- Auth ----
 async function login() {
+  if (!currentBackend.value) {
+    error.value = '请先配置后端地址'
+    return
+  }
   loading.value = true; error.value = ''
+  syncCurrentBackendApiBase()
   try {
     const s = await api.getSystemStatus(adminKey.value)
     status.value = s; loggedIn.value = true
-    localStorage.setItem('nh_admin_key', adminKey.value)
+    updateCurrentBackendAdminKey(adminKey.value)
+    localStorage.removeItem(LEGACY_ADMIN_KEY_STORAGE_KEY)
     await loadAll()
   } catch (e:any) { error.value = e.message || '认证失败' }
   loading.value = false
 }
 
 function logout() {
-  loggedIn.value = false; adminKey.value = ''; localStorage.removeItem('nh_admin_key')
-  status.value = null; nodes.value = []; templates.value = []; subscriptions.value = []
+  updateCurrentBackendAdminKey('')
+  adminKey.value = ''
+  localStorage.removeItem(LEGACY_ADMIN_KEY_STORAGE_KEY)
+  clearLoadedData()
 }
 
 // ---- Data Loading ----
@@ -1516,7 +1771,11 @@ const onlineCount = computed(() => nodes.value.filter(isOnline).length)
 
 onMounted(() => {
   applyTheme(uiTheme.value)
-  if (adminKey.value) login()
+  syncCurrentBackendApiBase()
+  if (currentBackend.value?.adminKey) {
+    adminKey.value = currentBackend.value.adminKey
+    void login()
+  }
 })
 </script>
 
@@ -1542,14 +1801,30 @@ onMounted(() => {
         <div class="login-brand-name">NodeHub</div>
       </div>
       <p class="login-description">节点管理控制面板</p>
+      <div class="backend-panel login-backend-panel">
+        <div class="backend-panel-header">
+          <div>
+            <div class="backend-panel-title">后端实例</div>
+            <div class="backend-panel-meta">{{ currentBackend?.name || '未选择后端' }}</div>
+          </div>
+          <div class="backend-panel-actions">
+            <button class="btn btn-secondary btn-xs" type="button" @click="openCreateBackendModal">新增</button>
+            <button class="btn btn-secondary btn-xs" type="button" :disabled="!currentBackend" @click="openEditBackendModal()">编辑</button>
+          </div>
+        </div>
+        <div class="backend-panel-base">{{ getBackendBaseLabel(currentBackend) }}</div>
+        <select class="form-select" :value="currentBackendId" @change="onBackendSelectionChange(($event.target as HTMLSelectElement).value)">
+          <option v-for="profile in backendProfiles" :key="profile.id" :value="profile.id">{{ getBackendOptionLabel(profile) }}</option>
+        </select>
+      </div>
       <form @submit.prevent="login">
         <div class="form-group">
           <label class="form-label">管理密钥</label>
-          <input class="form-input" type="password" v-model="adminKey" placeholder="Enter admin key" autofocus />
+          <input class="form-input" type="password" v-model="adminKey" placeholder="输入当前后端的管理密钥" autofocus />
         </div>
         <p v-if="error" style="color:var(--color-danger);font-size:12px;margin-bottom:12px">{{ error }}</p>
         <button class="btn btn-primary w-full" type="submit" :disabled="loading">
-          {{ loading ? 'Connecting...' : 'Login' }}
+          {{ loading ? '连接中...' : '连接后端' }}
         </button>
       </form>
     </div>
@@ -1586,6 +1861,22 @@ onMounted(() => {
         </div>
       </nav>
       <div class="sidebar-footer">
+        <div class="backend-panel sidebar-backend-panel">
+          <div class="backend-panel-header">
+            <div>
+              <div class="backend-panel-title">当前后端</div>
+              <div class="backend-panel-meta">{{ currentBackend?.name || '未选择后端' }}</div>
+            </div>
+            <div class="backend-panel-actions">
+              <button class="btn btn-secondary btn-xs" type="button" @click="openCreateBackendModal">新增</button>
+              <button class="btn btn-secondary btn-xs" type="button" :disabled="!currentBackend" @click="openEditBackendModal()">编辑</button>
+            </div>
+          </div>
+          <div class="backend-panel-base">{{ getBackendBaseLabel(currentBackend) }}</div>
+          <select class="form-select backend-select" :value="currentBackendId" @change="onBackendSelectionChange(($event.target as HTMLSelectElement).value)">
+            <option v-for="profile in backendProfiles" :key="profile.id" :value="profile.id">{{ getBackendOptionLabel(profile) }}</option>
+          </select>
+        </div>
         <div class="sidebar-mode-badge" :class="status?.mode||'docker'">
           {{ status?.mode === 'cloudflare' ? '☁️ Cloudflare' : '🐳 Docker' }}
         </div>
@@ -1607,7 +1898,7 @@ onMounted(() => {
         <div v-if="currentPage==='dashboard'" class="animate-fade-in">
           <div class="page-header">
             <div class="page-header-row">
-              <div><h1 class="page-title">仪表盘</h1><p class="page-subtitle">系统概览与统计数据</p></div>
+              <div><h1 class="page-title">仪表盘</h1><p class="page-subtitle">{{ currentBackend?.name || '未命名后端' }} · {{ getBackendBaseLabel(currentBackend) }}</p></div>
               <button class="btn btn-secondary" @click="loadAll();refreshStatus()">刷新</button>
             </div>
           </div>
@@ -1807,6 +2098,44 @@ onMounted(() => {
         </div>
       </div>
     </main>
+
+    <div v-if="showBackendModal" class="modal-overlay" @mousedown.self="closeBackendModal">
+      <div class="modal-content" style="max-width:520px">
+        <div class="modal-header">
+          <h3 class="modal-title">{{ editingBackendId ? '编辑后端' : '添加后端' }}</h3>
+          <button class="modal-close-btn" @click="closeBackendModal">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">名称 *</label>
+            <input class="form-input" v-model="backendDraft.name" placeholder="例如 Tokyo CF Worker / Docker-HK" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">API Base URL</label>
+            <input class="form-input" v-model="backendDraft.apiBaseUrl" placeholder="留空表示当前站点同源，例如 https://api.example.com" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">管理密钥</label>
+            <input class="form-input" type="password" v-model="backendDraft.adminKey" placeholder="可选，保存后切换时会自动填入" />
+          </div>
+          <p class="backend-form-hint">支持 Docker/Node、Cloudflare Worker，或任何兼容当前 API 协议的后端。</p>
+        </div>
+        <div class="modal-footer" :style="{ justifyContent: editingBackendId && backendProfiles.length > 1 ? 'space-between' : 'flex-end' }">
+          <button
+            v-if="editingBackendId && backendProfiles.length > 1"
+            class="btn btn-danger"
+            style="--btn-bg:var(--color-danger);--btn-hover:var(--color-danger)"
+            @click="deleteCurrentBackendProfile"
+          >
+            删除后端
+          </button>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" @click="closeBackendModal">取消</button>
+            <button class="btn btn-primary" @click="submitBackendProfile">{{ editingBackendId ? '保存' : '添加并切换' }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Node Detail Panel -->
     <template v-if="selectedNode">

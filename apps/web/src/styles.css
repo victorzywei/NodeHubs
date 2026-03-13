@@ -365,6 +365,72 @@ a:hover {
 .sidebar-footer {
     padding: var(--spacing-md) var(--spacing-lg);
     border-top: 1px solid var(--glass-border);
+    display: grid;
+    gap: var(--spacing-md);
+}
+
+.backend-panel {
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    background: rgba(255, 255, 255, 0.03);
+    padding: 12px;
+}
+
+.backend-panel-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+    margin-bottom: 8px;
+}
+
+.backend-panel-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-text-muted);
+}
+
+.backend-panel-meta {
+    margin-top: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    word-break: break-word;
+}
+
+.backend-panel-base {
+    margin-bottom: 10px;
+    color: var(--color-text-tertiary);
+    font-size: 11px;
+    font-family: var(--font-mono);
+    word-break: break-all;
+}
+
+.backend-panel-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.sidebar-backend-panel {
+    padding: 10px;
+}
+
+.login-backend-panel {
+    margin-bottom: var(--spacing-lg);
+}
+
+.backend-select {
+    font-size: 12px;
+}
+
+.backend-form-hint {
+    color: var(--color-text-tertiary);
+    font-size: 12px;
+    line-height: 1.6;
 }
 
 .theme-switcher {
@@ -373,7 +439,7 @@ a:hover {
 }
 
 .sidebar-theme-switcher {
-    margin-top: var(--spacing-md);
+    margin-top: 0;
 }
 
 .login-theme-switcher {
@@ -1337,7 +1403,7 @@ a:hover {
     border-radius: var(--radius-xl);
     padding: var(--spacing-2xl);
     width: 100%;
-    max-width: 400px;
+    max-width: 480px;
     animation: slide-up var(--transition-slow) ease-out;
     position: relative;
     overflow: hidden;
@@ -1856,7 +1922,8 @@ html[data-theme='legacy'] .btn-ghost:hover,
 html[data-theme='legacy'] .publish-template-row,
 html[data-theme='legacy'] .subscription-visible-nodes,
 html[data-theme='legacy'] .publish-preview,
-html[data-theme='legacy'] .code-block {
+html[data-theme='legacy'] .code-block,
+html[data-theme='legacy'] .backend-panel {
     background: #fff;
 }
 

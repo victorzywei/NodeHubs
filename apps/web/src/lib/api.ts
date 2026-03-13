@@ -10,7 +10,20 @@ import type {
   TrafficSample,
 } from '@contracts/index'
 
-const API_BASE = import.meta.env.VITE_API_BASE || ''
+function normalizeApiBase(value: string): string {
+  const trimmed = value.trim()
+  return trimmed ? trimmed.replace(/\/+$/, '') : ''
+}
+
+let apiBase = normalizeApiBase(import.meta.env.VITE_API_BASE || '')
+
+export function setApiBase(value: string): void {
+  apiBase = normalizeApiBase(value)
+}
+
+export function getApiBase(): string {
+  return apiBase
+}
 
 interface Envelope<T> {
   success: boolean
@@ -22,7 +35,7 @@ interface Envelope<T> {
 }
 
 async function request<T>(path: string, init: RequestInit = {}, adminKey = ''): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${apiBase}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -39,7 +52,7 @@ async function request<T>(path: string, init: RequestInit = {}, adminKey = ''): 
 }
 
 async function requestText(path: string, init: RequestInit = {}, adminKey = ''): Promise<string> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${apiBase}${path}`, {
     ...init,
     headers: {
       ...(adminKey ? { 'X-Admin-Key': adminKey } : {}),
