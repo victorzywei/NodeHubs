@@ -5,7 +5,7 @@
   "compatibility_date": "2026-03-13",
   "kv_namespaces": [
     {
-      "binding": "BACKENDS_KV",
+      "binding": "NODEBACKENDS_KV",
       "id": "<YOUR_KV_NAMESPACE_ID>",
       "preview_id": "<YOUR_KV_NAMESPACE_ID>"
     }
