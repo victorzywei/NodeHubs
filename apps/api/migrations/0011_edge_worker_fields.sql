@@ -1,0 +1,3 @@
+ALTER TABLE nodes ADD COLUMN worker_domain TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE templates ADD COLUMN target_type TEXT NOT NULL DEFAULT 'vps';

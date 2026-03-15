@@ -2,18 +2,67 @@ import { z } from 'zod'
 
 function validateTemplateCombination(
   input: {
-    engine?: 'sing-box' | 'xray'
+    targetType?: 'vps' | 'edge'
+    engine?: 'sing-box' | 'xray' | 'worker'
     protocol?: string
     transport?: string
     tlsMode?: 'none' | 'tls' | 'reality'
+    warpExit?: boolean
   },
   ctx: z.RefinementCtx,
 ) {
-  if (!input.engine || !input.protocol || !input.transport || !input.tlsMode) {
+  if (!input.targetType || !input.engine || !input.protocol || !input.transport || !input.tlsMode) {
     return
   }
   const protocol = input.protocol.trim().toLowerCase()
   const transport = input.transport.trim().toLowerCase()
+
+  if (input.targetType === 'edge') {
+    if (input.engine !== 'worker') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['engine'],
+        message: 'Edge templates must use the worker engine',
+      })
+    }
+    if (protocol !== 'vless' && protocol !== 'trojan') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['protocol'],
+        message: 'Edge templates currently support only VLESS and Trojan',
+      })
+    }
+    if (transport !== 'ws') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['transport'],
+        message: 'Edge templates must use the ws transport',
+      })
+    }
+    if (input.tlsMode !== 'tls') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['tlsMode'],
+        message: 'Edge templates must use TLS mode',
+      })
+    }
+    if (input.warpExit === true) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['warpExit'],
+        message: 'Edge templates do not support WARP egress',
+      })
+    }
+    return
+  }
+
+  if (input.engine === 'worker') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['engine'],
+      message: 'The worker engine can only be used for edge templates',
+    })
+  }
 
   if (protocol === 'hysteria2') {
     if (input.engine !== 'sing-box') {
@@ -119,6 +168,7 @@ const nodeSchemaBase = z.object({
   primaryDomain: z.string().trim().max(255).default(''),
   backupDomain: z.string().trim().max(255).default(''),
   entryIp: z.string().trim().max(255).default(''),
+  workerDomain: z.string().trim().max(255).default(''),
   githubMirrorUrl: z.string().trim().max(500).default(''),
   installWarp: z.boolean().default(false),
   warpLicenseKey: z.string().trim().max(255).default(''),
@@ -131,6 +181,17 @@ const nodeSchemaBase = z.object({
 })
 
 export const createNodeSchema = nodeSchemaBase.superRefine((input, ctx) => {
+  if (input.nodeType === 'edge') {
+    if (!input.workerDomain.trim()) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['workerDomain'],
+        message: 'Edge nodes require a worker domain',
+      })
+    }
+    return
+  }
+
   if (input.networkType === 'public' && !input.primaryDomain.trim()) {
     ctx.addIssue({
       code: 'custom',
@@ -173,7 +234,8 @@ export const updateNodeSchema = nodeSchemaBase.partial().extend({
 
 const templateSchemaBase = z.object({
   name: z.string().trim().min(1).max(120),
-  engine: z.enum(['sing-box', 'xray']),
+  targetType: nodeKindSchema.default('vps'),
+  engine: z.enum(['sing-box', 'xray', 'worker']),
   protocol: z.string().trim().min(1).max(80),
   transport: z.string().trim().min(1).max(80),
   tlsMode: z.enum(['none', 'tls', 'reality']),
@@ -243,6 +305,14 @@ export const heartbeatSchema = z.object({
   protocolRuntimeVersion: z.string().trim().max(64).default(''),
 })
 
+export const edgeHeartbeatSchema = z.object({
+  nodeId: z.string().trim().min(1),
+  workerDomain: z.string().trim().max(255).default(''),
+  currentConnections: z.number().int().nonnegative().default(0),
+  bytesInTotal: z.number().nonnegative().default(0),
+  bytesOutTotal: z.number().nonnegative().default(0),
+})
+
 export type CreateNodeInput = z.infer<typeof createNodeSchema>
 export type UpdateNodeInput = z.infer<typeof updateNodeSchema>
 export type CreateTemplateInput = z.infer<typeof createTemplateSchema>
@@ -251,4 +321,5 @@ export type CreateSubscriptionInput = z.infer<typeof createSubscriptionSchema>
 export type UpdateSubscriptionInput = z.infer<typeof updateSubscriptionSchema>
 export type PublishNodeInput = z.infer<typeof publishNodeSchema>
 export type HeartbeatInput = z.infer<typeof heartbeatSchema>
+export type EdgeHeartbeatInput = z.infer<typeof edgeHeartbeatSchema>
 export type SubscriptionDocumentFormatInput = z.infer<typeof subscriptionDocumentFormatSchema>

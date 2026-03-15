@@ -1,4 +1,5 @@
 export type NodeKind = 'vps' | 'edge'
+export type TemplateTargetType = NodeKind
 
 export type NetworkType = 'public' | 'noPublicIp'
 
@@ -6,6 +7,7 @@ export type ReleaseKind = 'runtime'
 
 export type ReleaseStatus = 'pending' | 'applying' | 'healthy' | 'failed'
 export type WarpRouteMode = 'all' | 'ipv4' | 'ipv6'
+export type TemplateEngine = 'sing-box' | 'xray' | 'worker'
 
 export type StorageMode = 'cloudflare' | 'docker'
 
@@ -23,6 +25,7 @@ export interface NodeRecord {
   primaryDomain: string
   backupDomain: string
   entryIp: string
+  workerDomain: string
   githubMirrorUrl: string
   installWarp: boolean
   warpLicenseKey: string
@@ -71,7 +74,8 @@ export interface NodeRecord {
 export interface TemplateRecord {
   id: string
   name: string
-  engine: 'sing-box' | 'xray'
+  targetType: TemplateTargetType
+  engine: TemplateEngine
   protocol: string
   transport: string
   tlsMode: 'none' | 'tls' | 'reality'
@@ -158,7 +162,7 @@ export interface ReleaseConfigFile {
 }
 
 export interface ReleaseRuntimePlan {
-  engine: TemplateRecord['engine']
+  engine: TemplateEngine
   entryConfigPath: string
   files: ReleaseConfigFile[]
 }
@@ -225,17 +229,18 @@ export interface ReleaseArtifact {
     | 'region'
     | 'tags'
     | 'networkType'
-    | 'primaryDomain'
-    | 'backupDomain'
-    | 'entryIp'
-    | 'githubMirrorUrl'
-    | 'cfDnsToken'
+      | 'primaryDomain'
+      | 'backupDomain'
+      | 'entryIp'
+      | 'workerDomain'
+      | 'githubMirrorUrl'
+      | 'cfDnsToken'
     | 'argoTunnelToken'
     | 'argoTunnelDomain'
     | 'argoTunnelPort'
   >
   templates: Array<
-    Pick<TemplateRecord, 'id' | 'name' | 'engine' | 'protocol' | 'transport' | 'tlsMode' | 'warpExit' | 'warpRouteMode' | 'defaults'>
+    Pick<TemplateRecord, 'id' | 'name' | 'targetType' | 'engine' | 'protocol' | 'transport' | 'tlsMode' | 'warpExit' | 'warpRouteMode' | 'defaults'>
   >
   runtimes: ReleaseRuntimePlan[]
   subscriptionEndpoints: SubscriptionEndpoint[]
@@ -252,7 +257,8 @@ export interface PublicSubscriptionDocument {
 export interface TemplatePreset {
   id: string
   name: string
-  engine: TemplateRecord['engine']
+  targetType: TemplateTargetType
+  engine: TemplateEngine
   protocol: string
   transport: string
   tlsMode: TemplateRecord['tlsMode']
@@ -260,4 +266,22 @@ export interface TemplatePreset {
   warpRouteMode: WarpRouteMode
   defaults: Record<string, unknown>
   notes: string
+}
+
+export interface EdgeWorkerPlanEntry {
+  templateId: string
+  templateName: string
+  protocol: 'vless' | 'trojan'
+  path: string
+  uuid?: string
+  password?: string
+}
+
+export interface EdgeWorkerPlan {
+  schema: 'nodehubsapi-edge-plan-v1'
+  nodeId: string
+  workerDomain: string
+  revision: number
+  createdAt: string
+  entries: EdgeWorkerPlanEntry[]
 }

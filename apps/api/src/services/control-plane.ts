@@ -1,5 +1,6 @@
 import {
   createNodeSchema,
+  edgeHeartbeatSchema,
   createTemplateSchema,
 } from '@contracts/index'
 import type {
@@ -7,6 +8,7 @@ import type {
   CreateSubscriptionInput,
   CreateTemplateInput,
   DashboardSummary,
+  EdgeHeartbeatInput,
   HeartbeatInput,
   ReleaseLogRecord,
   ReleaseArtifact,
@@ -41,6 +43,7 @@ type NodeRow = {
   primary_domain: string
   backup_domain: string
   entry_ip: string
+  worker_domain: string
   github_mirror_url: string
   warp_license_key: string
   cf_dns_token: string
@@ -89,6 +92,7 @@ type NodeRow = {
 type TemplateRow = {
   id: string
   name: string
+  target_type: string
   engine: string
   protocol: string
   transport: string
@@ -148,6 +152,7 @@ const CONFIG_IMPACT_FIELDS = new Set([
   'primaryDomain',
   'backupDomain',
   'entryIp',
+  'workerDomain',
   'githubMirrorUrl',
   'cfDnsToken',
   'argoTunnelToken',
@@ -176,6 +181,7 @@ function toNodeRecord(row: NodeRow): NodeRecord {
     primaryDomain: row.primary_domain,
     backupDomain: row.backup_domain,
     entryIp: row.entry_ip,
+    workerDomain: row.worker_domain || '',
     githubMirrorUrl: row.github_mirror_url || '',
     installWarp: toBool(row.install_warp),
     warpLicenseKey: row.warp_license_key || '',
@@ -236,6 +242,7 @@ function toTemplateRecord(row: TemplateRow): TemplateRecord {
   return {
     id: row.id,
     name: row.name,
+    targetType: row.target_type === 'edge' ? 'edge' : 'vps',
     engine: row.engine as TemplateRecord['engine'],
     protocol: row.protocol,
     transport: row.transport,
@@ -256,6 +263,8 @@ function parseTemplateInput(input: CreateTemplateInput): CreateTemplateInput {
   }
   return {
     ...parsed.data,
+    engine: parsed.data.targetType === 'edge' ? 'worker' : parsed.data.engine,
+    warpExit: parsed.data.targetType === 'edge' ? false : parsed.data.warpExit,
     defaults: repairTemplateDefaults(parsed.data),
   }
 }
@@ -265,7 +274,26 @@ function parseNodeInput(input: CreateNodeInput): CreateNodeInput {
   if (!parsed.success) {
     throw new Error(parsed.error.issues[0]?.message || 'invalid node body')
   }
-  return parsed.data
+  if (parsed.data.nodeType === 'edge') {
+    return {
+      ...parsed.data,
+      networkType: 'public',
+      primaryDomain: '',
+      backupDomain: '',
+      entryIp: '',
+      githubMirrorUrl: '',
+      installWarp: false,
+      warpLicenseKey: '',
+      cfDnsToken: '',
+      argoTunnelToken: '',
+      argoTunnelDomain: '',
+      argoTunnelPort: 2053,
+    }
+  }
+  return {
+    ...parsed.data,
+    workerDomain: '',
+  }
 }
 
 function toReleaseRecord(row: ReleaseRow): ReleaseRecord {
@@ -361,6 +389,16 @@ async function getTemplateRows(services: AppServices, templateIds: string[]): Pr
   return rows.filter((row): row is TemplateRow => Boolean(row))
 }
 
+function assertTemplateTargetsMatchNode(node: NodeRecord, templateRows: TemplateRow[]): void {
+  const mismatched = templateRows.find((row) => {
+    const targetType = row.target_type === 'edge' ? 'edge' : 'vps'
+    return targetType !== node.nodeType
+  })
+  if (mismatched) {
+    throw new Error(`Template ${mismatched.name} cannot be published to ${node.nodeType} nodes`)
+  }
+}
+
 async function getReleaseRow(services: AppServices, releaseId: string): Promise<ReleaseRow | null> {
   return services.db.get<ReleaseRow>('SELECT * FROM releases WHERE id = ?', [releaseId])
 }
@@ -414,7 +452,7 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
   const versionPullIntervalSeconds = normalizeIntervalSeconds(nextNode.versionPullIntervalSeconds, 15)
   await services.db.run(
     `INSERT INTO nodes (
-      id, agent_token, name, node_type, region, tags_json, network_type, primary_domain, backup_domain, entry_ip,
+      id, agent_token, name, node_type, region, tags_json, network_type, primary_domain, backup_domain, entry_ip, worker_domain,
       github_mirror_url, warp_license_key, cf_dns_token, argo_tunnel_token, argo_tunnel_domain, argo_tunnel_port,
       install_warp, config_revision, desired_release_revision,
        current_release_revision, current_release_status, heartbeat_interval_seconds, version_pull_interval_seconds, bytes_in_total, bytes_out_total,
@@ -423,7 +461,7 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
        storage_total_bytes, storage_used_bytes, storage_usage_percent, cpu_core_count, memory_total_bytes, memory_used_bytes,
        permission_mode, sing_box_version, sing_box_status, xray_version, xray_status, protocol_runtime_version, created_at, updated_at
      ) VALUES (
-       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -440,6 +478,7 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       nextNode.primaryDomain,
       nextNode.backupDomain,
       nextNode.entryIp,
+      nextNode.workerDomain,
       nextNode.githubMirrorUrl,
       warpLicenseKey,
       nextNode.cfDnsToken,
@@ -500,6 +539,7 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
     primaryDomain: input.primaryDomain ?? current.primary_domain,
     backupDomain: input.backupDomain ?? current.backup_domain,
     entryIp: input.entryIp ?? current.entry_ip,
+    workerDomain: input.workerDomain ?? current.worker_domain,
     githubMirrorUrl: input.githubMirrorUrl ?? current.github_mirror_url,
     installWarp: input.installWarp ?? toBool(current.install_warp),
     warpLicenseKey: input.warpLicenseKey ?? current.warp_license_key,
@@ -521,7 +561,7 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
 
   await services.db.run(
     `UPDATE nodes
-     SET name = ?, node_type = ?, region = ?, tags_json = ?, network_type = ?, primary_domain = ?, backup_domain = ?, entry_ip = ?,
+     SET name = ?, node_type = ?, region = ?, tags_json = ?, network_type = ?, primary_domain = ?, backup_domain = ?, entry_ip = ?, worker_domain = ?,
          github_mirror_url = ?, warp_license_key = ?, cf_dns_token = ?, argo_tunnel_token = ?, argo_tunnel_domain = ?, argo_tunnel_port = ?,
          install_warp = ?, bytes_in_total = ?, bytes_out_total = ?, current_connections = ?,
          cpu_usage_percent = ?, memory_usage_percent = ?, warp_status = ?, warp_ipv4 = ?, warp_ipv6 = ?, warp_endpoint = ?,
@@ -540,6 +580,7 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       nextNode.primaryDomain,
       nextNode.backupDomain,
       nextNode.entryIp,
+      nextNode.workerDomain,
       nextNode.githubMirrorUrl,
       warpLicenseKey,
       nextNode.cfDnsToken,
@@ -617,11 +658,12 @@ export async function createTemplate(services: AppServices, input: CreateTemplat
   const now = nowIso()
   await services.db.run(
     `INSERT INTO templates (
-      id, name, engine, protocol, transport, tls_mode, warp_exit, warp_route_mode, defaults_json, notes, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, name, target_type, engine, protocol, transport, tls_mode, warp_exit, warp_route_mode, defaults_json, notes, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       nextTemplate.name,
+      nextTemplate.targetType,
       nextTemplate.engine,
       nextTemplate.protocol,
       nextTemplate.transport,
@@ -644,6 +686,7 @@ export async function updateTemplate(services: AppServices, templateId: string, 
   if (!current) return null
   const nextTemplate = parseTemplateInput({
     name: input.name ?? current.name,
+    targetType: (input.targetType ?? current.target_type) as CreateTemplateInput['targetType'],
     engine: input.engine ?? (current.engine as CreateTemplateInput['engine']),
     protocol: input.protocol ?? current.protocol,
     transport: input.transport ?? current.transport,
@@ -656,10 +699,11 @@ export async function updateTemplate(services: AppServices, templateId: string, 
 
   await services.db.run(
     `UPDATE templates
-     SET name = ?, engine = ?, protocol = ?, transport = ?, tls_mode = ?, warp_exit = ?, warp_route_mode = ?, defaults_json = ?, notes = ?, updated_at = ?
+     SET name = ?, target_type = ?, engine = ?, protocol = ?, transport = ?, tls_mode = ?, warp_exit = ?, warp_route_mode = ?, defaults_json = ?, notes = ?, updated_at = ?
      WHERE id = ?`,
     [
       nextTemplate.name,
+      nextTemplate.targetType,
       nextTemplate.engine,
       nextTemplate.protocol,
       nextTemplate.transport,
@@ -790,6 +834,7 @@ export async function publishNodeRelease(
   if (templateRows.length === 0) {
     throw new Error('Template releases require at least one protocol template')
   }
+  assertTemplateTargetsMatchNode(node, templateRows)
 
   const reserved = await reserveNodeReleaseSlot(services, nodeId)
   if (!reserved) return null
@@ -878,6 +923,7 @@ export async function previewNodeRelease(
   if (templateRows.length === 0) {
     throw new Error('Template releases require at least one protocol template')
   }
+  assertTemplateTargetsMatchNode(node, templateRows)
 
   const previewRevision = Number(node.desiredReleaseRevision || 0) + 1
   const createdAt = nowIso()
@@ -918,6 +964,7 @@ function hydrateReleaseTemplates(
     repairTemplateRecord({
       id: template.id,
       name: template.name,
+      targetType: template.targetType,
       engine: template.engine,
       protocol: template.protocol,
       transport: template.transport,
@@ -1050,6 +1097,51 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
   return getNodeById(services, input.nodeId)
 }
 
+export async function recordEdgeHeartbeat(services: AppServices, input: EdgeHeartbeatInput): Promise<NodeRecord | null> {
+  const parsed = edgeHeartbeatSchema.safeParse(input)
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message || 'invalid edge heartbeat body')
+  }
+
+  const now = nowIso()
+  const nextWorkerDomain = parsed.data.workerDomain.trim()
+  await services.db.run(
+    `UPDATE nodes
+     SET bytes_in_total = ?, bytes_out_total = ?, current_connections = ?,
+         worker_domain = CASE WHEN ? = '' THEN worker_domain ELSE ? END,
+         last_seen_at = ?, updated_at = ?
+     WHERE id = ?`,
+    [
+      parsed.data.bytesInTotal,
+      parsed.data.bytesOutTotal,
+      parsed.data.currentConnections,
+      nextWorkerDomain,
+      nextWorkerDomain,
+      now,
+      now,
+      parsed.data.nodeId,
+    ],
+  )
+
+  await services.db.run(
+    `INSERT INTO traffic_samples (
+      id, node_id, at, bytes_in_total, bytes_out_total, current_connections, cpu_usage_percent, memory_usage_percent
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      createId('ts'),
+      parsed.data.nodeId,
+      now,
+      parsed.data.bytesInTotal,
+      parsed.data.bytesOutTotal,
+      parsed.data.currentConnections,
+      null,
+      null,
+    ],
+  )
+
+  return getNodeById(services, parsed.data.nodeId)
+}
+
 export async function listNodeTraffic(services: AppServices, nodeId: string, limit = 24): Promise<TrafficSample[]> {
   const rows = await services.db.all<{
     node_id: string
@@ -1121,6 +1213,29 @@ export async function getNodeInstallTarget(
     argoTunnelToken: row.argo_tunnel_token || '',
     argoTunnelDomain: row.argo_tunnel_domain || '',
     argoTunnelPort: Number(row.argo_tunnel_port || 2053),
+  }
+}
+
+export async function getEdgeNodeScriptTarget(
+  services: AppServices,
+  nodeId: string,
+): Promise<{
+  id: string
+  name: string
+  agentToken: string
+  workerDomain: string
+  heartbeatIntervalSeconds: number
+  versionPullIntervalSeconds: number
+} | null> {
+  const row = await getNodeRow(services, nodeId)
+  if (!row || row.node_type !== 'edge') return null
+  return {
+    id: row.id,
+    name: row.name,
+    agentToken: row.agent_token,
+    workerDomain: row.worker_domain || '',
+    heartbeatIntervalSeconds: Number(row.heartbeat_interval_seconds || 30),
+    versionPullIntervalSeconds: Number(row.version_pull_interval_seconds || 15),
   }
 }
 

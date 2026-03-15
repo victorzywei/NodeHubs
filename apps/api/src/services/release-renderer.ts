@@ -1,5 +1,6 @@
 import { DEFAULT_WARP_LOCAL_PROXY_PORT } from '@contracts/index'
 import type {
+  EdgeWorkerPlan,
   NodeRecord,
   PublicSubscriptionDocument,
   ReleaseArtifact,
@@ -26,6 +27,7 @@ type RenderContext = {
 type NormalizedTemplate = {
   id: string
   name: string
+  targetType: TemplateRecord['targetType']
   engine: TemplateRecord['engine']
   protocol: string
   transport: string
@@ -78,11 +80,13 @@ const DEFAULT_WIREGUARD_CLIENT_ADDRESS = '10.66.0.2/32'
 const DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS = ['0.0.0.0/0', '::/0']
 const DEFAULT_WIREGUARD_DNS = ['1.1.1.1', '8.8.8.8']
 const DEFAULT_WIREGUARD_MTU = 1408
+const EDGE_WORKER_PLAN_PATH = 'runtime/worker-plan.json'
 
 const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
     id: 'preset-hysteria2',
     name: 'Hysteria2',
+    targetType: 'vps',
     engine: 'sing-box',
     protocol: 'hysteria2',
     transport: 'hysteria2',
@@ -101,6 +105,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
     id: 'preset-ss2022',
     name: 'Shadowsocks 2022',
+    targetType: 'vps',
     engine: 'xray',
     protocol: 'shadowsocks',
     transport: 'tcp',
@@ -117,6 +122,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
     id: 'preset-vless-ws-tls',
     name: 'VLESS + WS + TLS',
+    targetType: 'vps',
     engine: 'xray',
     protocol: 'vless',
     transport: 'ws',
@@ -135,6 +141,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
     id: 'preset-vless-reality-tcp',
     name: 'VLESS + Reality + TCP',
+    targetType: 'vps',
     engine: 'xray',
     protocol: 'vless',
     transport: 'tcp',
@@ -156,6 +163,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
     id: 'preset-trojan-tcp-tls',
     name: 'Trojan + TCP + TLS',
+    targetType: 'vps',
     engine: 'xray',
     protocol: 'trojan',
     transport: 'tcp',
@@ -172,6 +180,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
     id: 'preset-trojan-grpc-tls',
     name: 'Trojan + gRPC + TLS',
+    targetType: 'vps',
     engine: 'xray',
     protocol: 'trojan',
     transport: 'grpc',
@@ -189,6 +198,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
     id: 'preset-vmess-tls-ws',
     name: 'VMESS + TLS + WS',
+    targetType: 'vps',
     engine: 'xray',
     protocol: 'vmess',
     transport: 'ws',
@@ -208,6 +218,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
     id: 'preset-wireguard',
     name: 'WireGuard',
+    targetType: 'vps',
     engine: 'xray',
     protocol: 'wireguard',
     transport: 'wireguard',
@@ -229,6 +240,42 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
       presharedKey: '',
     },
     notes: 'WireGuard UDP tunnel，默认客户端全局路由到隧道并下发公共 DNS。Xray v1.8.6+ 原生支持 WireGuard inbound，也兼容 sing-box endpoints。',
+  },
+  {
+    id: 'preset-edge-vless-ws',
+    name: 'Edge VLESS + WS',
+    targetType: 'edge',
+    engine: 'worker',
+    protocol: 'vless',
+    transport: 'ws',
+    tlsMode: 'tls',
+    warpExit: false,
+    warpRouteMode: 'all',
+    defaults: {
+      path: '/vless',
+      host: '',
+      sni: '',
+      uuid: '',
+    },
+    notes: 'Cloudflare Worker edge ingress for VLESS over WebSocket.',
+  },
+  {
+    id: 'preset-edge-trojan-ws',
+    name: 'Edge Trojan + WS',
+    targetType: 'edge',
+    engine: 'worker',
+    protocol: 'trojan',
+    transport: 'ws',
+    tlsMode: 'tls',
+    warpExit: false,
+    warpRouteMode: 'all',
+    defaults: {
+      path: '/trojan',
+      host: '',
+      sni: '',
+      password: '',
+    },
+    notes: 'Cloudflare Worker edge ingress for Trojan over WebSocket.',
   },
 ]
 
@@ -343,6 +390,25 @@ function ensureTemplateCompatibility(template: TemplateRecord): void {
   const protocol = template.protocol.toLowerCase()
   const transport = template.transport.toLowerCase()
 
+  if (template.targetType === 'edge') {
+    if (template.engine !== 'worker') {
+      throw new Error(`Template ${template.name} must use the worker engine for edge nodes`)
+    }
+    if (protocol !== 'vless' && protocol !== 'trojan') {
+      throw new Error(`Template ${template.name} uses unsupported edge protocol: ${template.protocol}`)
+    }
+    if (transport !== 'ws') {
+      throw new Error(`Template ${template.name} must use the ws transport for edge nodes`)
+    }
+    if (template.tlsMode !== 'tls') {
+      throw new Error(`Template ${template.name} must use TLS mode for edge nodes`)
+    }
+    if (template.warpExit) {
+      throw new Error(`Template ${template.name} cannot enable WARP egress on edge nodes`)
+    }
+    return
+  }
+
   if (protocol === 'hysteria2') {
     if (template.engine !== 'sing-box') {
       throw new Error(`Template ${template.name} requires sing-box for the hysteria2 protocol`)
@@ -405,6 +471,9 @@ function ensureField(value: string, fieldName: string, templateName: string): st
 }
 
 function defaultTemplateServer(node: NodeRecord): string {
+  if (node.nodeType === 'edge') {
+    return node.workerDomain || node.primaryDomain || node.entryIp
+  }
   if (node.networkType === 'noPublicIp') {
     return node.argoDomain || node.argoTunnelDomain || node.primaryDomain || node.backupDomain || node.entryIp
   }
@@ -412,6 +481,9 @@ function defaultTemplateServer(node: NodeRecord): string {
 }
 
 function defaultTemplateHost(node: NodeRecord, server: string): string {
+  if (node.nodeType === 'edge') {
+    return node.workerDomain || server
+  }
   if (node.networkType === 'noPublicIp') {
     return node.argoDomain || node.argoTunnelDomain || node.primaryDomain || server
   }
@@ -419,13 +491,113 @@ function defaultTemplateHost(node: NodeRecord, server: string): string {
 }
 
 function defaultTemplateSni(node: NodeRecord, server: string): string {
+  if (node.nodeType === 'edge') {
+    return node.workerDomain || server
+  }
   if (node.networkType === 'noPublicIp') {
     return node.argoDomain || node.argoTunnelDomain || node.primaryDomain || server
   }
   return node.primaryDomain || node.backupDomain || server
 }
 
+function normalizeEdgeTemplate(node: NodeRecord, template: TemplateRecord): NormalizedTemplate {
+  const repairedTemplate = repairTemplateRecord(template)
+  ensureProtocolSupport(repairedTemplate)
+  ensureTemplateCompatibility(repairedTemplate)
+  const defaults = repairedTemplate.defaults || {}
+  const server = readString(defaults, 'server', node.workerDomain)
+  if (!server) {
+    throw new Error(`Edge node ${node.name} requires a worker domain for template ${repairedTemplate.name}`)
+  }
+
+  const normalized: NormalizedTemplate = {
+    id: repairedTemplate.id,
+    name: repairedTemplate.name,
+    targetType: 'edge',
+    engine: 'worker',
+    protocol: repairedTemplate.protocol.toLowerCase(),
+    transport: 'ws',
+    tlsMode: 'tls',
+    warpExit: false,
+    warpRouteMode: 'all',
+    server,
+    port: 443,
+    listenPort: 443,
+    host: readString(defaults, 'host', node.workerDomain || server),
+    sni: readString(defaults, 'sni', node.workerDomain || server),
+    path: normalizePath(readString(defaults, 'path', `/${repairedTemplate.protocol.toLowerCase()}-${repairedTemplate.id.slice(-6)}`)),
+    serviceName: '',
+    uuid: readString(defaults, 'uuid'),
+    password: readString(defaults, 'password'),
+    method: '',
+    flow: '',
+    fingerprint: '',
+    alterId: 0,
+    upMbps: 0,
+    downMbps: 0,
+    realityPrivateKey: '',
+    realityPublicKey: '',
+    realityShortId: '',
+    certPath: '',
+    keyPath: '',
+    wireguardServerPrivateKey: '',
+    wireguardServerPublicKey: '',
+    wireguardClientPrivateKey: '',
+    wireguardClientPublicKey: '',
+    wireguardPresharedKey: '',
+    wireguardServerAddress: '',
+    wireguardClientAddress: '',
+    wireguardPeerAllowedIps: [],
+    wireguardClientAllowedIps: [],
+    wireguardDns: [],
+    wireguardMtu: 0,
+    wireguardPersistentKeepalive: 0,
+    defaults,
+  }
+
+  if (normalized.protocol === 'vless') {
+    normalized.uuid = ensureField(normalized.uuid, 'uuid', template.name)
+  } else if (normalized.protocol === 'trojan') {
+    normalized.password = ensureField(normalized.password, 'password', template.name)
+  }
+
+  return normalized
+}
+
+function buildEdgeWorkerPlan(node: NodeRecord, templates: NormalizedTemplate[], revision: number, createdAt: string): EdgeWorkerPlan {
+  const entries: EdgeWorkerPlan['entries'] = []
+  const usedPaths = new Set<string>()
+
+  for (const template of templates) {
+    const normalizedPath = normalizePath(template.path)
+    if (usedPaths.has(normalizedPath)) {
+      throw new Error(`Edge templates must use unique paths. Duplicate path: ${normalizedPath}`)
+    }
+    usedPaths.add(normalizedPath)
+    entries.push({
+      templateId: template.id,
+      templateName: template.name,
+      protocol: template.protocol === 'trojan' ? 'trojan' : 'vless',
+      path: normalizedPath,
+      ...(template.uuid ? { uuid: template.uuid } : {}),
+      ...(template.password ? { password: template.password } : {}),
+    })
+  }
+
+  return {
+    schema: 'nodehubsapi-edge-plan-v1',
+    nodeId: node.id,
+    workerDomain: node.workerDomain,
+    revision,
+    createdAt,
+    entries,
+  }
+}
+
 function normalizeTemplate(node: NodeRecord, template: TemplateRecord): NormalizedTemplate {
+  if (template.targetType === 'edge' || template.engine === 'worker' || node.nodeType === 'edge') {
+    return normalizeEdgeTemplate(node, template)
+  }
   const repairedTemplate = repairTemplateRecord(template)
   ensureProtocolSupport(repairedTemplate)
   ensureTemplateCompatibility(repairedTemplate)
@@ -465,6 +637,7 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
   const normalized: NormalizedTemplate = {
     id: repairedTemplate.id,
     name: repairedTemplate.name,
+    targetType: repairedTemplate.targetType,
     engine: repairedTemplate.engine,
     protocol,
     transport,
@@ -898,7 +1071,7 @@ export function buildSubscriptionEntries(node: NodeRecord, templates: TemplateRe
 }
 
 function buildRuntimeConfig(
-  engine: TemplateRecord['engine'],
+  engine: Exclude<TemplateRecord['engine'], 'worker'>,
   templates: NormalizedTemplate[],
   node: NodeRecord,
 ): Record<string, unknown> {
@@ -1021,9 +1194,10 @@ export function listTemplatePresets(): TemplatePreset[] {
   return TEMPLATE_PRESETS.map((item) => hydrateTemplatePreset(item))
 }
 
-function groupTemplatesByEngine(templates: NormalizedTemplate[]): Record<TemplateRecord['engine'], NormalizedTemplate[]> {
-  return templates.reduce<Record<TemplateRecord['engine'], NormalizedTemplate[]>>(
+function groupTemplatesByEngine(templates: NormalizedTemplate[]): Record<Exclude<TemplateRecord['engine'], 'worker'>, NormalizedTemplate[]> {
+  return templates.reduce<Record<Exclude<TemplateRecord['engine'], 'worker'>, NormalizedTemplate[]>>(
     (groups, template) => {
+      if (template.engine === 'worker') return groups
       if (!groups[template.engine]) groups[template.engine] = []
       groups[template.engine].push(template)
       return groups
@@ -1038,24 +1212,44 @@ function groupTemplatesByEngine(templates: NormalizedTemplate[]): Record<Templat
 export function renderReleaseArtifact(context: RenderContext): ReleaseArtifact {
   const runtimeTemplates = context.templates
   const normalizedTemplates = runtimeTemplates.map((template) => normalizeTemplate(context.node, template))
-  const groupedTemplates = groupTemplatesByEngine(normalizedTemplates)
-  const runtimes = (Object.keys(groupedTemplates) as Array<TemplateRecord['engine']>)
-    .filter((engine) => groupedTemplates[engine].length > 0)
-    .map((engine) => {
-      const runtimeConfig = buildRuntimeConfig(engine, groupedTemplates[engine], context.node)
-      const entryConfigPath = `runtime/${engine}.json`
-      return {
-        engine,
-        entryConfigPath,
-        files: [
+  const isEdgeNode = context.node.nodeType === 'edge'
+  const runtimes = isEdgeNode
+    ? (() => {
+        const edgePlan = buildEdgeWorkerPlan(context.node, normalizedTemplates, context.revision, context.createdAt)
+        return [
           {
-            path: entryConfigPath,
-            contentType: 'application/json' as const,
-            content: JSON.stringify(runtimeConfig, null, 2),
+            engine: 'worker' as const,
+            entryConfigPath: EDGE_WORKER_PLAN_PATH,
+            files: [
+              {
+                path: EDGE_WORKER_PLAN_PATH,
+                contentType: 'application/json' as const,
+                content: JSON.stringify(edgePlan, null, 2),
+              },
+            ],
           },
-        ],
-      }
-    })
+        ]
+      })()
+    : (() => {
+        const groupedTemplates = groupTemplatesByEngine(normalizedTemplates)
+        return (Object.keys(groupedTemplates) as Array<Exclude<TemplateRecord['engine'], 'worker'>>)
+          .filter((engine) => groupedTemplates[engine].length > 0)
+          .map((engine) => {
+            const runtimeConfig = buildRuntimeConfig(engine, groupedTemplates[engine], context.node)
+            const entryConfigPath = `runtime/${engine}.json`
+            return {
+              engine,
+              entryConfigPath,
+              files: [
+                {
+                  path: entryConfigPath,
+                  contentType: 'application/json' as const,
+                  content: JSON.stringify(runtimeConfig, null, 2),
+                },
+              ],
+            }
+          })
+      })()
 
   return {
     schema: 'nodehubsapi-release-v2',
@@ -1077,6 +1271,7 @@ export function renderReleaseArtifact(context: RenderContext): ReleaseArtifact {
       primaryDomain: context.node.primaryDomain,
       backupDomain: context.node.backupDomain,
       entryIp: context.node.entryIp,
+      workerDomain: context.node.workerDomain,
       githubMirrorUrl: context.node.githubMirrorUrl,
       cfDnsToken: context.node.cfDnsToken,
       argoTunnelToken: context.node.argoTunnelToken,
@@ -1086,6 +1281,7 @@ export function renderReleaseArtifact(context: RenderContext): ReleaseArtifact {
     templates: runtimeTemplates.map((template) => ({
       id: template.id,
       name: template.name,
+      targetType: template.targetType,
       engine: template.engine,
       protocol: template.protocol,
       transport: template.transport,

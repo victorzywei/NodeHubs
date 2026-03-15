@@ -104,6 +104,7 @@ function createNodeInput(overrides: Partial<CreateNodeInput> = {}): CreateNodeIn
     primaryDomain: 'edge.example.com',
     backupDomain: '',
     entryIp: '203.0.113.10',
+    workerDomain: '',
     githubMirrorUrl: '',
     installWarp: false,
     warpLicenseKey: '',
@@ -120,6 +121,7 @@ function createNodeInput(overrides: Partial<CreateNodeInput> = {}): CreateNodeIn
 function createValidTemplateInput(overrides: Partial<CreateTemplateInput> = {}): CreateTemplateInput {
   return {
     name: 'VLESS WS TLS',
+    targetType: 'vps',
     engine: 'xray',
     protocol: 'vless',
     transport: 'ws',

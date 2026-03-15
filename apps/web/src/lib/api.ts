@@ -189,3 +189,7 @@ export function getNodeDeployCommand(adminKey: string, nodeId: string): Promise<
 export function getNodeUninstallCommand(adminKey: string, nodeId: string): Promise<{ command: string }> {
   return request(`/api/nodes/${nodeId}/uninstall-command`, {}, adminKey)
 }
+
+export function getEdgeWorkerScript(adminKey: string, nodeId: string): Promise<string> {
+  return requestText(`/api/nodes/${nodeId}/edge-worker-script`, {}, adminKey)
+}

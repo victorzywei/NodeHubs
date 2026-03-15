@@ -13,6 +13,7 @@ function createNode(): NodeRecord {
     primaryDomain: 'edge.example.com',
     backupDomain: '',
     entryIp: '203.0.113.1',
+    workerDomain: '',
     githubMirrorUrl: '',
     installWarp: false,
     warpLicenseKey: '',
@@ -54,6 +55,7 @@ function createTemplate(): TemplateRecord {
   return {
     id: 'tpl_1',
     name: 'VLESS edge',
+    targetType: 'vps',
     engine: 'sing-box',
     protocol: 'vless',
     transport: 'ws',
@@ -77,6 +79,7 @@ function createWireguardTemplate(overrides: Partial<TemplateRecord> = {}): Templ
   return {
     id: 'tpl_wg',
     name: 'WireGuard',
+    targetType: 'vps',
     engine: 'xray',
     protocol: 'wireguard',
     transport: 'wireguard',

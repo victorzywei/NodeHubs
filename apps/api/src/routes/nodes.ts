@@ -6,6 +6,7 @@ import {
   acknowledgeRelease,
   createNode,
   deleteNode,
+  getEdgeNodeScriptTarget,
   getDesiredRelease,
   getNodeInstallTarget,
   getNodeById,
@@ -21,6 +22,7 @@ import {
   updateNode,
 } from '../services/control-plane'
 import { buildAgentInstallScript, buildAgentReconcileEnv, buildReleaseApplyScript, buildDeployCommand, buildUninstallCommand } from '../services/agent-install'
+import { buildEdgeWorkerScript } from '../services/edge-worker'
 import { parseReleaseArtifact } from '../services/release-renderer'
 import type { AppServices } from '../lib/app-types'
 
@@ -41,6 +43,29 @@ nodeRoutes.post('/', async (c) => {
   const parsed = createNodeSchema.safeParse(body)
   if (!parsed.success) return fail('VALIDATION', parsed.error.issues[0]?.message || 'invalid node body', 400)
   return ok(await createNode(c.get('services'), parsed.data), 201)
+})
+
+nodeRoutes.get('/:id/edge-worker-script', async (c) => {
+  const auth = requireAdmin(c)
+  if (auth) return auth
+  const target = await getEdgeNodeScriptTarget(c.get('services'), c.req.param('id'))
+  if (!target) return fail('NOT_FOUND', 'Edge node not found', 404)
+  const script = buildEdgeWorkerScript({
+    publicBaseUrl: c.get('services').publicBaseUrl,
+    nodeId: target.id,
+    agentToken: target.agentToken,
+    workerDomain: target.workerDomain,
+    heartbeatIntervalSeconds: target.heartbeatIntervalSeconds,
+    versionPullIntervalSeconds: target.versionPullIntervalSeconds,
+  })
+  return new Response(script, {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/javascript; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Disposition': `inline; filename="${target.name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase() || 'edge-node'}-worker.js"`,
+    },
+  })
 })
 
 nodeRoutes.get('/:id', async (c) => {

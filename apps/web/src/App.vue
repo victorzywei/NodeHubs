@@ -136,6 +136,8 @@ const selectedReleaseLogNode = ref<NodeRecord|null>(null)
 const releaseLogLoading = ref(false)
 const deployCommand = ref('')
 const uninstallCommand = ref('')
+const edgeWorkerScript = ref('')
+const edgeWorkerScriptLoading = ref(false)
 const publishNode = ref<NodeRecord|null>(null)
 const publishTemplateIds = ref<string[]>([])
 const publishMessage = ref('')
@@ -311,6 +313,8 @@ function clearLoadedData() {
   nodeReleases.value = []
   deployCommand.value = ''
   uninstallCommand.value = ''
+  edgeWorkerScript.value = ''
+  edgeWorkerScriptLoading.value = false
   closeReleaseLog()
   closePublishRelease()
   closeSubscriptionQr()
@@ -501,6 +505,7 @@ function createDefaultNewNode() {
     name:'', nodeType:'vps' as 'vps'|'edge', region:'',
     networkType:'public' as 'public'|'noPublicIp',
     primaryDomain:'', backupDomain:'', entryIp:'',
+    workerDomain:'',
     useGithubMirror:false, githubMirrorUrl:'',
     installWarp:false,
     warpLicenseKey:'',
@@ -525,6 +530,30 @@ function resetNewNode() {
   newNode.value = createDefaultNewNode()
 }
 
+function isEdgeNodeRecord(node: NodeRecord | null | undefined) {
+  return node?.nodeType === 'edge'
+}
+
+function normalizeNodeDraftByType() {
+  if (newNode.value.nodeType === 'edge') {
+    newNode.value.networkType = 'public'
+    newNode.value.primaryDomain = ''
+    newNode.value.backupDomain = ''
+    newNode.value.entryIp = ''
+    newNode.value.useGithubMirror = false
+    newNode.value.githubMirrorUrl = ''
+    newNode.value.installWarp = false
+    newNode.value.warpLicenseKey = ''
+    newNode.value.cfDnsToken = ''
+    newNode.value.argoTunnelToken = ''
+    newNode.value.argoTunnelDomain = ''
+    newNode.value.argoTunnelPort = 2053
+    return
+  }
+
+  newNode.value.workerDomain = ''
+}
+
 async function createNode() {
   const n = newNode.value
   const githubMirrorUrl = n.useGithubMirror ? (n.githubMirrorUrl.trim() || DEFAULT_GITHUB_MIRROR_URL) : ''
@@ -533,19 +562,20 @@ async function createNode() {
       name: n.name,
       nodeType: n.nodeType,
       region: n.region,
-      networkType: n.networkType,
-      primaryDomain: n.networkType === 'public' ? n.primaryDomain.trim() : '',
-      backupDomain: n.networkType === 'public' ? n.backupDomain.trim() : '',
-      entryIp: n.networkType === 'public' ? n.entryIp.trim() : '',
-      githubMirrorUrl,
-      installWarp: n.installWarp,
-      warpLicenseKey: n.installWarp ? n.warpLicenseKey.trim() : '',
+      networkType: n.nodeType === 'edge' ? 'public' : n.networkType,
+      primaryDomain: n.nodeType === 'edge' ? '' : (n.networkType === 'public' ? n.primaryDomain.trim() : ''),
+      backupDomain: n.nodeType === 'edge' ? '' : (n.networkType === 'public' ? n.backupDomain.trim() : ''),
+      entryIp: n.nodeType === 'edge' ? '' : (n.networkType === 'public' ? n.entryIp.trim() : ''),
+      workerDomain: n.nodeType === 'edge' ? n.workerDomain.trim() : '',
+      githubMirrorUrl: n.nodeType === 'edge' ? '' : githubMirrorUrl,
+      installWarp: n.nodeType === 'edge' ? false : n.installWarp,
+      warpLicenseKey: n.nodeType === 'edge' ? '' : (n.installWarp ? n.warpLicenseKey.trim() : ''),
       heartbeatIntervalSeconds: n.heartbeatIntervalSeconds || 15,
       versionPullIntervalSeconds: n.versionPullIntervalSeconds || 15,
-      cfDnsToken: n.networkType === 'public' ? n.cfDnsToken.trim() : '',
-      argoTunnelToken: n.networkType === 'noPublicIp' ? n.argoTunnelToken.trim() : '',
-      argoTunnelDomain: n.networkType === 'noPublicIp' ? n.argoTunnelDomain.trim() : '',
-      argoTunnelPort: n.networkType === 'noPublicIp' ? (n.argoTunnelPort || 2053) : 2053,
+      cfDnsToken: n.nodeType === 'edge' ? '' : (n.networkType === 'public' ? n.cfDnsToken.trim() : ''),
+      argoTunnelToken: n.nodeType === 'edge' ? '' : (n.networkType === 'noPublicIp' ? n.argoTunnelToken.trim() : ''),
+      argoTunnelDomain: n.nodeType === 'edge' ? '' : (n.networkType === 'noPublicIp' ? n.argoTunnelDomain.trim() : ''),
+      argoTunnelPort: n.nodeType === 'edge' ? 2053 : (n.networkType === 'noPublicIp' ? (n.argoTunnelPort || 2053) : 2053),
     })
     showCreateNode.value = false
     resetNewNode()
@@ -554,8 +584,15 @@ async function createNode() {
 }
 
 async function selectNode(n: NodeRecord) {
-  selectedNode.value = n; deployCommand.value = ''; uninstallCommand.value = ''
+  selectedNode.value = n
+  deployCommand.value = ''
+  uninstallCommand.value = ''
+  edgeWorkerScript.value = ''
+  edgeWorkerScriptLoading.value = false
   try { nodeReleases.value = await api.listNodeReleases(adminKey.value, n.id) } catch { nodeReleases.value = [] }
+  if (isEdgeNodeRecord(n)) {
+    void loadEdgeWorkerScript()
+  }
 }
 
 async function loadDeployCommand() {
@@ -572,6 +609,18 @@ async function loadUninstallCommand() {
     const result = await api.getNodeUninstallCommand(adminKey.value, selectedNode.value.id)
     uninstallCommand.value = result.command
   } catch (e:any) { toast('error', e.message) }
+}
+
+async function loadEdgeWorkerScript() {
+  if (!selectedNode.value || !isEdgeNodeRecord(selectedNode.value)) return
+  try {
+    edgeWorkerScriptLoading.value = true
+    edgeWorkerScript.value = await api.getEdgeWorkerScript(adminKey.value, selectedNode.value.id)
+  } catch (e:any) {
+    toast('error', e.message)
+  } finally {
+    edgeWorkerScriptLoading.value = false
+  }
 }
 
 function copyToClipboard(text: string) {
@@ -834,6 +883,8 @@ async function deleteNodeById(nodeId: string, nodeName: string) {
       nodeReleases.value = []
       deployCommand.value = ''
       uninstallCommand.value = ''
+      edgeWorkerScript.value = ''
+      edgeWorkerScriptLoading.value = false
     }
     toast('success', 'Node deleted')
     await loadAll()
@@ -847,7 +898,7 @@ const editingTemplateId = ref('')
 
 function createEmptyTemplate() {
   return {
-    name:'', engine:'xray' as 'sing-box'|'xray',
+    name:'', targetType:'vps' as 'vps'|'edge', engine:'xray' as 'sing-box'|'xray'|'worker',
     protocol:'vless', transport:'ws', tlsMode:'none' as 'none'|'tls'|'reality',
     warpExit:false, warpRouteMode:'all' as 'all'|'ipv4'|'ipv6',
     defaults:{} as Record<string,unknown>, notes:''
@@ -909,6 +960,24 @@ function detectRealitySniMode(defaults: Record<string, unknown>) {
   return sampleRealitySnis.some((item) => item.toLowerCase() === sni) ? 'random' as const : 'manual' as const
 }
 
+function normalizeTemplateFormByTargetType() {
+  if (newTemplate.value.targetType === 'edge') {
+    if (newTemplate.value.protocol !== 'vless' && newTemplate.value.protocol !== 'trojan') {
+      newTemplate.value.protocol = 'vless'
+    }
+    newTemplate.value.engine = 'worker'
+    newTemplate.value.transport = 'ws'
+    newTemplate.value.tlsMode = 'tls'
+    newTemplate.value.warpExit = false
+    newTemplate.value.warpRouteMode = 'all'
+    return
+  }
+
+  if (newTemplate.value.engine === 'worker') {
+    newTemplate.value.engine = 'xray'
+  }
+}
+
 function resetTemplateForm() {
   editingTemplateId.value = ''
   newTemplate.value = createEmptyTemplate()
@@ -920,8 +989,18 @@ function closeTemplateModal() {
   resetTemplateForm()
 }
 
+const filteredCatalogPresets = computed(() =>
+  catalogPresets.value.filter((preset) => (preset.targetType || 'vps') === newTemplate.value.targetType),
+)
+
 // Protocol options based on engine
 const protocolOptions = computed(() => {
+  if (newTemplate.value.targetType === 'edge') {
+    return [
+      { value:'vless', label:'VLESS' },
+      { value:'trojan', label:'Trojan' },
+    ]
+  }
   return [
     { value:'vless', label:'VLESS' },
     { value:'vmess', label:'VMESS' },
@@ -934,6 +1013,7 @@ const protocolOptions = computed(() => {
 
 // Transport options based on protocol
 const transportOptions = computed(() => {
+  if (newTemplate.value.targetType === 'edge') return [{ value:'ws', label:'WebSocket' }]
   const p = newTemplate.value.protocol
   if (p === 'hysteria2') return [{ value:'hysteria2', label:'Hysteria2 (QUIC)' }]
   if (p === 'wireguard') return [{ value:'wireguard', label:'WireGuard (UDP)' }]
@@ -947,6 +1027,7 @@ const transportOptions = computed(() => {
 
 // TLS options based on protocol/transport
 const tlsOptions = computed(() => {
+  if (newTemplate.value.targetType === 'edge') return [{ value:'tls', label:'TLS' }]
   const p = newTemplate.value.protocol
   if (p === 'hysteria2') return [{ value:'tls', label:'TLS' }]
   if (p === 'shadowsocks') return [{ value:'none', label:'None' }]
@@ -966,6 +1047,7 @@ const templateDefaultFields = computed(() => {
   const p = newTemplate.value.protocol
   const t = newTemplate.value.transport
   const tls = newTemplate.value.tlsMode
+  const isEdgeTemplate = newTemplate.value.targetType === 'edge'
   const fields: TemplateDefaultField[] = []
 
   // Port
@@ -1042,6 +1124,17 @@ const templateDefaultFields = computed(() => {
     fields.push({ key:'alterId', label:'AlterId', placeholder:'0', type:'number' })
   }
 
+  if (isEdgeTemplate) {
+    const portFieldIndex = fields.findIndex((field) => field.key === 'serverPort')
+    if (portFieldIndex >= 0) fields.splice(portFieldIndex, 1)
+
+    const hostField = fields.find((field) => field.key === 'host')
+    if (hostField) hostField.placeholder = 'leave empty to use WORKER_DOMAIN'
+
+    const sniField = fields.find((field) => field.key === 'sni')
+    if (sniField) sniField.placeholder = 'leave empty to use WORKER_DOMAIN'
+  }
+
   return fields
 })
 
@@ -1067,6 +1160,11 @@ function setTemplateDefaultValue(key: string, rawValue: string, type?: TemplateD
 
 // Watch protocol changes and auto-fix transport/tls
 watch(() => newTemplate.value.protocol, (p) => {
+  if (newTemplate.value.targetType === 'edge') {
+    normalizeTemplateFormByTargetType()
+    void hydrateTemplateDefaults('repair')
+    return
+  }
   if (p === 'wireguard') {
     newTemplate.value.transport = 'wireguard'
     newTemplate.value.tlsMode = 'none'
@@ -1085,6 +1183,11 @@ watch(() => newTemplate.value.protocol, (p) => {
   void hydrateTemplateDefaults('repair')
 })
 
+watch(() => newTemplate.value.targetType, () => {
+  normalizeTemplateFormByTargetType()
+  void hydrateTemplateDefaults('repair')
+})
+
 watch(
   () => `${newTemplate.value.transport}:${newTemplate.value.tlsMode}:${String(newTemplate.value.defaults['method'] || '')}`,
   () => {
@@ -1096,21 +1199,27 @@ watch(() => newNode.value.useGithubMirror, (enabled) => {
   if (enabled) ensureGithubMirrorUrl()
 })
 
+watch(() => newNode.value.nodeType, () => {
+  normalizeNodeDraftByType()
+})
+
 async function openCreateTemplate() {
   resetTemplateForm()
   showCreateTemplate.value = true
   try { catalogPresets.value = await api.listTemplateCatalog(adminKey.value) } catch {}
+  normalizeTemplateFormByTargetType()
   await hydrateTemplateDefaults('repair')
 }
 
 async function applyPreset(p: any) {
   newTemplate.value = {
-    name: p.name, engine: p.engine, protocol: p.protocol,
+    name: p.name, targetType: p.targetType || 'vps', engine: p.engine, protocol: p.protocol,
     transport: p.transport, tlsMode: p.tlsMode,
     warpExit: p.warpExit === true,
     warpRouteMode: p.warpRouteMode === 'ipv4' || p.warpRouteMode === 'ipv6' ? p.warpRouteMode : 'all',
     defaults: p.defaults ? { ...p.defaults } : {}, notes: p.notes || ''
   }
+  normalizeTemplateFormByTargetType()
   realitySniMode.value = detectRealitySniMode(newTemplate.value.defaults)
   await hydrateTemplateDefaults('force')
 }
@@ -1362,6 +1471,7 @@ async function openEditTemplate(template: TemplateRecord) {
   editingTemplateId.value = template.id
   newTemplate.value = {
     name: template.name,
+    targetType: template.targetType || 'vps',
     engine: template.engine,
     protocol: template.protocol,
     transport: template.transport,
@@ -1371,6 +1481,7 @@ async function openEditTemplate(template: TemplateRecord) {
     defaults: { ...(template.defaults || {}) },
     notes: template.notes || '',
   }
+  normalizeTemplateFormByTargetType()
   realitySniMode.value = detectRealitySniMode(newTemplate.value.defaults)
   showCreateTemplate.value = true
   if (catalogPresets.value.length === 0) {
@@ -1505,7 +1616,7 @@ async function openPublishRelease(node: NodeRecord) {
   publishPreview.value = null
   publishPreviewError.value = ''
   // Default to all templates, then try to use the current version's template selection
-  publishTemplateIds.value = templates.value.map((template) => template.id)
+  publishTemplateIds.value = publishableTemplates.value.map((template) => template.id)
   showPublishRelease.value = true
   try {
     const releases = await api.listNodeReleases(adminKey.value, node.id)
@@ -1513,7 +1624,7 @@ async function openPublishRelease(node: NodeRecord) {
       const latestRelease = releases[0]
       if (latestRelease.templateIds && latestRelease.templateIds.length > 0) {
         // Only keep template IDs that still exist
-        const existingIds = new Set(templates.value.map((t) => t.id))
+        const existingIds = new Set(publishableTemplates.value.map((t) => t.id))
         const validIds = latestRelease.templateIds.filter((id) => existingIds.has(id))
         if (validIds.length > 0) {
           publishTemplateIds.value = validIds
@@ -1545,11 +1656,11 @@ function togglePublishTemplate(templateId: string) {
 }
 
 function toggleAllPublishTemplates() {
-  if (publishTemplateIds.value.length === templates.value.length) {
+  if (publishTemplateIds.value.length === publishableTemplates.value.length) {
     publishTemplateIds.value = []
     return
   }
-  publishTemplateIds.value = sortedTemplates.value.map((template) => template.id)
+  publishTemplateIds.value = publishableTemplates.value.map((template) => template.id)
 }
 
 async function loadPublishPreview() {
@@ -1686,6 +1797,9 @@ function isOnline(n: NodeRecord) {
 }
 
 function getNodeDomainDisplay(n: NodeRecord) {
+  if (n.nodeType === 'edge') {
+    return n.workerDomain || '-'
+  }
   if (n.networkType === 'noPublicIp') {
     return n.argoDomain || n.argoTunnelDomain || '-'
   }
@@ -1809,8 +1923,12 @@ function getNodeVersionPullInterval(node: NodeRecord | null) {
   return normalizeIntervalSeconds(node?.versionPullIntervalSeconds, 15)
 }
 
+const publishableTemplates = computed(() => {
+  const targetType = publishNode.value?.nodeType || 'vps'
+  return sortByCreatedAtDesc(templates.value.filter((template) => (template.targetType || 'vps') === targetType))
+})
 const publishBlocked = computed(() => publishTemplateIds.value.length === 0)
-const allPublishTemplatesSelected = computed(() => templates.value.length > 0 && publishTemplateIds.value.length === templates.value.length)
+const allPublishTemplatesSelected = computed(() => publishableTemplates.value.length > 0 && publishTemplateIds.value.length === publishableTemplates.value.length)
 const sortedNodes = computed(() => sortByCreatedAtDesc(nodes.value))
 const sortedTemplates = computed(() => sortByCreatedAtDesc(templates.value))
 const sortedSubscriptions = computed(() => sortByCreatedAtDesc(subscriptions.value))
@@ -2205,15 +2323,16 @@ onMounted(() => {
           </div>
           <div class="table-wrapper">
             <table class="data-table">
-              <thead><tr><th>名称</th><th>引擎</th><th>协议</th><th>传输</th><th>TLS</th><th>WARP</th><th>创建时间</th><th>操作</th></tr></thead>
+              <thead><tr><th>名称</th><th>类型</th><th>引擎</th><th>协议</th><th>传输</th><th>TLS</th><th>WARP</th><th>创建时间</th><th>操作</th></tr></thead>
               <tbody>
                 <tr v-for="t in sortedTemplates" :key="t.id">
                   <td style="font-weight:600;color:var(--color-text-primary)">{{ t.name }}</td>
+                  <td><span class="tag" :class="{accent:t.targetType==='edge'}">{{ t.targetType || 'vps' }}</span></td>
                   <td><span class="tag" :class="{accent:t.engine==='sing-box'}">{{ t.engine }}</span></td>
                   <td>{{ t.protocol }}</td>
                   <td>{{ t.transport }}</td>
                   <td><span class="status-badge" :class="t.tlsMode==='reality'?'applying':t.tlsMode==='tls'?'healthy':'offline'">{{ t.tlsMode }}</span></td>
-                  <td><span class="tag" :class="{accent:t.warpExit}">{{ t.warpExit ? `on/${t.warpRouteMode}` : 'off' }}</span></td>
+                  <td><span class="tag" :class="{accent:t.warpExit}">{{ (t.targetType || 'vps') === 'edge' ? '-' : (t.warpExit ? `on/${t.warpRouteMode}` : 'off') }}</span></td>
                   <td class="text-muted">{{ timeAgo(t.createdAt) }}</td>
                   <td>
                     <div class="table-actions">
@@ -2221,7 +2340,7 @@ onMounted(() => {
                     </div>
                   </td>
                 </tr>
-                <tr v-if="templates.length===0"><td colspan="8"><div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-title">暂无模板</div><div class="empty-state-text">创建协议模板来配置您的节点</div><button class="btn btn-primary" @click="openCreateTemplate">+ 添加模板</button></div></td></tr>
+                <tr v-if="templates.length===0"><td colspan="9"><div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-title">暂无模板</div><div class="empty-state-text">创建协议模板来配置您的节点</div><button class="btn btn-primary" @click="openCreateTemplate">+ 添加模板</button></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -2312,10 +2431,40 @@ onMounted(() => {
           <button class="modal-close-btn" @click="selectedNode=null">×</button>
         </div>
         <div class="detail-panel-body">
+          <template v-if="selectedNode.nodeType === 'edge'">
+            <div class="detail-section">
+              <div class="detail-section-title">基本信息</div>
+              <div class="detail-row"><span class="detail-label">ID</span><span class="detail-value text-mono">{{ selectedNode.id }}</span></div>
+              <div class="detail-row"><span class="detail-label">类型</span><span class="detail-value"><span class="tag" :class="{accent:true}">{{ selectedNode.nodeType }}</span></span></div>
+              <div class="detail-row"><span class="detail-label">地区</span><span class="detail-value">{{ selectedNode.region || '-' }}</span></div>
+              <div class="detail-row"><span class="detail-label">WORKER_DOMAIN</span><span class="detail-value text-mono">{{ selectedNode.workerDomain || '-' }}</span></div>
+            </div>
+            <div class="detail-section">
+              <div class="detail-section-title">在线情况</div>
+              <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value"><span class="status-badge" :class="isOnline(selectedNode)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(selectedNode)?'在线':'离线' }}</span></span></div>
+              <div class="detail-row"><span class="detail-label">最近心跳</span><span class="detail-value">{{ timeAgo(selectedNode.lastSeenAt) }}</span></div>
+              <div class="detail-row"><span class="detail-label">版本</span><span class="detail-value">{{ getNodeVersionLabel(selectedNode) }}</span></div>
+              <div class="detail-row"><span class="detail-label">部署状态</span><span class="detail-value"><span class="status-badge" :class="getNodeDeployStatusClass(selectedNode)">{{ getNodeDeployStatusText(selectedNode) }}</span></span></div>
+              <div class="detail-row"><span class="detail-label">连接数</span><span class="detail-value">{{ selectedNode.currentConnections }}</span></div>
+              <div class="detail-row"><span class="detail-label">入站流量</span><span class="detail-value">{{ formatBytes(selectedNode.bytesInTotal) }}</span></div>
+              <div class="detail-row"><span class="detail-label">出站流量</span><span class="detail-value">{{ formatBytes(selectedNode.bytesOutTotal) }}</span></div>
+            </div>
+            <div class="detail-section">
+              <div class="detail-section-title">Worker 部署代码</div>
+              <div class="text-muted" style="margin-bottom:8px;font-size:12px">复制下面的单文件 Worker 代码后直接部署即可，节点配置已经全部硬编码。</div>
+              <div v-if="edgeWorkerScriptLoading" class="text-muted">正在生成 Worker 代码...</div>
+              <div v-else-if="edgeWorkerScript">
+                <div class="code-block command-block" style="max-height:320px;font-size:11px">{{ edgeWorkerScript }}</div>
+                <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(edgeWorkerScript)">复制 Worker 代码</button>
+              </div>
+              <button v-else class="btn btn-secondary btn-sm w-full" @click="loadEdgeWorkerScript">重新生成 Worker 代码</button>
+            </div>
+          </template>
+          <template v-else>
           <div class="detail-section">
             <div class="detail-section-title">基本信息</div>
             <div class="detail-row"><span class="detail-label">ID</span><span class="detail-value text-mono">{{ selectedNode.id }}</span></div>
-            <div class="detail-row"><span class="detail-label">类型</span><span class="detail-value"><span class="tag" :class="{accent:selectedNode.nodeType==='edge'}">{{ selectedNode.nodeType }}</span></span></div>
+            <div class="detail-row"><span class="detail-label">类型</span><span class="detail-value"><span class="tag">{{ selectedNode.nodeType }}</span></span></div>
             <div class="detail-row"><span class="detail-label">地区</span><span class="detail-value">{{ selectedNode.region || '-' }}</span></div>
             <div class="detail-row"><span class="detail-label">网络类型</span><span class="detail-value"><span class="tag" :class="{accent:selectedNode.networkType==='noPublicIp'}">{{ selectedNode.networkType === 'noPublicIp' ? '无公网IP (Argo)' : '有公网IP' }}</span></span></div>
             <div class="detail-row"><span class="detail-label">主域名</span><span class="detail-value text-mono">{{ selectedNode.primaryDomain || '-' }}</span></div>
@@ -2418,6 +2567,7 @@ onMounted(() => {
               <div class="code-block command-block" style="margin-top:10px;max-height:180px;font-size:11px">{{ item.command }}</div>
             </div>
           </div>
+          </template>
         </div>
       </aside>
     </template>
@@ -2480,7 +2630,7 @@ onMounted(() => {
               <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px">
                 <label class="form-label" style="margin:0">模板选择</label>
                 <button
-                  v-if="templates.length"
+                  v-if="publishableTemplates.length"
                   type="button"
                   class="btn btn-xs btn-secondary"
                   @click="toggleAllPublishTemplates"
@@ -2488,13 +2638,13 @@ onMounted(() => {
                   {{ allPublishTemplatesSelected ? '取消全选' : '全选' }}
                 </button>
               </div>
-              <div v-if="templates.length===0" class="empty-state" style="padding:20px 12px">
+              <div v-if="publishableTemplates.length===0" class="empty-state" style="padding:20px 12px">
                 <div class="empty-state-title">暂无模板</div>
                 <div class="empty-state-text" style="margin-bottom:0">请先创建协议模板。</div>
               </div>
               <div v-else class="publish-template-list">
                 <label
-                  v-for="template in sortedTemplates"
+                  v-for="template in publishableTemplates"
                   :key="template.id"
                   class="publish-template-row"
                   
@@ -2545,7 +2695,12 @@ onMounted(() => {
             <div class="form-group"><label class="form-label">类型</label><select class="form-select" v-model="newNode.nodeType"><option value="vps">VPS</option><option value="edge">Edge</option></select></div>
             <div class="form-group"><label class="form-label">地区</label><input class="form-input" v-model="newNode.region" placeholder="例如 us-west" /></div>
           </div>
+          <div v-if="newNode.nodeType==='edge'" class="form-group">
+            <label class="form-label">WORKER_DOMAIN *</label>
+            <input class="form-input" v-model="newNode.workerDomain" placeholder="edge.example.com" />
+          </div>
 
+          <template v-if="newNode.nodeType==='vps'">
           <!-- GitHub Mirror -->
           <div class="form-section-divider">扩展选项</div>
           <div class="form-checkbox-group mb-md">
@@ -2613,6 +2768,7 @@ onMounted(() => {
               <input class="form-input" type="number" v-model.number="newNode.argoTunnelPort" placeholder="2053" />
             </div>
           </template>
+          </template>
 
         </div>
         <div class="modal-footer"><button class="btn btn-secondary" @click="showCreateNode=false">取消</button><button class="btn btn-primary" @click="createNode">创建</button></div>
@@ -2625,10 +2781,10 @@ onMounted(() => {
         <div class="modal-header"><h3 class="modal-title">{{ editingTemplateId ? '编辑模板' : '新建模板' }}</h3><button class="modal-close-btn" @click="closeTemplateModal">×</button></div>
         <div class="modal-body" style="max-height:60vh;overflow-y:auto">
           <!-- Presets -->
-          <div v-if="catalogPresets.length" class="mb-lg">
+          <div v-if="filteredCatalogPresets.length" class="mb-lg">
             <label class="form-label">从预设快速创建</label>
             <div class="preset-grid">
-              <button v-for="p in catalogPresets" :key="p.id" class="preset-btn" @click="applyPreset(p)" :title="p.notes">
+              <button v-for="p in filteredCatalogPresets" :key="p.id" class="preset-btn" @click="applyPreset(p)" :title="p.notes">
                 <span class="preset-btn-name">{{ p.name }}</span>
                 <span class="preset-btn-meta">{{ p.engine }} · {{ p.protocol }}</span>
               </button>
@@ -2637,12 +2793,22 @@ onMounted(() => {
           <div class="form-group"><label class="form-label">名称 *</label><input class="form-input" v-model="newTemplate.name" placeholder="例如 VLESS-WS-TLS" /></div>
           <div class="form-row">
             <div class="form-group">
-              <label class="form-label">引擎</label>
-              <select class="form-select" v-model="newTemplate.engine">
-                <option value="xray">Xray</option>
-                <option value="sing-box">Sing-Box</option>
+              <label class="form-label">类型</label>
+              <select class="form-select" v-model="newTemplate.targetType">
+                <option value="vps">VPS</option>
+                <option value="edge">Edge</option>
               </select>
             </div>
+            <div class="form-group">
+              <label class="form-label">引擎</label>
+              <select class="form-select" v-model="newTemplate.engine" :disabled="newTemplate.targetType === 'edge'">
+                <option value="xray">Xray</option>
+                <option value="sing-box">Sing-Box</option>
+                <option value="worker">Worker</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
             <div class="form-group">
               <label class="form-label">协议</label>
               <select class="form-select" v-model="newTemplate.protocol">
@@ -2706,6 +2872,7 @@ onMounted(() => {
 
           <div class="form-group"><label class="form-label">备注</label><textarea class="form-textarea" v-model="newTemplate.notes" placeholder="可选备注信息..."></textarea></div>
 
+          <template v-if="newTemplate.targetType !== 'edge'">
           <div class="form-section-divider">WARP 出口</div>
           <div class="form-checkbox-group mb-md">
             <input type="checkbox" class="form-checkbox" v-model="newTemplate.warpExit" id="template-warp-exit">
@@ -2726,6 +2893,7 @@ onMounted(() => {
               勾选后，该模板命中的流量会通过节点上的 WARP 本地 SOCKS5 代理 <span class="text-mono">127.0.0.1:{{ DEFAULT_WARP_LOCAL_PROXY_PORT }}</span> 出站，不再依赖 `CloudflareWARP` 系统网卡。
             </div>
           </div>
+          </template>
         </div>
         <div class="modal-footer" style="justify-content:space-between">
           <button v-if="editingTemplateId" class="btn btn-danger" style="--btn-bg:var(--color-danger);--btn-hover:var(--color-danger)" @click="deleteEditingTemplate">删除模板</button>
@@ -2779,6 +2947,3 @@ onMounted(() => {
   </div>
   </div>
 </template>
-
-
-
