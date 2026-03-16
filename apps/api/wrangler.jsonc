@@ -19,6 +19,6 @@
     }
   ],
   "vars": {
-    "PUBLIC_BASE_URL": "https://nodehubsapi.mirr.qzz.io"
+    "PUBLIC_BASE_URL": "https://nodehubapi.mirr.qzz.io"
   }
 }
