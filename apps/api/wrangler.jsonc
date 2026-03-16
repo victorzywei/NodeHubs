@@ -1,8 +1,10 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "nodehubsapi",
+  "name": "nodehubctrl-api",
   "main": "src/worker.ts",
   "compatibility_date": "2026-03-06",
+  "workers_dev": true,
+  "preview_urls": true,
   "d1_databases": [
     {
       "binding": "DB",
@@ -15,8 +17,5 @@
       "binding": "ARTIFACTS",
       "bucket_name": "nodehubsapi-artifacts"
     }
-  ],
-  "vars": {
-    "PUBLIC_BASE_URL": "https://nodehusapi.mirr.qzz.io"
-  }
+  ]
 }
