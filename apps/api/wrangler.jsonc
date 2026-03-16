@@ -17,5 +17,8 @@
       "binding": "ARTIFACTS",
       "bucket_name": "nodehubsapi-artifacts"
     }
-  ]
+  ],
+  "vars": {
+    "PUBLIC_BASE_URL": "https://nodehubsapi.mirr.qzz.io"
+  }
 }
