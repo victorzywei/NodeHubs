@@ -1837,6 +1837,16 @@ const sortedTemplates = computed(() => sortByCreatedAtDesc(templates.value))
 const sortedSubscriptions = computed(() => sortByCreatedAtDesc(subscriptions.value))
 const dashboardNodes = computed(() => sortedNodes.value.slice(0, 5))
 
+function getTemplatePortDisplay(template: TemplateRecord) {
+  const defaults = template.defaults || {}
+  const configuredPort = Number((defaults as Record<string, unknown>).serverPort ?? (defaults as Record<string, unknown>).port)
+  if (Number.isFinite(configuredPort) && configuredPort > 0) {
+    return String(Math.trunc(configuredPort))
+  }
+  if (template.protocol === 'wireguard') return String(defaultWireguardPort)
+  return template.tlsMode === 'none' ? '80' : '443'
+}
+
 function getWarpLabel(n: NodeRecord) {
   const warpIpv4 = (n.warpIpv4 || '').trim()
   if (warpIpv4) return warpIpv4
@@ -2247,13 +2257,14 @@ onMounted(() => {
           </div>
           <div class="table-wrapper">
             <table class="data-table">
-              <thead><tr><th>名称</th><th>引擎</th><th>协议</th><th>传输</th><th>TLS</th><th>WARP</th><th>创建时间</th><th>操作</th></tr></thead>
+              <thead><tr><th>名称</th><th>引擎</th><th>协议</th><th>传输</th><th>端口</th><th>TLS</th><th>WARP</th><th>创建时间</th><th>操作</th></tr></thead>
               <tbody>
                 <tr v-for="t in sortedTemplates" :key="t.id">
                   <td style="font-weight:600;color:var(--color-text-primary)">{{ t.name }}</td>
                   <td><span class="tag" :class="{accent:t.engine==='sing-box'}">{{ t.engine }}</span></td>
                   <td>{{ t.protocol }}</td>
                   <td>{{ t.transport }}</td>
+                  <td class="text-mono">{{ getTemplatePortDisplay(t) }}</td>
                   <td><span class="status-badge" :class="t.tlsMode==='reality'?'applying':t.tlsMode==='tls'?'healthy':'offline'">{{ t.tlsMode }}</span></td>
                   <td><span class="tag" :class="{accent:t.warpExit}">{{ t.warpExit ? `on/${t.warpRouteMode}` : 'off' }}</span></td>
                   <td class="text-muted">{{ timeAgo(t.createdAt) }}</td>
@@ -2263,7 +2274,7 @@ onMounted(() => {
                     </div>
                   </td>
                 </tr>
-                <tr v-if="templates.length===0"><td colspan="8"><div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-title">暂无模板</div><div class="empty-state-text">创建协议模板来配置您的节点</div><button class="btn btn-primary" @click="openCreateTemplate">+ 添加模板</button></div></td></tr>
+                <tr v-if="templates.length===0"><td colspan="9"><div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-title">暂无模板</div><div class="empty-state-text">创建协议模板来配置您的节点</div><button class="btn btn-primary" @click="openCreateTemplate">+ 添加模板</button></div></td></tr>
               </tbody>
             </table>
           </div>
