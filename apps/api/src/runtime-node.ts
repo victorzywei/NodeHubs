@@ -1,15 +1,16 @@
 import { mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { APP_VERSION } from './lib/constants'
 import type { AppServices } from './lib/app-types'
 import type { SqlAdapter, SqlValue } from './lib/db'
+import { DatabaseSync, type DatabaseSyncInstance } from './lib/node-sqlite'
+import { resolveApiMigrationsDir, resolveApiStoragePath } from './lib/runtime-paths'
 import { MinioArtifactStore } from './storage/minio-store'
 
 let cachedServices: AppServices | null = null
 
 function resolveDbPath(): string {
-  return process.env.SQLITE_FILE || resolve(process.cwd(), 'apps/api/storage/dev.db')
+  return process.env.SQLITE_FILE || resolveApiStoragePath('dev.db')
 }
 
 function shouldIgnoreMigrationError(error: unknown): boolean {
@@ -25,8 +26,8 @@ function splitSqlStatements(sqlText: string): string[] {
     .filter(Boolean)
 }
 
-function applyMigrations(db: DatabaseSync): void {
-  const migrationDir = resolve(process.cwd(), 'apps/api/migrations')
+function applyMigrations(db: DatabaseSyncInstance): void {
+  const migrationDir = resolveApiMigrationsDir()
   const migrationFiles = readdirSync(migrationDir)
     .filter((name) => name.endsWith('.sql'))
     .sort((a, b) => a.localeCompare(b))
@@ -50,7 +51,7 @@ function normalizeParams(params: SqlValue[] = []): Array<string | number | null>
   return params.map((value) => (typeof value === 'boolean' ? Number(value) : value))
 }
 
-function createSqliteAdapter(db: DatabaseSync): SqlAdapter {
+function createSqliteAdapter(db: DatabaseSyncInstance): SqlAdapter {
   return {
     exec(sqlText) {
       db.exec(sqlText)

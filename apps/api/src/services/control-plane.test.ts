@@ -9,6 +9,7 @@ import type { SqlAdapter, SqlValue } from '../lib/db'
 import type { ArtifactStore, StoredArtifact } from '../storage/types'
 import {
   acknowledgeRelease,
+  buildSystemStatus,
   buildPublicSubscriptionDocument,
   createNode,
   createSubscription,
@@ -339,6 +340,26 @@ describe('heartbeat persistence', () => {
     expect(updated?.warpPrivateKey).toBe('private-key')
     expect(updated?.warpReserved).toEqual([1, 2, 3])
     expect(updated?.cpuCoreCount).toBe(8)
+  })
+
+  it('counts online nodes by each node heartbeat interval window', async () => {
+    const services = createServices()
+    const fastNode = await createNode(services, createNodeInput({ name: 'Node Fast', primaryDomain: 'fast.example.com', heartbeatIntervalSeconds: 15 }))
+    const slowNode = await createNode(services, createNodeInput({ name: 'Node Slow', primaryDomain: 'slow.example.com', heartbeatIntervalSeconds: 60 }))
+    const staleNode = await createNode(services, createNodeInput({ name: 'Node Stale', primaryDomain: 'stale.example.com', heartbeatIntervalSeconds: 15 }))
+
+    await updateNode(services, fastNode.id, {
+      lastSeenAt: new Date(Date.now() - 20 * 1000).toISOString(),
+    })
+    await updateNode(services, slowNode.id, {
+      lastSeenAt: new Date(Date.now() - 100 * 1000).toISOString(),
+    })
+    await updateNode(services, staleNode.id, {
+      lastSeenAt: new Date(Date.now() - 40 * 1000).toISOString(),
+    })
+
+    const systemStatus = await buildSystemStatus(services)
+    expect(systemStatus.summary.onlineCount).toBe(2)
   })
 })
 

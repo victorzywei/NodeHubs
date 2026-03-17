@@ -1,17 +1,31 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
-import { DEFAULT_WARP_LOCAL_PROXY_PORT, type SystemStatus, type NodeRecord, type TemplateRecord, type SubscriptionRecord, type ReleaseLogRecord, type ReleaseRecord, type ReleasePreviewRecord } from '@contracts/index'
+import {
+  DEFAULT_WARP_LOCAL_PROXY_PORT,
+  isNodeOnline,
+  type SystemStatus,
+  type NodeRecord,
+  type TemplateRecord,
+  type SubscriptionRecord,
+  type ReleaseLogRecord,
+  type ReleaseRecord,
+  type ReleasePreviewRecord,
+} from '@contracts/index'
 import QRCode from 'qrcode'
 import * as api from './lib/api'
 import {
   PanelApiError,
   getPanelSession,
+  isLocalPanelMode,
   listBackendProfiles,
   loginToPanel,
   logoutFromPanel,
   saveBackendProfiles as savePanelBackendProfiles,
 } from './lib/panel-api'
 import {
+  BACKEND_PROFILES_STORAGE_KEY,
+  CURRENT_BACKEND_STORAGE_KEY,
+  LEGACY_ADMIN_KEY_STORAGE_KEY,
   createBackendProfileId,
   normalizeBackendApiBase,
   sanitizeBackendProfiles,
@@ -27,12 +41,17 @@ interface BackendDraft {
 }
 
 const THEME_STORAGE_KEY = 'nh_ui_theme'
-const BACKEND_PROFILES_STORAGE_KEY = 'nh_backend_profiles'
-const CURRENT_BACKEND_STORAGE_KEY = 'nh_current_backend'
-const LEGACY_ADMIN_KEY_STORAGE_KEY = 'nh_admin_key'
+function resolveDefaultBackendApiBase() {
+  const envApiBaseUrl = normalizeBackendApiBase(import.meta.env.VITE_API_BASE || '')
+  if (envApiBaseUrl) return envApiBaseUrl
+  if (typeof window !== 'undefined' && window.location.origin) {
+    return normalizeBackendApiBase(window.location.origin)
+  }
+  return ''
+}
 
 function createDefaultBackendProfile(): BackendProfile | null {
-  const apiBaseUrl = normalizeBackendApiBase(import.meta.env.VITE_API_BASE || '')
+  const apiBaseUrl = resolveDefaultBackendApiBase()
   const legacyAdminKey = localStorage.getItem(LEGACY_ADMIN_KEY_STORAGE_KEY) || ''
   if (!apiBaseUrl && !legacyAdminKey) return null
 
@@ -61,8 +80,10 @@ function loadLegacyBackendProfiles(): BackendProfile[] {
   return fallback ? [fallback] : []
 }
 
-function clearLegacyBackendStorage() {
-  localStorage.removeItem(BACKEND_PROFILES_STORAGE_KEY)
+function clearLegacyBackendStorage(removeProfiles = true) {
+  if (removeProfiles) {
+    localStorage.removeItem(BACKEND_PROFILES_STORAGE_KEY)
+  }
   localStorage.removeItem(LEGACY_ADMIN_KEY_STORAGE_KEY)
 }
 
@@ -182,7 +203,7 @@ function setBackendProfiles(nextProfiles: BackendProfile[], preferredId = curren
 async function persistBackendProfiles(nextProfiles: BackendProfile[], preferredId = currentBackendId.value) {
   const result = await savePanelBackendProfiles(nextProfiles)
   setBackendProfiles(result.profiles, preferredId)
-  clearLegacyBackendStorage()
+  clearLegacyBackendStorage(!isLocalPanelMode())
   return result.profiles
 }
 
@@ -220,7 +241,7 @@ async function loadPanelBackendProfiles() {
       if (legacyProfiles.length > 0) {
         const seeded = await savePanelBackendProfiles(legacyProfiles)
         nextProfiles = seeded.profiles
-        clearLegacyBackendStorage()
+        clearLegacyBackendStorage(!isLocalPanelMode())
       }
     }
 
@@ -430,7 +451,7 @@ async function login() {
     const s = await api.getSystemStatus(adminKey.value)
     status.value = s; loggedIn.value = true
     await updateCurrentBackendAdminKey(adminKey.value)
-    clearLegacyBackendStorage()
+    clearLegacyBackendStorage(!isLocalPanelMode())
     await loadAll()
   } catch (e:any) { error.value = e.message || '连接认证失败' }
   loading.value = false
@@ -443,7 +464,7 @@ async function logout() {
     // Ignore persisted key cleanup failures during logout.
   }
   adminKey.value = ''
-  clearLegacyBackendStorage()
+  clearLegacyBackendStorage(!isLocalPanelMode())
   clearLoadedData()
 }
 
@@ -1681,8 +1702,7 @@ function getProgressTone(value: number | null) {
 }
 
 function isOnline(n: NodeRecord) {
-  if (!n.lastSeenAt) return false
-  return Date.now() - new Date(n.lastSeenAt).getTime() < 120000
+  return isNodeOnline(n.lastSeenAt, n.heartbeatIntervalSeconds)
 }
 
 function getNodeDomainDisplay(n: NodeRecord) {
@@ -1852,6 +1872,21 @@ function timeAgo(d: string|null) {
   if (s < 3600) return Math.floor(s/60) + 'm ago'
   if (s < 86400) return Math.floor(s/3600) + 'h ago'
   return Math.floor(s/86400) + '天前'
+}
+
+function formatDateTime(d: string | null) {
+  if (!d) return '从未'
+  const date = new Date(d)
+  if (!Number.isFinite(date.getTime())) return '从未'
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date)
 }
 
 function isPage(page: 'dashboard'|'nodes'|'templates'|'subscriptions') {
@@ -2119,7 +2154,7 @@ onMounted(() => {
             <div class="table-wrapper" style="border:none;background:transparent">
               <table class="data-table node-table">
                 <thead><tr>
-                  <th>名称</th><th>类型</th><th>版本</th><th>地区</th><th>域名/Argo</th><th>WARP IPv6</th><th>连接数</th><th>流量</th>
+                  <th>名称</th><th>类型</th><th>版本</th><th>地区</th><th>域名/Argo</th><th>最后在线</th><th>WARP IPv6</th><th>连接数</th><th>流量</th>
                 </tr></thead>
                 <tbody>
                   <tr v-for="n in dashboardNodes" :key="n.id" class="cursor-pointer" @click="selectNode(n)">
@@ -2138,11 +2173,12 @@ onMounted(() => {
                     </td>
                     <td>{{ n.region || '-' }}</td>
                     <td class="text-mono truncate">{{ getNodeDomainDisplay(n) }}</td>
+                    <td class="text-muted" :title="formatDateTime(n.lastSeenAt)">{{ formatDateTime(n.lastSeenAt) }}</td>
                     <td class="text-mono">{{ getWarpLabel(n) }}</td>
                     <td>{{ n.currentConnections }}</td>
                     <td class="text-muted" style="font-size:12px">↑{{ formatBytes(n.bytesOutTotal) }} ↓{{ formatBytes(n.bytesInTotal) }}</td>
                   </tr>
-                  <tr v-if="dashboardNodes.length===0"><td colspan="8" class="text-center text-muted" style="padding:32px">暂无节点</td></tr>
+                  <tr v-if="dashboardNodes.length===0"><td colspan="9" class="text-center text-muted" style="padding:32px">暂无节点</td></tr>
                 </tbody>
               </table>
             </div>
@@ -2160,7 +2196,7 @@ onMounted(() => {
           <div class="table-wrapper">
             <table class="data-table node-table">
               <thead><tr>
-                <th>名称</th><th>类型</th><th>版本</th><th>地区</th><th>域名/Argo</th><th>WARP IPv6</th><th>连接数</th><th>流量</th><th>操作</th>
+                <th>名称</th><th>类型</th><th>版本</th><th>地区</th><th>域名/Argo</th><th>最后在线</th><th>WARP IPv6</th><th>连接数</th><th>流量</th><th>操作</th>
               </tr></thead>
               <tbody>
                 <tr v-for="n in sortedNodes" :key="n.id" class="cursor-pointer" @click="selectNode(n)">
@@ -2179,6 +2215,7 @@ onMounted(() => {
                   </td>
                   <td>{{ n.region || '-' }}</td>
                   <td class="text-mono truncate">{{ getNodeDomainDisplay(n) }}</td>
+                  <td class="text-muted" :title="`${timeAgo(n.lastSeenAt)} · ${formatDateTime(n.lastSeenAt)}`">{{ formatDateTime(n.lastSeenAt) }}</td>
                   <td class="text-mono">{{ getWarpLabel(n) }}</td>
                   <td>{{ n.currentConnections }}</td>
                   <td class="text-muted" style="font-size:12px">↑{{ formatBytes(n.bytesOutTotal) }} ↓{{ formatBytes(n.bytesInTotal) }}</td>
@@ -2189,7 +2226,7 @@ onMounted(() => {
                     </div>
                   </td>
                 </tr>
-                <tr v-if="nodes.length===0"><td colspan="9"><div class="empty-state"><div class="empty-state-icon">🖥️</div><div class="empty-state-title">暂无节点</div><div class="empty-state-text">添加您的第一个代理节点以开始使用</div><button class="btn btn-primary" @click="showCreateNode=true">+ 添加节点</button></div></td></tr>
+                <tr v-if="nodes.length===0"><td colspan="10"><div class="empty-state"><div class="empty-state-icon">🖥️</div><div class="empty-state-title">暂无节点</div><div class="empty-state-text">添加您的第一个代理节点以开始使用</div><button class="btn btn-primary" @click="showCreateNode=true">+ 添加节点</button></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -2353,6 +2390,7 @@ onMounted(() => {
           <div class="detail-section">
             <div class="detail-section-title">心跳上报</div>
             <div class="detail-row"><span class="detail-label">最近心跳</span><span class="detail-value">{{ timeAgo(selectedNode.lastSeenAt) }}</span></div>
+            <div class="detail-row"><span class="detail-label">最后在线时间</span><span class="detail-value">{{ formatDateTime(selectedNode.lastSeenAt) }}</span></div>
             <div class="detail-row"><span class="detail-label">CPU</span><span class="detail-value">{{ getCpuMetricText(selectedNode) }}</span></div>
             <div v-if="getCpuUsagePercent(selectedNode) !== null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="getProgressTone(getCpuUsagePercent(selectedNode))" :style="{width:getCpuUsagePercent(selectedNode)+'%'}"></div></div>
             <div class="detail-row"><span class="detail-label">内存</span><span class="detail-value">{{ getMemoryMetricText(selectedNode) }}</span></div>
@@ -2779,6 +2817,4 @@ onMounted(() => {
   </div>
   </div>
 </template>
-
-
 

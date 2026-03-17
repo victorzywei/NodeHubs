@@ -12,6 +12,26 @@ export type StorageMode = 'cloudflare' | 'docker'
 export type SubscriptionDocumentFormat = 'plain' | 'base64' | 'json' | 'v2ray' | 'clash' | 'singbox' | 'wireguard'
 
 export const DEFAULT_WARP_LOCAL_PROXY_PORT = 23499
+export const NODE_OFFLINE_MULTIPLIER = 2.1
+export const DEFAULT_NODE_HEARTBEAT_INTERVAL_SECONDS = 15
+export const MIN_NODE_HEARTBEAT_INTERVAL_SECONDS = 5
+export const MAX_NODE_HEARTBEAT_INTERVAL_SECONDS = 3600
+
+function normalizeNodeIntervalSeconds(value: unknown, fallback = DEFAULT_NODE_HEARTBEAT_INTERVAL_SECONDS): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(MIN_NODE_HEARTBEAT_INTERVAL_SECONDS, Math.min(MAX_NODE_HEARTBEAT_INTERVAL_SECONDS, Math.trunc(parsed)))
+}
+
+export function getNodeOfflineThresholdMs(heartbeatIntervalSeconds: unknown): number {
+  return Math.round(normalizeNodeIntervalSeconds(heartbeatIntervalSeconds) * NODE_OFFLINE_MULTIPLIER * 1000)
+}
+
+export function isNodeOnline(lastSeenAt: string | null | undefined, heartbeatIntervalSeconds: unknown): boolean {
+  if (!lastSeenAt) return false
+  const lastSeen = new Date(lastSeenAt).getTime()
+  return Number.isFinite(lastSeen) && Date.now() - lastSeen <= getNodeOfflineThresholdMs(heartbeatIntervalSeconds)
+}
 
 export interface NodeRecord {
   id: string

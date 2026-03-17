@@ -1,9 +1,10 @@
 import { mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from '../lib/node-sqlite'
+import { resolveApiMigrationsDir, resolveApiStoragePath } from '../lib/runtime-paths'
 
-const dbPath = process.env.SQLITE_FILE || resolve(process.cwd(), 'apps/api/storage/dev.db')
-const migrationDir = resolve(process.cwd(), 'apps/api/migrations')
+const dbPath = process.env.SQLITE_FILE || resolveApiStoragePath('dev.db')
+const migrationDir = resolveApiMigrationsDir()
 
 mkdirSync(dirname(dbPath), { recursive: true })
 

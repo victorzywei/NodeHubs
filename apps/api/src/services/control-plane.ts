@@ -1,5 +1,6 @@
 import {
   createNodeSchema,
+  isNodeOnline,
   createTemplateSchema,
 } from '@contracts/index'
 import type {
@@ -25,7 +26,7 @@ import type {
   UpdateTemplateInput,
 } from '@contracts/index'
 import type { AppServices } from '../lib/app-types'
-import { APP_VERSION, ONLINE_WINDOW_MS } from '../lib/constants'
+import { APP_VERSION } from '../lib/constants'
 import { createId, createToken, nowIso, parseJsonObject } from '../lib/utils'
 import { buildSubscriptionEntries, parseReleaseArtifact, renderReleaseArtifact } from './release-renderer'
 import { repairTemplateDefaults, repairTemplateRecord } from './template-defaults'
@@ -319,12 +320,6 @@ function toSubscriptionRecord(row: SubscriptionRow): SubscriptionRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
-}
-
-function isOnline(lastSeenAt: string | null): boolean {
-  if (!lastSeenAt) return false
-  const lastSeen = new Date(lastSeenAt).getTime()
-  return Number.isFinite(lastSeen) && Date.now() - lastSeen <= ONLINE_WINDOW_MS
 }
 
 function summarizeRelease(templateIds: string[], message: string): string {
@@ -1261,7 +1256,7 @@ export async function buildSystemStatus(services: AppServices): Promise<SystemSt
     nodeCount: Number(nodeCountRow?.value || 0),
     templateCount: Number(templateCountRow?.value || 0),
     releaseCount: Number(releaseCountRow?.value || 0),
-    onlineCount: nodes.filter((item) => isOnline(item.lastSeenAt)).length,
+    onlineCount: nodes.filter((item) => isNodeOnline(item.lastSeenAt, item.heartbeatIntervalSeconds)).length,
     totalBytesIn: Number(totalsRow?.bytes_in || 0),
     totalBytesOut: Number(totalsRow?.bytes_out || 0),
   }

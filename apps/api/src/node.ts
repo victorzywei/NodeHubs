@@ -3,11 +3,12 @@ import { extname, resolve } from 'node:path'
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { createApp } from './app'
+import { resolveWebDistDir } from './lib/runtime-paths'
 import { getNodeServices } from './runtime-node'
 
 const apiApp = createApp(() => getNodeServices())
 const serverApp = new Hono()
-const webDist = resolve(process.cwd(), 'apps/web/dist')
+const webDist = resolveWebDistDir()
 
 const mimeByExtension: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',

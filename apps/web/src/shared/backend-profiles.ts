@@ -6,6 +6,9 @@
 }
 
 export const BACKEND_PROFILES_KV_KEY = 'nh:backend-profiles:v1'
+export const BACKEND_PROFILES_STORAGE_KEY = 'nh_backend_profiles'
+export const CURRENT_BACKEND_STORAGE_KEY = 'nh_current_backend'
+export const LEGACY_ADMIN_KEY_STORAGE_KEY = 'nh_admin_key'
 
 export function createBackendProfileId() {
   if (typeof globalThis.crypto?.randomUUID === 'function') {
