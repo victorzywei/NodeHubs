@@ -2,6 +2,8 @@ FROM node:24-bookworm-slim
 
 WORKDIR /app
 
+LABEL org.opencontainers.image.source="https://github.com/victorzywei/NodeHubs"
+
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json

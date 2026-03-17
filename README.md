@@ -133,6 +133,18 @@ After the app starts, open:
 
 - `GET /api/system/status` to confirm `databaseDriver=sqlite` and `artifactDriver=local`
 
+## GitHub image auto-publish
+
+This repo now includes a GitHub Actions workflow at `.github/workflows/docker-publish.yml`.
+
+Behavior:
+
+- Push to `main`: updates `ghcr.io/victorzywei/nodehubs:latest`
+- Push a tag like `v0.1.18`: publishes version tags such as `ghcr.io/victorzywei/nodehubs:v0.1.18`
+- Pull requests: build-check only, no push
+
+If ClawCloud should pull the image without registry credentials, change the package visibility to `Public` in the GitHub package settings after the first publish.
+
 ## Cloudflare deployment
 
 1. Build the web assets:
