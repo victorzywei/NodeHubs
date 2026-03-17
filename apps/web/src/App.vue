@@ -12,6 +12,7 @@ import {
   type ReleasePreviewRecord,
 } from '@contracts/index'
 import QRCode from 'qrcode'
+import nodehubIcon from './nodehub.png'
 import * as api from './lib/api'
 import {
   PanelApiError,
@@ -1936,7 +1937,9 @@ onMounted(() => {
         <button class="theme-chip" :class="{active: uiTheme==='midnight'}" @click="setUiTheme('midnight')">深色</button>
       </div>
       <div class="login-logo-row">
-        <div class="login-logo">N</div>
+        <div class="login-logo">
+          <img class="brand-logo-image" :src="nodehubIcon" alt="NodeHub" />
+        </div>
         <div class="login-brand-name">NodeHub</div>
       </div>
       <p class="login-description">节点管理控制台</p>
@@ -1965,7 +1968,9 @@ onMounted(() => {
     <!-- Sidebar -->
     <aside class="app-sidebar">
       <div class="sidebar-header">
-        <div class="sidebar-logo">N</div>
+        <div class="sidebar-logo">
+          <img class="brand-logo-image" :src="nodehubIcon" alt="NodeHub" />
+        </div>
         <div>
           <div class="sidebar-title">NodeHub</div>
           <div class="sidebar-version">v{{ status?.appVersion || '0.1.0' }}</div>
@@ -2817,4 +2822,3 @@ onMounted(() => {
   </div>
   </div>
 </template>
-

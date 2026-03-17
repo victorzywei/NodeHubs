@@ -122,10 +122,12 @@ Recommended minimal setup for ClawCloud:
 Suggested environment variables:
 
 ```bash
+挂一个持久卷到 /app/apps/api/storage
 ADMIN_KEY=change-me
 PUBLIC_BASE_URL=https://your-app-domain
 PORT=3000
 SQLITE_FILE=/app/apps/api/storage/nodehubsapi.db
+ARTIFACT_DRIVER=local
 ARTIFACTS_DIR=/app/apps/api/storage/artifacts
 ```
 
