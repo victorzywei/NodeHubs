@@ -338,8 +338,13 @@ function uniqueIds(values: string[]): string[] {
 async function normalizeVisibleNodeIds(services: AppServices, values: string[] | undefined): Promise<string[]> {
   const requestedIds = uniqueIds(values || [])
   if (requestedIds.length === 0) return []
-  const rows = await Promise.all(requestedIds.map((nodeId) => getNodeRow(services, nodeId)))
-  return requestedIds.filter((_, index) => Boolean(rows[index]))
+  const placeholders = requestedIds.map(() => '?').join(',')
+  const existingRows = await services.db.all<{ id: string }>(
+    `SELECT id FROM nodes WHERE id IN (${placeholders})`,
+    requestedIds,
+  )
+  const existingSet = new Set(existingRows.map((row) => row.id))
+  return requestedIds.filter((id) => existingSet.has(id))
 }
 
 async function getNodeRow(services: AppServices, nodeId: string): Promise<NodeRow | null> {
@@ -352,8 +357,15 @@ async function getTemplateRow(services: AppServices, templateId: string): Promis
 
 async function getTemplateRows(services: AppServices, templateIds: string[]): Promise<TemplateRow[]> {
   const uniqueTemplateIds = uniqueIds(templateIds)
-  const rows = await Promise.all(uniqueTemplateIds.map((templateId) => getTemplateRow(services, templateId)))
-  return rows.filter((row): row is TemplateRow => Boolean(row))
+  if (uniqueTemplateIds.length === 0) return []
+  const placeholders = uniqueTemplateIds.map(() => '?').join(',')
+  const rows = await services.db.all<TemplateRow>(
+    `SELECT * FROM templates WHERE id IN (${placeholders})`,
+    uniqueTemplateIds,
+  )
+  return uniqueTemplateIds
+    .map((id) => rows.find((row) => row.id === id))
+    .filter((row): row is TemplateRow => Boolean(row))
 }
 
 async function getReleaseRow(services: AppServices, releaseId: string): Promise<ReleaseRow | null> {
@@ -382,18 +394,21 @@ export async function deleteNode(services: AppServices, nodeId: string): Promise
   await services.db.run('DELETE FROM releases WHERE node_id = ?', [nodeId])
   await services.db.run('DELETE FROM nodes WHERE id = ?', [nodeId])
 
-  const subscriptions = await services.db.all<Pick<SubscriptionRow, 'id' | 'visible_node_ids_json'>>(
-    'SELECT id, visible_node_ids_json FROM subscriptions',
+  const affected = await services.db.all<Pick<SubscriptionRow, 'id' | 'visible_node_ids_json'>>(
+    "SELECT id, visible_node_ids_json FROM subscriptions WHERE visible_node_ids_json LIKE ?",
+    [`%${nodeId}%`],
   )
-  const updatedAt = nowIso()
-  for (const subscription of subscriptions) {
-    const visibleNodeIds = parseJsonObject<string[]>(subscription.visible_node_ids_json, [])
-    if (!visibleNodeIds.includes(nodeId)) continue
-    const nextVisibleNodeIds = visibleNodeIds.filter((visibleNodeId) => visibleNodeId !== nodeId)
-    await services.db.run(
-      'UPDATE subscriptions SET visible_node_ids_json = ?, updated_at = ? WHERE id = ?',
-      [JSON.stringify(nextVisibleNodeIds), updatedAt, subscription.id],
-    )
+  if (affected.length > 0) {
+    const updatedAt = nowIso()
+    for (const subscription of affected) {
+      const visibleNodeIds = parseJsonObject<string[]>(subscription.visible_node_ids_json, [])
+      if (!visibleNodeIds.includes(nodeId)) continue
+      const nextVisibleNodeIds = visibleNodeIds.filter((visibleNodeId) => visibleNodeId !== nodeId)
+      await services.db.run(
+        'UPDATE subscriptions SET visible_node_ids_json = ?, updated_at = ? WHERE id = ?',
+        [JSON.stringify(nextVisibleNodeIds), updatedAt, subscription.id],
+      )
+    }
   }
 
   return true
@@ -516,14 +531,11 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
 
   await services.db.run(
     `UPDATE nodes
-     SET name = ?, node_type = ?, region = ?, tags_json = ?, network_type = ?, primary_domain = ?, backup_domain = ?, entry_ip = ?,
-         github_mirror_url = ?, warp_license_key = ?, cf_dns_token = ?, argo_tunnel_token = ?, argo_tunnel_domain = ?, argo_tunnel_port = ?,
-         install_warp = ?, bytes_in_total = ?, bytes_out_total = ?, current_connections = ?,
-         cpu_usage_percent = ?, memory_usage_percent = ?, warp_status = ?, warp_ipv4 = ?, warp_ipv6 = ?, warp_endpoint = ?,
-         warp_account_type = ?, warp_tunnel_protocol = ?, warp_private_key = ?, warp_reserved_json = ?,
-         argo_status = ?, argo_domain = ?, storage_total_bytes = ?, storage_used_bytes = ?, storage_usage_percent = ?,
-         cpu_core_count = ?, memory_total_bytes = ?, memory_used_bytes = ?,
-         protocol_runtime_version = ?, last_seen_at = ?, heartbeat_interval_seconds = ?, version_pull_interval_seconds = ?,
+     SET name = ?, node_type = ?, region = ?, tags_json = ?, network_type = ?,
+         primary_domain = ?, backup_domain = ?, entry_ip = ?,
+         github_mirror_url = ?, warp_license_key = ?, cf_dns_token = ?,
+         argo_tunnel_token = ?, argo_tunnel_domain = ?, argo_tunnel_port = ?,
+         install_warp = ?, heartbeat_interval_seconds = ?, version_pull_interval_seconds = ?,
          config_revision = ?, updated_at = ?
      WHERE id = ?`,
     [
@@ -542,29 +554,6 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       nextNode.argoTunnelDomain,
       nextNode.argoTunnelPort,
       installWarp,
-      input.bytesInTotal ?? current.bytes_in_total,
-      input.bytesOutTotal ?? current.bytes_out_total,
-      input.currentConnections ?? current.current_connections,
-      input.cpuUsagePercent ?? current.cpu_usage_percent,
-      input.memoryUsagePercent ?? current.memory_usage_percent,
-      input.warpStatus ?? current.warp_status ?? '',
-      input.warpIpv4 ?? current.warp_ipv4 ?? '',
-      input.warpIpv6 ?? current.warp_ipv6 ?? '',
-      input.warpEndpoint ?? current.warp_endpoint ?? '',
-      input.warpAccountType ?? current.warp_account_type ?? '',
-      input.warpTunnelProtocol ?? current.warp_tunnel_protocol ?? '',
-      input.warpPrivateKey ?? current.warp_private_key ?? '',
-      JSON.stringify(input.warpReserved ?? parseJsonObject<number[]>(current.warp_reserved_json || '[]', [])),
-      input.argoStatus ?? current.argo_status ?? '',
-      input.argoDomain ?? current.argo_domain ?? '',
-      input.storageTotalBytes ?? current.storage_total_bytes ?? 0,
-      input.storageUsedBytes ?? current.storage_used_bytes ?? 0,
-      input.storageUsagePercent ?? current.storage_usage_percent ?? null,
-      input.cpuCoreCount ?? current.cpu_core_count ?? null,
-      input.memoryTotalBytes ?? current.memory_total_bytes ?? 0,
-      input.memoryUsedBytes ?? current.memory_used_bytes ?? 0,
-      input.protocolRuntimeVersion ?? current.protocol_runtime_version,
-      input.lastSeenAt ?? current.last_seen_at,
       heartbeatIntervalSeconds,
       versionPullIntervalSeconds,
       nextConfigRevision,
@@ -1184,11 +1173,6 @@ export async function acknowledgeRelease(
       'UPDATE nodes SET current_release_revision = ?, current_release_status = ?, updated_at = ? WHERE id = ?',
       [release.revision, status, updatedAt, nodeId],
     )
-  } else if (status === 'failed') {
-    await services.db.run(
-      'UPDATE nodes SET current_release_status = ?, updated_at = ? WHERE id = ?',
-      [status, updatedAt, nodeId],
-    )
   } else {
     await services.db.run(
       'UPDATE nodes SET current_release_status = ?, updated_at = ? WHERE id = ?',
@@ -1214,25 +1198,25 @@ export async function buildPublicSubscriptionDocument(
     )
     : await services.db.all<NodeRow>('SELECT * FROM nodes ORDER BY updated_at DESC')
 
-  const entries: PublicSubscriptionDocument['entries'] = []
-  for (const nodeRow of nodes) {
-    const release = await services.db.get<ReleaseRow>(
-      'SELECT * FROM releases WHERE node_id = ? AND kind = ? AND status = ? ORDER BY revision DESC LIMIT 1',
-      [nodeRow.id, 'runtime', 'healthy'],
-    )
-    if (!release) continue
-    const artifact = await services.artifacts.get(release.artifact_key)
-    if (!artifact) continue
-    const parsedArtifact = parseReleaseArtifact(artifact.body)
-    if (!parsedArtifact) continue
-    const releaseTemplates = hydrateReleaseTemplates(parsedArtifact.templates || [], release)
-    if (releaseTemplates.length > 0) {
-      entries.push(...buildSubscriptionEntries(toNodeRecord(nodeRow), releaseTemplates))
-      continue
-    }
-
-    entries.push(...parsedArtifact.subscriptionEndpoints)
-  }
+  const nodeEntries = await Promise.all(
+    nodes.map(async (nodeRow): Promise<PublicSubscriptionDocument['entries']> => {
+      const release = await services.db.get<ReleaseRow>(
+        'SELECT * FROM releases WHERE node_id = ? AND kind = ? AND status = ? ORDER BY revision DESC LIMIT 1',
+        [nodeRow.id, 'runtime', 'healthy'],
+      )
+      if (!release) return []
+      const artifact = await services.artifacts.get(release.artifact_key)
+      if (!artifact) return []
+      const parsedArtifact = parseReleaseArtifact(artifact.body)
+      if (!parsedArtifact) return []
+      const releaseTemplates = hydrateReleaseTemplates(parsedArtifact.templates || [], release)
+      if (releaseTemplates.length > 0) {
+        return buildSubscriptionEntries(toNodeRecord(nodeRow), releaseTemplates)
+      }
+      return parsedArtifact.subscriptionEndpoints
+    }),
+  )
+  const entries = nodeEntries.flat()
 
   return {
     subscriptionId: subscription.id,

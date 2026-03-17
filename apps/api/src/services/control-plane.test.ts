@@ -348,15 +348,19 @@ describe('heartbeat persistence', () => {
     const slowNode = await createNode(services, createNodeInput({ name: 'Node Slow', primaryDomain: 'slow.example.com', heartbeatIntervalSeconds: 60 }))
     const staleNode = await createNode(services, createNodeInput({ name: 'Node Stale', primaryDomain: 'stale.example.com', heartbeatIntervalSeconds: 15 }))
 
-    await updateNode(services, fastNode.id, {
-      lastSeenAt: new Date(Date.now() - 20 * 1000).toISOString(),
-    })
-    await updateNode(services, slowNode.id, {
-      lastSeenAt: new Date(Date.now() - 100 * 1000).toISOString(),
-    })
-    await updateNode(services, staleNode.id, {
-      lastSeenAt: new Date(Date.now() - 40 * 1000).toISOString(),
-    })
+    // Use direct DB writes to set lastSeenAt since updateNode no longer touches runtime fields
+    await services.db.run(
+      'UPDATE nodes SET last_seen_at = ? WHERE id = ?',
+      [new Date(Date.now() - 20 * 1000).toISOString(), fastNode.id],
+    )
+    await services.db.run(
+      'UPDATE nodes SET last_seen_at = ? WHERE id = ?',
+      [new Date(Date.now() - 100 * 1000).toISOString(), slowNode.id],
+    )
+    await services.db.run(
+      'UPDATE nodes SET last_seen_at = ? WHERE id = ?',
+      [new Date(Date.now() - 40 * 1000).toISOString(), staleNode.id],
+    )
 
     const systemStatus = await buildSystemStatus(services)
     expect(systemStatus.summary.onlineCount).toBe(2)

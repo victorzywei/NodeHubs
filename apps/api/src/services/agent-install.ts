@@ -1,6 +1,7 @@
 import { DEFAULT_WARP_LOCAL_PROXY_PORT, type ReleaseArtifact } from '@contracts/index'
 import { AGENT_INSTALL_SCRIPT_TEMPLATE, RELEASE_APPLY_SCRIPT_TEMPLATE } from '../generated/script-assets'
 import { APP_VERSION } from '../lib/constants'
+import { uniqueValues } from '../lib/utils'
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`
@@ -256,17 +257,7 @@ export function buildAgentReconcileEnv(input: {
   ].join('\n')
 }
 
-function uniqueValues(values: string[]): string[] {
-  const seen = new Set<string>()
-  const output: string[] = []
-  for (const value of values) {
-    const normalized = value.trim()
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    output.push(normalized)
-  }
-  return output
-}
+
 
 function isIpLike(value: string): boolean {
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value)) return true

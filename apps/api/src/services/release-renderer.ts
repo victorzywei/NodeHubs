@@ -9,6 +9,17 @@ import type {
   TemplatePreset,
   TemplateRecord,
 } from '@contracts/index'
+import { readNumber, readString, readStringArray } from '../lib/utils'
+import {
+  DEFAULT_REALITY_FINGERPRINT,
+  DEFAULT_REALITY_FLOW,
+  DEFAULT_WIREGUARD_CLIENT_ADDRESS,
+  DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS,
+  DEFAULT_WIREGUARD_DNS,
+  DEFAULT_WIREGUARD_MTU,
+  DEFAULT_WIREGUARD_PORT,
+  DEFAULT_WIREGUARD_SERVER_ADDRESS,
+} from './template-constants'
 import { hydrateTemplatePreset, repairTemplateRecord } from './template-defaults'
 
 type RenderContext = {
@@ -70,14 +81,6 @@ type NormalizedTemplate = {
 const SUPPORTED_PROTOCOLS = new Set(['vless', 'trojan', 'shadowsocks', 'vmess', 'hysteria2', 'wireguard'])
 const SUPPORTED_TRANSPORTS = new Set(['ws', 'grpc', 'tcp', 'h2', 'hysteria2', 'xhttp', 'wireguard'])
 const WARP_LOCAL_PROXY_HOST = '127.0.0.1'
-const DEFAULT_REALITY_FLOW = 'xtls-rprx-vision'
-const DEFAULT_REALITY_FINGERPRINT = 'chrome'
-const DEFAULT_WIREGUARD_PORT = 51820
-const DEFAULT_WIREGUARD_SERVER_ADDRESS = '10.66.0.1/24'
-const DEFAULT_WIREGUARD_CLIENT_ADDRESS = '10.66.0.2/32'
-const DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS = ['0.0.0.0/0', '::/0']
-const DEFAULT_WIREGUARD_DNS = ['1.1.1.1', '8.8.8.8']
-const DEFAULT_WIREGUARD_MTU = 1408
 
 const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
@@ -232,40 +235,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
   },
 ]
 
-function readString(source: Record<string, unknown>, key: string, fallback = ''): string {
-  const value = source[key]
-  if (typeof value === 'string') {
-    const normalized = value.trim()
-    return normalized || fallback
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  return fallback
-}
 
-function readNumber(source: Record<string, unknown>, keys: string[], fallback: number): number {
-  for (const key of keys) {
-    const value = source[key]
-    if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value)
-    if (typeof value === 'string' && value.trim()) {
-      const parsed = Number(value)
-      if (Number.isFinite(parsed)) return Math.trunc(parsed)
-    }
-  }
-  return fallback
-}
-
-function readStringArray(source: Record<string, unknown>, key: string, fallback: string[] = []): string[] {
-  const value = source[key]
-  if (Array.isArray(value)) {
-    const items = value.map((item) => String(item ?? '').trim()).filter(Boolean)
-    return items.length > 0 ? items : fallback
-  }
-  if (typeof value === 'string') {
-    const items = value.split(',').map((item) => item.trim()).filter(Boolean)
-    return items.length > 0 ? items : fallback
-  }
-  return fallback
-}
 
 function normalizePath(value: string): string {
   if (!value) return '/'

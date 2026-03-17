@@ -1,4 +1,14 @@
 import type { TemplatePreset, TemplateRecord } from '@contracts/index'
+import { readString } from '../lib/utils'
+import {
+  DEFAULT_REALITY_FINGERPRINT,
+  DEFAULT_REALITY_FLOW,
+  DEFAULT_WIREGUARD_CLIENT_ADDRESS,
+  DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS,
+  DEFAULT_WIREGUARD_DNS,
+  DEFAULT_WIREGUARD_MTU,
+  DEFAULT_WIREGUARD_SERVER_ADDRESS,
+} from './template-constants'
 
 const SAMPLE_UUIDS = new Set([
   '00000000-0000-4000-8000-000000000001',
@@ -24,13 +34,7 @@ const SAMPLE_REALITY_SNI = [
   'www.ibm.com',
   'www.nvidia.com',
 ]
-const DEFAULT_REALITY_FLOW = 'xtls-rprx-vision'
-const DEFAULT_REALITY_FINGERPRINT = 'chrome'
-const DEFAULT_WIREGUARD_SERVER_ADDRESS = '10.66.0.1/24'
-const DEFAULT_WIREGUARD_CLIENT_ADDRESS = '10.66.0.2/32'
-const DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS = ['0.0.0.0/0', '::/0']
-const DEFAULT_WIREGUARD_DNS = ['1.1.1.1', '8.8.8.8']
-const DEFAULT_WIREGUARD_MTU = 1408
+
 
 type TemplateLike = Pick<TemplateRecord, 'protocol' | 'transport' | 'tlsMode' | 'defaults'>
 
@@ -74,12 +78,7 @@ function randomRealitySni(): string {
   return SAMPLE_REALITY_SNI[index] || SAMPLE_REALITY_SNI[0]
 }
 
-function readString(source: Record<string, unknown>, key: string, fallback = ''): string {
-  const value = source[key]
-  if (typeof value === 'string') return value.trim()
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  return fallback
-}
+
 
 function isPlaceholderSecret(value: string): boolean {
   if (!value) return true

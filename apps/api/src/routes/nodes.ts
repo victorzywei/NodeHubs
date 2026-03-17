@@ -142,30 +142,32 @@ nodeRoutes.get('/agent/install', async (c) => {
   const auth = requireAgentToken(c, nodeRow.agent_token)
   if (auth) return auth
 
+  const target = await getNodeInstallTarget(c.get('services'), nodeId)
+  if (!target) return fail('NOT_FOUND', 'Node not found', 404)
   const script = buildAgentInstallScript({
     publicBaseUrl: c.get('services').publicBaseUrl,
-    nodeId: nodeRow.id,
-    agentToken: nodeRow.agent_token,
-    networkType: (nodeRow.network_type as 'public' | 'noPublicIp') || 'public',
-    primaryDomain: nodeRow.primary_domain || '',
-    backupDomain: nodeRow.backup_domain || '',
-    entryIp: nodeRow.entry_ip || '',
-    githubMirrorUrl: nodeRow.github_mirror_url || '',
-    installWarp: Number(nodeRow.install_warp || 0) === 1,
-    warpLicenseKey: nodeRow.warp_license_key || '',
-    heartbeatIntervalSeconds: Number(nodeRow.heartbeat_interval_seconds || 15),
-    versionPullIntervalSeconds: Number(nodeRow.version_pull_interval_seconds || 15),
-    cfDnsToken: nodeRow.cf_dns_token || '',
-    argoTunnelToken: nodeRow.argo_tunnel_token || '',
-    argoTunnelDomain: nodeRow.argo_tunnel_domain || '',
-    argoTunnelPort: Number(nodeRow.argo_tunnel_port || 2053),
+    nodeId: target.id,
+    agentToken: target.agentToken,
+    networkType: target.networkType,
+    primaryDomain: target.primaryDomain,
+    backupDomain: target.backupDomain,
+    entryIp: target.entryIp,
+    githubMirrorUrl: target.githubMirrorUrl,
+    installWarp: target.installWarp,
+    warpLicenseKey: target.warpLicenseKey,
+    heartbeatIntervalSeconds: target.heartbeatIntervalSeconds,
+    versionPullIntervalSeconds: target.versionPullIntervalSeconds,
+    cfDnsToken: target.cfDnsToken,
+    argoTunnelToken: target.argoTunnelToken,
+    argoTunnelDomain: target.argoTunnelDomain,
+    argoTunnelPort: target.argoTunnelPort,
   })
   return new Response(script, {
     status: 200,
     headers: {
       'Content-Type': 'text/x-shellscript; charset=utf-8',
       'Cache-Control': 'no-store',
-      'Content-Disposition': `inline; filename="${nodeRow.name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase() || 'node'}-install.sh"`,
+      'Content-Disposition': `inline; filename="${target.name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase() || 'node'}-install.sh"`,
     },
   })
 })

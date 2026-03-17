@@ -1,0 +1,8 @@
+export const DEFAULT_REALITY_FLOW = 'xtls-rprx-vision'
+export const DEFAULT_REALITY_FINGERPRINT = 'chrome'
+export const DEFAULT_WIREGUARD_PORT = 51820
+export const DEFAULT_WIREGUARD_SERVER_ADDRESS = '10.66.0.1/24'
+export const DEFAULT_WIREGUARD_CLIENT_ADDRESS = '10.66.0.2/32'
+export const DEFAULT_WIREGUARD_CLIENT_ALLOWED_IPS = ['0.0.0.0/0', '::/0']
+export const DEFAULT_WIREGUARD_DNS = ['1.1.1.1', '8.8.8.8']
+export const DEFAULT_WIREGUARD_MTU = 1408
