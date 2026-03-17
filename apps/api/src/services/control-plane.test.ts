@@ -87,7 +87,7 @@ function createServices(): AppServices {
     appVersion: '0.1.13',
     mode: 'docker',
     dbDriver: 'sqlite',
-    artifactDriver: 'minio',
+    artifactDriver: 'local',
     adminKey: 'admin',
     publicBaseUrl: 'https://control.example.com',
     db: createSqliteAdapter(db),

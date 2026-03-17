@@ -165,7 +165,7 @@ export interface SystemStatus {
   appVersion: string
   mode: StorageMode
   databaseDriver: 'd1' | 'sqlite'
-  artifactDriver: 'r2' | 'minio'
+  artifactDriver: 'local' | 'r2'
   publicBaseUrl: string
   summary: DashboardSummary
   now: string

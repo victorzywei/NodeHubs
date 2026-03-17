@@ -5,12 +5,16 @@ import type { AppServices } from './lib/app-types'
 import type { SqlAdapter, SqlValue } from './lib/db'
 import { DatabaseSync, type DatabaseSyncInstance } from './lib/node-sqlite'
 import { resolveApiMigrationsDir, resolveApiStoragePath } from './lib/runtime-paths'
-import { MinioArtifactStore } from './storage/minio-store'
+import { FileArtifactStore } from './storage/file-store'
 
 let cachedServices: AppServices | null = null
 
 function resolveDbPath(): string {
   return process.env.SQLITE_FILE || resolveApiStoragePath('dev.db')
+}
+
+function resolveArtifactsDir(): string {
+  return process.env.ARTIFACTS_DIR || resolveApiStoragePath('artifacts')
 }
 
 function shouldIgnoreMigrationError(error: unknown): boolean {
@@ -76,21 +80,13 @@ export function getNodeServices(): AppServices {
   const sqlite = new DatabaseSync(dbPath)
   sqlite.exec('PRAGMA journal_mode = WAL;')
   applyMigrations(sqlite)
-  const artifacts = new MinioArtifactStore(
-    process.env.MINIO_BUCKET || 'nodehubsapi',
-    {
-      endpoint: process.env.MINIO_ENDPOINT || 'http://127.0.0.1:9000',
-      region: process.env.MINIO_REGION || 'auto',
-      accessKeyId: process.env.MINIO_ACCESS_KEY || 'minioadmin',
-      secretAccessKey: process.env.MINIO_SECRET_KEY || 'minioadmin',
-    },
-  )
+  const artifacts = new FileArtifactStore(resolveArtifactsDir())
 
   cachedServices = {
     appVersion: APP_VERSION,
     mode: 'docker',
     dbDriver: 'sqlite',
-    artifactDriver: 'minio',
+    artifactDriver: 'local',
     adminKey: process.env.ADMIN_KEY || '',
     publicBaseUrl: process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${process.env.PORT || '3000'}`,
     db: createSqliteAdapter(sqlite),

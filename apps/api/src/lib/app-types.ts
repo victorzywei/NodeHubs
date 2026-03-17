@@ -5,7 +5,7 @@ export interface AppServices {
   appVersion: string
   mode: 'cloudflare' | 'docker'
   dbDriver: 'd1' | 'sqlite'
-  artifactDriver: 'r2' | 'minio'
+  artifactDriver: 'local' | 'r2'
   adminKey: string
   publicBaseUrl: string
   db: SqlAdapter

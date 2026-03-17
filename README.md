@@ -3,7 +3,7 @@
 New control plane for dual deployment targets:
 
 - Cloudflare: Workers + D1 + R2 + Workers Assets
-- Docker on a single VPS: Node + SQLite + MinIO
+- Docker on a single VPS: Node + SQLite + local artifact files
 
 This project is greenfield. It does not preserve old project parameter names or old release payloads.
 
@@ -98,16 +98,40 @@ copy .env.example .env
 docker compose up --build
 ```
 
-Containers:
+Default runtime layout:
 
 - `app`: Node API + built web assets
-- `minio`: object storage
-- `minio-init`: bucket bootstrap
 
-Persistent volumes:
+Persistent volume:
 
-- `sqlite_data`
-- `minio_data`
+- `app_data` mounted at `/app/apps/api/storage`
+
+Default storage in Node mode:
+
+- SQLite database: `/app/apps/api/storage/nodehubsapi.db`
+- Release artifacts: `/app/apps/api/storage/artifacts`
+
+## ClawCloud deployment
+
+Recommended minimal setup for ClawCloud:
+
+- 1 app from your Docker image
+- 1 persistent volume mounted to `/app/apps/api/storage`
+- no bucket required
+
+Suggested environment variables:
+
+```bash
+ADMIN_KEY=change-me
+PUBLIC_BASE_URL=https://your-app-domain
+PORT=3000
+SQLITE_FILE=/app/apps/api/storage/nodehubsapi.db
+ARTIFACTS_DIR=/app/apps/api/storage/artifacts
+```
+
+After the app starts, open:
+
+- `GET /api/system/status` to confirm `databaseDriver=sqlite` and `artifactDriver=local`
 
 ## Cloudflare deployment
 
