@@ -285,6 +285,20 @@ describe('control-plane template validation', () => {
     expect(updated?.protocol).toBe('wireguard')
   })
 
+  it('rejects unsupported transports before templates are persisted', async () => {
+    const services = createServices()
+
+    await expect(
+      createTemplate(
+        services,
+        createValidTemplateInput({
+          name: 'Invalid h2 transport',
+          transport: 'h2',
+        }),
+      ),
+    ).rejects.toThrow(/unsupported transport/i)
+  })
+
   it('normalizes placeholder template defaults before persisting them', async () => {
     const services = createServices()
 

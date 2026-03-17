@@ -79,7 +79,7 @@ type NormalizedTemplate = {
 }
 
 const SUPPORTED_PROTOCOLS = new Set(['vless', 'trojan', 'shadowsocks', 'vmess', 'hysteria2', 'wireguard'])
-const SUPPORTED_TRANSPORTS = new Set(['ws', 'grpc', 'tcp', 'h2', 'hysteria2', 'xhttp', 'wireguard'])
+const SUPPORTED_TRANSPORTS = new Set(['ws', 'grpc', 'tcp', 'hysteria2', 'xhttp', 'wireguard'])
 const WARP_LOCAL_PROXY_HOST = '127.0.0.1'
 
 const TEMPLATE_PRESETS: TemplatePreset[] = [
@@ -359,6 +359,13 @@ function ensureTemplateCompatibility(template: TemplateRecord): void {
       throw new Error(`Template ${template.name} must use the tcp transport for reality`)
     }
   }
+}
+
+export function assertTemplateRuntimeSupport(
+  template: Pick<TemplateRecord, 'name' | 'engine' | 'protocol' | 'transport' | 'tlsMode'>,
+): void {
+  ensureProtocolSupport(template as TemplateRecord)
+  ensureTemplateCompatibility(template as TemplateRecord)
 }
 
 function defaultPort(template: TemplateRecord): number {

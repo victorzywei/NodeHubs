@@ -28,7 +28,7 @@ import type {
 import type { AppServices } from '../lib/app-types'
 import { APP_VERSION } from '../lib/constants'
 import { createId, createToken, nowIso, parseJsonObject } from '../lib/utils'
-import { buildSubscriptionEntries, parseReleaseArtifact, renderReleaseArtifact } from './release-renderer'
+import { assertTemplateRuntimeSupport, buildSubscriptionEntries, parseReleaseArtifact, renderReleaseArtifact } from './release-renderer'
 import { repairTemplateDefaults, repairTemplateRecord } from './template-defaults'
 
 type NodeRow = {
@@ -255,6 +255,7 @@ function parseTemplateInput(input: CreateTemplateInput): CreateTemplateInput {
   if (!parsed.success) {
     throw new Error(parsed.error.issues[0]?.message || 'invalid template body')
   }
+  assertTemplateRuntimeSupport(parsed.data)
   return {
     ...parsed.data,
     defaults: repairTemplateDefaults(parsed.data),
