@@ -762,6 +762,11 @@ function getNodeCheckCommands(node: NodeRecord) {
         `ss -ltnp 2>/dev/null | grep ':${DEFAULT_WARP_LOCAL_PROXY_PORT}[[:space:]]' || netstat -ltnp 2>/dev/null | grep ':${DEFAULT_WARP_LOCAL_PROXY_PORT}[[:space:]]' || echo 'port ${DEFAULT_WARP_LOCAL_PROXY_PORT} not listening'`,
       ]),
     },
+    {
+      title: 'warp-go 全局双栈',
+      description: '直接复制执行 fscarmen 的 warp-go 脚本，快速开启全局双栈。',
+      command: 'wget -N https://gitlab.com/fscarmen/warp/-/raw/main/warp-go.sh && bash warp-go.sh',
+    },
     buildRuntimeCheckCommand({
       title: 'sing-box 参数和日志',
       description: '单行查看 sing-box 配置、进程参数、状态和日志。',
