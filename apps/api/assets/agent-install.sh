@@ -746,8 +746,8 @@ install_xray_binary() {
     warn "unzip is required to install xray."
     return 1
   }
-  tag="$(get_latest_github_tag "XTLS/Xray-core" "v25.1.30")"
-  [ -n "$tag" ] || tag="v25.1.30"
+  tag="$(get_latest_github_tag "XTLS/Xray-core" "v26.2.6")"
+  [ -n "$tag" ] || tag="v26.2.6"
   zip_file="$TMP_DIR/xray.zip"
   unpack_dir="$TMP_DIR/xray"
   mkdir -p "$unpack_dir"
@@ -780,8 +780,8 @@ install_sing_box_binary() {
     warn "tar is required to install sing-box."
     return 1
   }
-  tag="$(get_latest_github_tag "SagerNet/sing-box" "v1.13.0")"
-  [ -n "$tag" ] || tag="v1.13.0"
+  tag="$(get_latest_github_tag "SagerNet/sing-box" "v1.13.2")"
+  [ -n "$tag" ] || tag="v1.13.2"
   version="${tag#v}"
   archive_file="$TMP_DIR/sing-box.tar.gz"
   unpack_dir="$TMP_DIR/sing-box"
