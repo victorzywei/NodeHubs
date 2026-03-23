@@ -1,0 +1,1 @@
+ALTER TABLE nodes ADD COLUMN edge_panel_url TEXT NOT NULL DEFAULT '';

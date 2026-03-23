@@ -55,6 +55,8 @@ type NodeRow = {
   entry_ip: string
   github_mirror_url: string
   edge_use_github_mirror: number
+  edge_uuid: string
+  edge_panel_url: string
   edge_deploy_asset_url: string
   edge_subscription_sources_json: string
   warp_license_key: string
@@ -165,6 +167,8 @@ const CONFIG_IMPACT_FIELDS = new Set([
   'entryIp',
   'githubMirrorUrl',
   'edgeUseGithubMirror',
+  'edgeUuid',
+  'edgePanelUrl',
   'edgeDeployAssetUrl',
   'edgeSubscriptionSources',
   'cfDnsToken',
@@ -215,10 +219,23 @@ function normalizeEdgeSubscriptionSources(value: unknown): EdgeSubscriptionSourc
     .sort((left, right) => left.format.localeCompare(right.format))
 }
 
+function generateEdgeUuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  const bytes = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256))
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80
+  const hex = bytes.map((value) => value.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 function normalizeNodeModeSpecificFields(input: CreateNodeInput): CreateNodeInput {
   const base: CreateNodeInput = {
     ...input,
     githubMirrorUrl: String(input.githubMirrorUrl || '').trim(),
+    edgeUuid: String(input.edgeUuid || '').trim(),
+    edgePanelUrl: String(input.edgePanelUrl || '').trim(),
     edgeDeployAssetUrl: String(input.edgeDeployAssetUrl || DEFAULT_EDGE_DEPLOY_ASSET_URL).trim() || DEFAULT_EDGE_DEPLOY_ASSET_URL,
     edgeSubscriptionSources: normalizeEdgeSubscriptionSources(input.edgeSubscriptionSources),
   }
@@ -230,6 +247,7 @@ function normalizeNodeModeSpecificFields(input: CreateNodeInput): CreateNodeInpu
       primaryDomain: '',
       backupDomain: '',
       entryIp: '',
+      edgeUuid: base.edgeUuid || generateEdgeUuid(),
       installWarp: false,
       warpLicenseKey: '',
       cfDnsToken: '',
@@ -244,6 +262,8 @@ function normalizeNodeModeSpecificFields(input: CreateNodeInput): CreateNodeInpu
   return {
     ...base,
     edgeUseGithubMirror: false,
+    edgeUuid: '',
+    edgePanelUrl: '',
     edgeDeployAssetUrl: DEFAULT_EDGE_DEPLOY_ASSET_URL,
     edgeSubscriptionSources: [],
   }
@@ -350,6 +370,8 @@ function toNodeRecord(row: NodeRow): NodeRecord {
     entryIp: row.entry_ip,
     githubMirrorUrl: row.github_mirror_url || '',
     edgeUseGithubMirror: toBool(row.edge_use_github_mirror),
+    edgeUuid: row.edge_uuid || '',
+    edgePanelUrl: row.edge_panel_url || '',
     edgeDeployAssetUrl: row.edge_deploy_asset_url || DEFAULT_EDGE_DEPLOY_ASSET_URL,
     edgeSubscriptionSources: normalizeEdgeSubscriptionSources(parseJsonObject<unknown[]>(row.edge_subscription_sources_json || '[]', [])),
     installWarp: toBool(row.install_warp),
@@ -650,7 +672,7 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
   await services.db.run(
     `INSERT INTO nodes (
       id, agent_token, name, node_type, region, tags_json, network_type, primary_domain, backup_domain, entry_ip,
-      github_mirror_url, edge_use_github_mirror, edge_deploy_asset_url, edge_subscription_sources_json,
+      github_mirror_url, edge_use_github_mirror, edge_uuid, edge_panel_url, edge_deploy_asset_url, edge_subscription_sources_json,
       warp_license_key, cf_dns_token, argo_tunnel_token, argo_tunnel_domain, argo_tunnel_port,
       install_warp, config_revision, desired_release_revision, current_release_revision, current_release_status,
       heartbeat_interval_seconds, version_pull_interval_seconds, bytes_in_total, bytes_out_total, current_connections,
@@ -660,11 +682,11 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       xray_version, xray_status, protocol_runtime_version, created_at, updated_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?
+        ?, ?, ?, ?
       )`,
     [
       id,
@@ -679,6 +701,8 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       nextNode.entryIp,
       nextNode.githubMirrorUrl,
       edgeUseGithubMirror,
+      nextNode.edgeUuid || '',
+      nextNode.edgePanelUrl || '',
       nextNode.edgeDeployAssetUrl || DEFAULT_EDGE_DEPLOY_ASSET_URL,
       JSON.stringify(normalizeEdgeSubscriptionSources(nextNode.edgeSubscriptionSources)),
       warpLicenseKey,
@@ -742,6 +766,8 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
     entryIp: input.entryIp ?? current.entry_ip,
     githubMirrorUrl: input.githubMirrorUrl ?? current.github_mirror_url,
     edgeUseGithubMirror: input.edgeUseGithubMirror ?? toBool(current.edge_use_github_mirror),
+    edgeUuid: input.edgeUuid ?? current.edge_uuid,
+    edgePanelUrl: input.edgePanelUrl ?? current.edge_panel_url,
     edgeDeployAssetUrl: input.edgeDeployAssetUrl ?? current.edge_deploy_asset_url,
     edgeSubscriptionSources: input.edgeSubscriptionSources ?? normalizeEdgeSubscriptionSources(parseJsonObject<unknown[]>(current.edge_subscription_sources_json || '[]', [])),
     installWarp: input.installWarp ?? toBool(current.install_warp),
@@ -767,7 +793,7 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
     `UPDATE nodes
       SET name = ?, node_type = ?, region = ?, tags_json = ?, network_type = ?,
           primary_domain = ?, backup_domain = ?, entry_ip = ?,
-          github_mirror_url = ?, edge_use_github_mirror = ?, edge_deploy_asset_url = ?, edge_subscription_sources_json = ?,
+          github_mirror_url = ?, edge_use_github_mirror = ?, edge_uuid = ?, edge_panel_url = ?, edge_deploy_asset_url = ?, edge_subscription_sources_json = ?,
           warp_license_key = ?, cf_dns_token = ?,
           argo_tunnel_token = ?, argo_tunnel_domain = ?, argo_tunnel_port = ?,
           install_warp = ?, heartbeat_interval_seconds = ?, version_pull_interval_seconds = ?,
@@ -784,6 +810,8 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       nextNode.entryIp,
       nextNode.githubMirrorUrl,
       edgeUseGithubMirror,
+      nextNode.edgeUuid || '',
+      nextNode.edgePanelUrl || '',
       nextNode.edgeDeployAssetUrl || DEFAULT_EDGE_DEPLOY_ASSET_URL,
       JSON.stringify(normalizeEdgeSubscriptionSources(nextNode.edgeSubscriptionSources)),
       warpLicenseKey,

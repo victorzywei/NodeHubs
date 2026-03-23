@@ -559,6 +559,7 @@ function createDefaultNewNode() {
     networkType:'public' as 'public'|'noPublicIp',
     primaryDomain:'', backupDomain:'', entryIp:'',
     useGithubMirror:false, githubMirrorUrl:'',
+    edgeUuid: generateUUID(),
     edgeDeployAssetUrl: DEFAULT_EDGE_DEPLOY_ASSET_URL,
     edgeSourceUrls: createEmptyEdgeSourceDraft(),
     installWarp:false,
@@ -579,6 +580,8 @@ const edgeSourceProbeReport = ref<EdgeSubscriptionProbeResponse | null>(null)
 const edgeSettingsDraft = ref({
   useGithubMirror: false,
   githubMirrorUrl: '',
+  edgeUuid: '',
+  edgePanelUrl: '',
   edgeDeployAssetUrl: DEFAULT_EDGE_DEPLOY_ASSET_URL,
   edgeSourceUrls: createEmptyEdgeSourceDraft(),
 })
@@ -613,6 +616,8 @@ function syncEdgeSettingsDraft(node: NodeRecord | null) {
     edgeSettingsDraft.value = {
       useGithubMirror: false,
       githubMirrorUrl: '',
+      edgeUuid: '',
+      edgePanelUrl: '',
       edgeDeployAssetUrl: DEFAULT_EDGE_DEPLOY_ASSET_URL,
       edgeSourceUrls: createEmptyEdgeSourceDraft(),
     }
@@ -621,6 +626,8 @@ function syncEdgeSettingsDraft(node: NodeRecord | null) {
   edgeSettingsDraft.value = {
     useGithubMirror: node.edgeUseGithubMirror === true,
     githubMirrorUrl: node.githubMirrorUrl || '',
+    edgeUuid: node.edgeUuid || generateUUID(),
+    edgePanelUrl: node.edgePanelUrl || '',
     edgeDeployAssetUrl: node.edgeDeployAssetUrl || DEFAULT_EDGE_DEPLOY_ASSET_URL,
     edgeSourceUrls: createEdgeSourceDraft(node.edgeSubscriptionSources),
   }
@@ -676,6 +683,15 @@ function openEdgeDraftDeployDownload() {
   window.open(url, '_blank', 'noopener,noreferrer')
 }
 
+function openEdgeExternalLink() {
+  const url = edgeSettingsDraft.value.edgePanelUrl.trim()
+  if (!url) {
+    toast('error', '璇峰厛濉啓澶栭摼鍦板潃')
+    return
+  }
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
 async function createNode() {
   const n = newNode.value
   const githubMirrorUrl = n.useGithubMirror ? (n.githubMirrorUrl.trim() || DEFAULT_GITHUB_MIRROR_URL) : ''
@@ -690,8 +706,9 @@ async function createNode() {
       entryIp: n.nodeType === 'vps' && n.networkType === 'public' ? n.entryIp.trim() : '',
       githubMirrorUrl,
       edgeUseGithubMirror: n.nodeType === 'edge' ? n.useGithubMirror : false,
+      edgeUuid: n.nodeType === 'edge' ? n.edgeUuid : '',
       edgeDeployAssetUrl: n.nodeType === 'edge' ? (n.edgeDeployAssetUrl.trim() || DEFAULT_EDGE_DEPLOY_ASSET_URL) : DEFAULT_EDGE_DEPLOY_ASSET_URL,
-      edgeSubscriptionSources: n.nodeType === 'edge' ? buildEdgeSubscriptionSourcesPayload(n.edgeSourceUrls) : [],
+      edgeSubscriptionSources: [],
       installWarp: n.nodeType === 'vps' ? n.installWarp : false,
       warpLicenseKey: n.nodeType === 'vps' && n.installWarp ? n.warpLicenseKey.trim() : '',
       heartbeatIntervalSeconds: n.nodeType === 'vps' ? (n.heartbeatIntervalSeconds || 15) : 15,
@@ -743,6 +760,8 @@ async function saveSelectedEdgeSettings() {
     await api.updateNode(adminKey.value, selectedNode.value.id, {
       githubMirrorUrl,
       edgeUseGithubMirror: edgeSettingsDraft.value.useGithubMirror,
+      edgeUuid: edgeSettingsDraft.value.edgeUuid.trim() || generateUUID(),
+      edgePanelUrl: edgeSettingsDraft.value.edgePanelUrl.trim(),
       edgeDeployAssetUrl: edgeSettingsDraft.value.edgeDeployAssetUrl.trim() || DEFAULT_EDGE_DEPLOY_ASSET_URL,
       edgeSubscriptionSources: buildEdgeSubscriptionSourcesPayload(edgeSettingsDraft.value.edgeSourceUrls),
     })
@@ -781,6 +800,10 @@ async function testSelectedEdgeSources() {
   } finally {
     edgeSourceProbeLoading.value = false
   }
+}
+
+function regenerateSelectedEdgeUuid() {
+  edgeSettingsDraft.value.edgeUuid = generateUUID()
 }
 
 function copyToClipboard(text: string) {
@@ -2614,6 +2637,8 @@ onMounted(() => {
             <div class="detail-row"><span class="detail-label">类型</span><span class="detail-value"><span class="tag" :class="{accent:selectedNode.nodeType==='edge'}">{{ selectedNode.nodeType }}</span></span></div>
             <div class="detail-row"><span class="detail-label">地区</span><span class="detail-value">{{ selectedNode.region || '-' }}</span></div>
             <template v-if="selectedNode.nodeType === 'edge'">
+              <div class="detail-row"><span class="detail-label">UUID</span><span class="detail-value text-mono">{{ selectedNode.edgeUuid || '-' }}</span></div>
+              <div class="detail-row"><span class="detail-label">外链地址</span><span class="detail-value text-mono">{{ selectedNode.edgePanelUrl || '-' }}</span></div>
               <div class="detail-row"><span class="detail-label">部署文件</span><span class="detail-value text-mono">{{ selectedNode.edgeDeployAssetUrl || DEFAULT_EDGE_DEPLOY_ASSET_URL }}</span></div>
               <div class="detail-row"><span class="detail-label">镜像下载</span><span class="detail-value">{{ selectedNode.edgeUseGithubMirror ? '已启用' : '未启用' }}</span></div>
               <div class="detail-row"><span class="detail-label">订阅格式</span><span class="detail-value">{{ getEdgeConfiguredFormats(selectedNode).length ? getEdgeConfiguredFormats(selectedNode).join(' / ') : '未配置' }}</span></div>
@@ -2639,6 +2664,17 @@ onMounted(() => {
                 <input class="form-input" v-model="edgeSettingsDraft.githubMirrorUrl" placeholder="默认 https://gh-proxy.org，可自定义" />
               </div>
               <div class="form-group">
+                <label class="form-label">UUID</label>
+                <div style="display:flex;gap:8px">
+                  <input class="form-input text-mono" v-model="edgeSettingsDraft.edgeUuid" placeholder="自动生成的 UUID" />
+                  <button class="btn btn-secondary btn-sm" type="button" @click="regenerateSelectedEdgeUuid">生成</button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">外链地址</label>
+                <input class="form-input" v-model="edgeSettingsDraft.edgePanelUrl" placeholder="https://example.com" />
+              </div>
+              <div class="form-group">
                 <label class="form-label">部署文件链接</label>
                 <input class="form-input" v-model="edgeSettingsDraft.edgeDeployAssetUrl" placeholder="https://github.com/byJoey/cfnew/releases/latest/download/Pages.zip" />
               </div>
@@ -2646,6 +2682,7 @@ onMounted(() => {
                 用户可以通过这里下载 Worker/Pages 部署文件。启用 GitHub 镜像后，下载按钮会自动拼接镜像前缀。
               </div>
               <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-secondary btn-sm" :disabled="!edgeSettingsDraft.edgePanelUrl.trim()" @click="openEdgeExternalLink">打开外链</button>
                 <button class="btn btn-secondary btn-sm" @click="openEdgeDraftDeployDownload">部署文件下载</button>
                 <button class="btn btn-secondary btn-sm" :disabled="!getEdgeDraftDeployDownloadUrl()" @click="copyToClipboard(getEdgeDraftDeployDownloadUrl())">复制下载链接</button>
                 <button class="btn btn-primary btn-sm" :disabled="edgeSettingsSaving" @click="saveSelectedEdgeSettings">{{ edgeSettingsSaving ? '保存中...' : '保存 Edge 设置' }}</button>
@@ -2942,14 +2979,8 @@ onMounted(() => {
             <div class="text-muted" style="margin-bottom:12px;font-size:12px">
               默认提供 `Pages.zip` 下载地址，便于用户部署 Worker/Pages。启用 GitHub 镜像后，下载链接会自动走镜像前缀。
             </div>
-
-            <div class="form-section-divider">上游订阅源</div>
             <div class="text-muted" style="margin-bottom:12px;font-size:12px">
-              可以为不同客户端格式分别填写外部订阅地址。后续用户通过我们的订阅链接更新时，会优先命中对应格式。
-            </div>
-            <div v-for="field in EDGE_SOURCE_FIELDS" :key="field.format" class="form-group">
-              <label class="form-label">{{ field.label }}</label>
-              <input class="form-input" v-model="newNode.edgeSourceUrls[field.format]" :placeholder="field.placeholder" />
+              创建时无需填写订阅地址，节点创建完成后可在详情页中统一配置上游订阅源。UUID 会自动生成，后续也可在详情页重新生成。
             </div>
           </template>
           <template v-else>

@@ -174,6 +174,7 @@ describe('control-plane release flow', () => {
       installWarp: true,
       edgeUseGithubMirror: true,
       githubMirrorUrl: 'https://gh-proxy.test',
+      edgePanelUrl: 'https://edge.example.com/settings',
       edgeDeployAssetUrl: 'https://github.com/byJoey/cfnew/releases/latest/download/Pages.zip',
       edgeSubscriptionSources: [
         { format: 'plain', url: 'https://example.com/plain-sub.txt', enabled: true },
@@ -187,6 +188,8 @@ describe('control-plane release flow', () => {
     expect(edgeNode.entryIp).toBe('')
     expect(edgeNode.installWarp).toBe(false)
     expect(edgeNode.edgeUseGithubMirror).toBe(true)
+    expect(edgeNode.edgeUuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+    expect(edgeNode.edgePanelUrl).toBe('https://edge.example.com/settings')
     expect(edgeNode.edgeDeployAssetUrl).toBe('https://github.com/byJoey/cfnew/releases/latest/download/Pages.zip')
     expect(edgeNode.edgeSubscriptionSources).toEqual([
       { format: 'clash', url: 'https://example.com/clash.yaml', enabled: true },
@@ -194,6 +197,35 @@ describe('control-plane release flow', () => {
     ])
 
     await expect(publishNodeRelease(services, edgeNode.id, [], 'ship edge')).rejects.toThrow('Edge nodes do not support runtime releases')
+  })
+
+  it('updates the edge external link independently from subscription sources', async () => {
+    const services = createServices()
+    const edgeNode = await createNode(services, createNodeInput({
+      name: 'Edge Link',
+      nodeType: 'edge',
+    }))
+
+    const updated = await updateNode(services, edgeNode.id, {
+      edgePanelUrl: 'https://edge.example.com/panel',
+    })
+
+    expect(updated?.edgePanelUrl).toBe('https://edge.example.com/panel')
+    expect(updated?.edgeSubscriptionSources).toEqual([])
+  })
+
+  it('allows rotating the edge UUID after creation', async () => {
+    const services = createServices()
+    const edgeNode = await createNode(services, createNodeInput({
+      name: 'Edge UUID',
+      nodeType: 'edge',
+    }))
+
+    const updated = await updateNode(services, edgeNode.id, {
+      edgeUuid: '22222222-2222-4222-8222-222222222222',
+    })
+
+    expect(updated?.edgeUuid).toBe('22222222-2222-4222-8222-222222222222')
   })
 
   it('stops reconcile delivery after a failed template release without rolling desired revision back', async () => {

@@ -71,6 +71,8 @@ export interface NodeRecord {
   entryIp: string
   githubMirrorUrl: string
   edgeUseGithubMirror?: boolean
+  edgeUuid?: string
+  edgePanelUrl?: string
   edgeDeployAssetUrl?: string
   edgeSubscriptionSources?: EdgeSubscriptionSource[]
   installWarp: boolean

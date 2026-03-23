@@ -121,7 +121,13 @@ function isHttpUrl(value: string) {
   }
 }
 
+function isUuidLike(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
 const httpUrlSchema = z.string().trim().max(2000).refine(isHttpUrl, 'Must be a valid http(s) URL')
+const optionalHttpUrlSchema = z.string().trim().max(2000).refine((value) => value.length === 0 || isHttpUrl(value), 'Must be a valid http(s) URL')
+const edgeUuidSchema = z.string().trim().max(64).refine((value) => value.length === 0 || isUuidLike(value), 'Must be a valid UUID')
 export const edgeSubscriptionSourceSchema = z.object({
   format: subscriptionDocumentFormatSchema,
   url: httpUrlSchema,
@@ -143,6 +149,8 @@ const nodeSchemaBase = z.object({
   entryIp: z.string().trim().max(255).default(''),
   githubMirrorUrl: z.string().trim().max(500).default(''),
   edgeUseGithubMirror: z.boolean().default(false),
+  edgeUuid: edgeUuidSchema.optional(),
+  edgePanelUrl: optionalHttpUrlSchema.optional(),
   edgeDeployAssetUrl: httpUrlSchema.default(DEFAULT_EDGE_DEPLOY_ASSET_URL),
   edgeSubscriptionSources: z.array(edgeSubscriptionSourceSchema).max(32).default([]),
   installWarp: z.boolean().default(false),

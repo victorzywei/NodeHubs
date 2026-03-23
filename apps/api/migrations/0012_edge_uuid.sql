@@ -1,0 +1,1 @@
+ALTER TABLE nodes ADD COLUMN edge_uuid TEXT NOT NULL DEFAULT '';
