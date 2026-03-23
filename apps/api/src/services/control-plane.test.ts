@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { describe, expect, it } from 'vitest'
-import type { CreateNodeInput, CreateTemplateInput } from '@contracts/index'
+import { describe, expect, it, vi } from 'vitest'
+import { DEFAULT_EDGE_DEPLOY_ASSET_URL, type CreateNodeInput, type CreateTemplateInput } from '@contracts/index'
 import type { AppServices } from '../lib/app-types'
 import type { SqlAdapter, SqlValue } from '../lib/db'
 import type { ArtifactStore, StoredArtifact } from '../storage/types'
@@ -11,6 +11,7 @@ import {
   acknowledgeRelease,
   buildSystemStatus,
   buildPublicSubscriptionDocument,
+  buildRenderedPublicSubscriptionDocument,
   createNode,
   createSubscription,
   createTemplate,
@@ -19,6 +20,7 @@ import {
   getNodeById,
   getNodeReleaseLog,
   previewNodeRelease,
+  probeNodeEdgeSubscriptionSources,
   publishNodeRelease,
   recordHeartbeat,
   updateNode,
@@ -107,6 +109,9 @@ function createNodeInput(overrides: Partial<CreateNodeInput> = {}): CreateNodeIn
     backupDomain: '',
     entryIp: '203.0.113.10',
     githubMirrorUrl: '',
+    edgeUseGithubMirror: false,
+    edgeDeployAssetUrl: DEFAULT_EDGE_DEPLOY_ASSET_URL,
+    edgeSubscriptionSources: [],
     installWarp: false,
     warpLicenseKey: '',
     cfDnsToken: '',
@@ -156,6 +161,39 @@ describe('control-plane release flow', () => {
     expect(updated?.heartbeatIntervalSeconds).toBe(30)
     expect(updated?.versionPullIntervalSeconds).toBe(60)
     expect(updated?.configRevision).toBe(node.configRevision)
+  })
+
+  it('stores edge node settings separately from vps runtime fields', async () => {
+    const services = createServices()
+    const edgeNode = await createNode(services, createNodeInput({
+      name: 'Edge Source',
+      nodeType: 'edge',
+      networkType: 'noPublicIp',
+      primaryDomain: 'should-be-cleared.example.com',
+      entryIp: '198.51.100.10',
+      installWarp: true,
+      edgeUseGithubMirror: true,
+      githubMirrorUrl: 'https://gh-proxy.test',
+      edgeDeployAssetUrl: 'https://github.com/byJoey/cfnew/releases/latest/download/Pages.zip',
+      edgeSubscriptionSources: [
+        { format: 'plain', url: 'https://example.com/plain-sub.txt', enabled: true },
+        { format: 'clash', url: 'https://example.com/clash.yaml', enabled: true },
+      ],
+    }))
+
+    expect(edgeNode.nodeType).toBe('edge')
+    expect(edgeNode.networkType).toBe('public')
+    expect(edgeNode.primaryDomain).toBe('')
+    expect(edgeNode.entryIp).toBe('')
+    expect(edgeNode.installWarp).toBe(false)
+    expect(edgeNode.edgeUseGithubMirror).toBe(true)
+    expect(edgeNode.edgeDeployAssetUrl).toBe('https://github.com/byJoey/cfnew/releases/latest/download/Pages.zip')
+    expect(edgeNode.edgeSubscriptionSources).toEqual([
+      { format: 'clash', url: 'https://example.com/clash.yaml', enabled: true },
+      { format: 'plain', url: 'https://example.com/plain-sub.txt', enabled: true },
+    ])
+
+    await expect(publishNodeRelease(services, edgeNode.id, [], 'ship edge')).rejects.toThrow('Edge nodes do not support runtime releases')
   })
 
   it('stops reconcile delivery after a failed template release without rolling desired revision back', async () => {
@@ -565,5 +603,87 @@ describe('subscription documents', () => {
 
     const deleted = await deleteSubscription(services, subscription.id)
     expect(deleted).toBe(true)
+  })
+
+  it('merges edge upstream documents into the rendered subscription output', async () => {
+    const services = createServices()
+    const edgeNode = await createNode(services, createNodeInput({
+      name: 'Edge Upstream',
+      nodeType: 'edge',
+      edgeSubscriptionSources: [
+        { format: 'plain', url: 'https://example.com/plain-sub.txt', enabled: true },
+      ],
+    }))
+    const subscription = await createSubscription(services, {
+      name: 'Edge Only',
+      enabled: true,
+      visibleNodeIds: [edgeNode.id],
+    })
+
+    const originalFetch = globalThis.fetch
+    const fetchMock = vi.fn(async () => new Response('vless://edge-a\nvless://edge-b', {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain' },
+    }))
+    Object.defineProperty(globalThis, 'fetch', {
+      value: fetchMock,
+      configurable: true,
+      writable: true,
+    })
+
+    try {
+      const rendered = await buildRenderedPublicSubscriptionDocument(services, subscription.token, 'plain')
+      expect(rendered?.body).toContain('vless://edge-a')
+      expect(rendered?.body).toContain('vless://edge-b')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const firstFetchCall = fetchMock.mock.calls[0] as readonly unknown[] | undefined
+      const firstFetchUrl = typeof firstFetchCall?.[0] === 'string' ? firstFetchCall[0] : ''
+      expect(String(firstFetchUrl)).toBe('https://example.com/plain-sub.txt')
+    } finally {
+      Object.defineProperty(globalThis, 'fetch', {
+        value: originalFetch,
+        configurable: true,
+        writable: true,
+      })
+    }
+  })
+
+  it('probes edge upstream subscription sources through the same server-side fetch path', async () => {
+    const services = createServices()
+    const edgeNode = await createNode(services, createNodeInput({
+      name: 'Edge Probe',
+      nodeType: 'edge',
+    }))
+
+    const originalFetch = globalThis.fetch
+    const fetchMock = vi.fn(async () => new Response('vless://edge-probe', {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    }))
+    Object.defineProperty(globalThis, 'fetch', {
+      value: fetchMock,
+      configurable: true,
+      writable: true,
+    })
+
+    try {
+      const report = await probeNodeEdgeSubscriptionSources(services, edgeNode.id, [
+        { format: 'plain', url: 'https://example.com/plain-sub.txt', enabled: true },
+      ])
+      expect(report?.successCount).toBe(1)
+      expect(report?.failureCount).toBe(0)
+      expect(report?.results[0]).toMatchObject({
+        format: 'plain',
+        url: 'https://example.com/plain-sub.txt',
+        ok: true,
+        status: 200,
+      })
+    } finally {
+      Object.defineProperty(globalThis, 'fetch', {
+        value: originalFetch,
+        configurable: true,
+        writable: true,
+      })
+    }
   })
 })

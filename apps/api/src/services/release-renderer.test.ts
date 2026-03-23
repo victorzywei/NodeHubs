@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_WARP_LOCAL_PROXY_PORT, type NodeRecord, type TemplateRecord } from '@contracts/index'
+import { DEFAULT_EDGE_DEPLOY_ASSET_URL, DEFAULT_WARP_LOCAL_PROXY_PORT, type NodeRecord, type TemplateRecord } from '@contracts/index'
 import { listTemplatePresets, parseReleaseArtifact, renderReleaseArtifact, renderSubscriptionDocument } from './release-renderer'
 
 function createNode(): NodeRecord {
@@ -14,6 +14,9 @@ function createNode(): NodeRecord {
     backupDomain: '',
     entryIp: '203.0.113.1',
     githubMirrorUrl: '',
+    edgeUseGithubMirror: false,
+    edgeDeployAssetUrl: DEFAULT_EDGE_DEPLOY_ASSET_URL,
+    edgeSubscriptionSources: [],
     installWarp: false,
     warpLicenseKey: '',
     cfDnsToken: '',

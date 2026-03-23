@@ -2,8 +2,13 @@ import { Hono } from 'hono'
 import { createSubscriptionSchema, subscriptionDocumentFormatSchema, updateSubscriptionSchema } from '@contracts/index'
 import { requireAdmin } from '../lib/auth'
 import { fail, ok } from '../lib/response'
-import { buildPublicSubscriptionDocument, createSubscription, deleteSubscription, listSubscriptions, updateSubscription } from '../services/control-plane'
-import { renderSubscriptionDocument } from '../services/release-renderer'
+import {
+  buildRenderedPublicSubscriptionDocument,
+  createSubscription,
+  deleteSubscription,
+  listSubscriptions,
+  updateSubscription,
+} from '../services/control-plane'
 import type { AppServices } from '../lib/app-types'
 
 type AppEnv = { Variables: { services: AppServices } }
@@ -52,10 +57,8 @@ publicSubscriptionRoutes.get('/:token', async (c) => {
     return fail('VALIDATION', 'format must be plain, base64, json, v2ray, clash, singbox, or wireguard', 400)
   }
 
-  const payload = await buildPublicSubscriptionDocument(c.get('services'), c.req.param('token'))
-  if (!payload) return fail('NOT_FOUND', 'Subscription not found', 404)
-
-  const rendered = renderSubscriptionDocument(payload, format.data)
+  const rendered = await buildRenderedPublicSubscriptionDocument(c.get('services'), c.req.param('token'), format.data)
+  if (!rendered) return fail('NOT_FOUND', 'Subscription not found', 404)
   return new Response(rendered.body, {
     status: 200,
     headers: {

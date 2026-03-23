@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { createNodeSchema, heartbeatSchema, publishNodeSchema, updateNodeSchema } from '@contracts/index'
+import { createNodeSchema, edgeSourceProbeSchema, heartbeatSchema, publishNodeSchema, updateNodeSchema } from '@contracts/index'
 import { requireAdmin, requireAgentToken } from '../lib/auth'
 import { fail, ok } from '../lib/response'
 import {
@@ -15,6 +15,7 @@ import {
   listNodeTraffic,
   listNodes,
   previewNodeRelease,
+  probeNodeEdgeSubscriptionSources,
   publishNodeRelease,
   recordHeartbeat,
   resolveAgentNode,
@@ -60,6 +61,21 @@ nodeRoutes.patch('/:id', async (c) => {
   const node = await updateNode(c.get('services'), c.req.param('id'), parsed.data)
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
   return ok(node)
+})
+
+nodeRoutes.post('/:id/edge-source-probe', async (c) => {
+  const auth = requireAdmin(c)
+  if (auth) return auth
+  const body = await c.req.json().catch(() => null)
+  const parsed = edgeSourceProbeSchema.safeParse(body)
+  if (!parsed.success) return fail('VALIDATION', parsed.error.issues[0]?.message || 'invalid edge source probe body', 400)
+  try {
+    const result = await probeNodeEdgeSubscriptionSources(c.get('services'), c.req.param('id'), parsed.data.sources)
+    if (!result) return fail('NOT_FOUND', 'Node not found', 404)
+    return ok(result)
+  } catch (error) {
+    return fail('EDGE_SOURCE_PROBE_FAILED', error instanceof Error ? error.message : 'Failed to probe edge sources', 400)
+  }
 })
 
 nodeRoutes.delete('/:id', async (c) => {
@@ -143,7 +159,11 @@ nodeRoutes.get('/agent/install', async (c) => {
   if (auth) return auth
 
   const target = await getNodeInstallTarget(c.get('services'), nodeId)
-  if (!target) return fail('NOT_FOUND', 'Node not found', 404)
+  if (!target) {
+    const node = await getNodeById(c.get('services'), nodeId)
+    if (node?.nodeType === 'edge') return fail('UNSUPPORTED', 'Edge nodes do not support install scripts', 400)
+    return fail('NOT_FOUND', 'Node not found', 404)
+  }
   const script = buildAgentInstallScript({
     publicBaseUrl: c.get('services').publicBaseUrl,
     nodeId: target.id,
@@ -176,7 +196,11 @@ nodeRoutes.get('/:id/install-script', async (c) => {
   const auth = requireAdmin(c)
   if (auth) return auth
   const target = await getNodeInstallTarget(c.get('services'), c.req.param('id'))
-  if (!target) return fail('NOT_FOUND', 'Node not found', 404)
+  if (!target) {
+    const node = await getNodeById(c.get('services'), c.req.param('id'))
+    if (node?.nodeType === 'edge') return fail('UNSUPPORTED', 'Edge nodes do not support install scripts', 400)
+    return fail('NOT_FOUND', 'Node not found', 404)
+  }
   const script = buildAgentInstallScript({
     publicBaseUrl: c.get('services').publicBaseUrl,
     nodeId: target.id,
@@ -209,7 +233,11 @@ nodeRoutes.get('/:id/deploy-command', async (c) => {
   const auth = requireAdmin(c)
   if (auth) return auth
   const target = await getNodeInstallTarget(c.get('services'), c.req.param('id'))
-  if (!target) return fail('NOT_FOUND', 'Node not found', 404)
+  if (!target) {
+    const node = await getNodeById(c.get('services'), c.req.param('id'))
+    if (node?.nodeType === 'edge') return fail('UNSUPPORTED', 'Edge nodes do not support deploy commands', 400)
+    return fail('NOT_FOUND', 'Node not found', 404)
+  }
   const command = buildDeployCommand({
     publicBaseUrl: c.get('services').publicBaseUrl,
     nodeId: target.id,
@@ -236,6 +264,7 @@ nodeRoutes.get('/:id/uninstall-command', async (c) => {
   if (auth) return auth
   const node = await getNodeById(c.get('services'), c.req.param('id'))
   if (!node) return fail('NOT_FOUND', 'Node not found', 404)
+  if (node.nodeType === 'edge') return fail('UNSUPPORTED', 'Edge nodes do not support uninstall commands', 400)
   const command = buildUninstallCommand()
   return ok({ command })
 })

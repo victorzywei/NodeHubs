@@ -12,6 +12,7 @@ export type StorageMode = 'cloudflare' | 'docker'
 export type SubscriptionDocumentFormat = 'plain' | 'base64' | 'json' | 'v2ray' | 'clash' | 'singbox' | 'wireguard'
 
 export const DEFAULT_WARP_LOCAL_PROXY_PORT = 23499
+export const DEFAULT_EDGE_DEPLOY_ASSET_URL = 'https://github.com/byJoey/cfnew/releases/latest/download/Pages.zip'
 export const NODE_OFFLINE_MULTIPLIER = 2.1
 export const DEFAULT_NODE_HEARTBEAT_INTERVAL_SECONDS = 15
 export const MIN_NODE_HEARTBEAT_INTERVAL_SECONDS = 5
@@ -33,6 +34,31 @@ export function isNodeOnline(lastSeenAt: string | null | undefined, heartbeatInt
   return Number.isFinite(lastSeen) && Date.now() - lastSeen <= getNodeOfflineThresholdMs(heartbeatIntervalSeconds)
 }
 
+export interface EdgeSubscriptionSource {
+  format: SubscriptionDocumentFormat
+  url: string
+  enabled: boolean
+}
+
+export interface EdgeSubscriptionProbeResult {
+  format: SubscriptionDocumentFormat
+  url: string
+  ok: boolean
+  status?: number
+  statusText?: string
+  contentType?: string
+  bytes?: number
+  finalUrl?: string
+  error?: string
+}
+
+export interface EdgeSubscriptionProbeResponse {
+  testedAt: string
+  successCount: number
+  failureCount: number
+  results: EdgeSubscriptionProbeResult[]
+}
+
 export interface NodeRecord {
   id: string
   name: string
@@ -44,6 +70,9 @@ export interface NodeRecord {
   backupDomain: string
   entryIp: string
   githubMirrorUrl: string
+  edgeUseGithubMirror?: boolean
+  edgeDeployAssetUrl?: string
+  edgeSubscriptionSources?: EdgeSubscriptionSource[]
   installWarp: boolean
   warpLicenseKey: string
   cfDnsToken: string

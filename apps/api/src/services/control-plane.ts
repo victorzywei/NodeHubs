@@ -1,10 +1,13 @@
 import {
   createNodeSchema,
+  DEFAULT_EDGE_DEPLOY_ASSET_URL,
   isNodeOnline,
   createTemplateSchema,
 } from '@contracts/index'
 import type {
   CreateNodeInput,
+  EdgeSubscriptionProbeResponse,
+  EdgeSubscriptionSource,
   CreateSubscriptionInput,
   CreateTemplateInput,
   DashboardSummary,
@@ -19,6 +22,7 @@ import type {
   ReleaseStatus,
   SubscriptionRecord,
   SystemStatus,
+  SubscriptionDocumentFormat,
   TemplateRecord,
   TrafficSample,
   UpdateNodeInput,
@@ -28,7 +32,14 @@ import type {
 import type { AppServices } from '../lib/app-types'
 import { APP_VERSION } from '../lib/constants'
 import { createId, createToken, nowIso, parseJsonObject } from '../lib/utils'
-import { assertTemplateRuntimeSupport, buildSubscriptionEntries, parseReleaseArtifact, renderReleaseArtifact } from './release-renderer'
+import {
+  assertTemplateRuntimeSupport,
+  buildSubscriptionEntries,
+  mergeRenderedSubscriptionDocument,
+  parseReleaseArtifact,
+  renderReleaseArtifact,
+  renderSubscriptionDocument,
+} from './release-renderer'
 import { repairTemplateDefaults, repairTemplateRecord } from './template-defaults'
 
 type NodeRow = {
@@ -43,6 +54,9 @@ type NodeRow = {
   backup_domain: string
   entry_ip: string
   github_mirror_url: string
+  edge_use_github_mirror: number
+  edge_deploy_asset_url: string
+  edge_subscription_sources_json: string
   warp_license_key: string
   cf_dns_token: string
   argo_tunnel_token: string
@@ -150,6 +164,9 @@ const CONFIG_IMPACT_FIELDS = new Set([
   'backupDomain',
   'entryIp',
   'githubMirrorUrl',
+  'edgeUseGithubMirror',
+  'edgeDeployAssetUrl',
+  'edgeSubscriptionSources',
   'cfDnsToken',
   'argoTunnelToken',
   'argoTunnelDomain',
@@ -166,6 +183,160 @@ function toBool(value: number | boolean | null | undefined): boolean {
   return value === true || value === 1
 }
 
+const EDGE_SOURCE_FALLBACKS: Record<SubscriptionDocumentFormat, SubscriptionDocumentFormat[]> = {
+  plain: ['plain', 'base64', 'v2ray'],
+  base64: ['base64', 'v2ray', 'plain'],
+  v2ray: ['v2ray', 'base64', 'plain'],
+  clash: ['clash'],
+  singbox: ['singbox'],
+  wireguard: ['wireguard'],
+  json: ['json'],
+}
+
+function isEdgeNodeType(nodeType: string | null | undefined): boolean {
+  return String(nodeType || '').trim().toLowerCase() === 'edge'
+}
+
+function normalizeEdgeSubscriptionSources(value: unknown): EdgeSubscriptionSource[] {
+  const rawSources = Array.isArray(value) ? value : []
+  const sourcesByFormat = new Map<SubscriptionDocumentFormat, EdgeSubscriptionSource>()
+  for (const rawSource of rawSources) {
+    if (!rawSource || typeof rawSource !== 'object') continue
+    const format = String((rawSource as { format?: string }).format || '').trim() as SubscriptionDocumentFormat
+    const url = String((rawSource as { url?: string }).url || '').trim()
+    if (!format || !url) continue
+    sourcesByFormat.set(format, {
+      format,
+      url,
+      enabled: (rawSource as { enabled?: boolean }).enabled !== false,
+    })
+  }
+  return Array.from(sourcesByFormat.values())
+    .sort((left, right) => left.format.localeCompare(right.format))
+}
+
+function normalizeNodeModeSpecificFields(input: CreateNodeInput): CreateNodeInput {
+  const base: CreateNodeInput = {
+    ...input,
+    githubMirrorUrl: String(input.githubMirrorUrl || '').trim(),
+    edgeDeployAssetUrl: String(input.edgeDeployAssetUrl || DEFAULT_EDGE_DEPLOY_ASSET_URL).trim() || DEFAULT_EDGE_DEPLOY_ASSET_URL,
+    edgeSubscriptionSources: normalizeEdgeSubscriptionSources(input.edgeSubscriptionSources),
+  }
+
+  if (base.nodeType === 'edge') {
+    return {
+      ...base,
+      networkType: 'public',
+      primaryDomain: '',
+      backupDomain: '',
+      entryIp: '',
+      installWarp: false,
+      warpLicenseKey: '',
+      cfDnsToken: '',
+      argoTunnelToken: '',
+      argoTunnelDomain: '',
+      argoTunnelPort: 2053,
+      heartbeatIntervalSeconds: 15,
+      versionPullIntervalSeconds: 15,
+    }
+  }
+
+  return {
+    ...base,
+    edgeUseGithubMirror: false,
+    edgeDeployAssetUrl: DEFAULT_EDGE_DEPLOY_ASSET_URL,
+    edgeSubscriptionSources: [],
+  }
+}
+
+function getEdgeSourceForFormat(node: NodeRecord, format: SubscriptionDocumentFormat): EdgeSubscriptionSource | null {
+  const sources = normalizeEdgeSubscriptionSources(node.edgeSubscriptionSources)
+  const enabledSources = sources.filter((source) => source.enabled !== false)
+  const formats = EDGE_SOURCE_FALLBACKS[format] || [format]
+  for (const candidateFormat of formats) {
+    const match = enabledSources.find((source) => source.format === candidateFormat)
+    if (match) return match
+  }
+  return null
+}
+
+function isPrivateHostname(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase()
+  if (!normalized) return true
+  if (normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1') return true
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(normalized)) {
+    const [first, second] = normalized.split('.').map((item) => Number(item))
+    if (first === 10 || first === 127) return true
+    if (first === 192 && second === 168) return true
+    if (first === 169 && second === 254) return true
+    if (first === 172 && second >= 16 && second <= 31) return true
+  }
+  if (normalized.includes(':')) {
+    return normalized === '::1'
+      || normalized.startsWith('fc')
+      || normalized.startsWith('fd')
+      || normalized.startsWith('fe80:')
+  }
+  return false
+}
+
+function createFetchAbortSignal(timeoutMs: number): AbortSignal | undefined {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(timeoutMs)
+  }
+  if (typeof AbortController === 'undefined' || typeof setTimeout !== 'function') {
+    return undefined
+  }
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), timeoutMs)
+  return controller.signal
+}
+
+async function fetchEdgeSubscription(url: string): Promise<{
+  body: string
+  status: number
+  statusText: string
+  contentType: string
+  finalUrl: string
+}> {
+  const parsedUrl = new URL(url)
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    throw new Error('unsupported edge subscription protocol')
+  }
+  if (isPrivateHostname(parsedUrl.hostname)) {
+    throw new Error('private edge subscription host is not allowed')
+  }
+
+  const response = await fetch(parsedUrl.toString(), {
+    method: 'GET',
+    redirect: 'follow',
+    signal: createFetchAbortSignal(8000),
+    headers: {
+      Accept: '*/*',
+      'User-Agent': `nodehubsapi/${APP_VERSION}`,
+    },
+  })
+  if (!response.ok) {
+    throw new Error(`edge upstream request failed: ${response.status}`)
+  }
+  const body = await response.text()
+  if (body.length > 2_000_000) {
+    throw new Error('edge upstream response is too large')
+  }
+  return {
+    body,
+    status: response.status,
+    statusText: response.statusText || '',
+    contentType: response.headers.get('content-type') || '',
+    finalUrl: response.url || parsedUrl.toString(),
+  }
+}
+
+async function fetchEdgeSubscriptionBody(url: string): Promise<string> {
+  const result = await fetchEdgeSubscription(url)
+  return result.body
+}
+
 function toNodeRecord(row: NodeRow): NodeRecord {
   return {
     id: row.id,
@@ -178,6 +349,9 @@ function toNodeRecord(row: NodeRow): NodeRecord {
     backupDomain: row.backup_domain,
     entryIp: row.entry_ip,
     githubMirrorUrl: row.github_mirror_url || '',
+    edgeUseGithubMirror: toBool(row.edge_use_github_mirror),
+    edgeDeployAssetUrl: row.edge_deploy_asset_url || DEFAULT_EDGE_DEPLOY_ASSET_URL,
+    edgeSubscriptionSources: normalizeEdgeSubscriptionSources(parseJsonObject<unknown[]>(row.edge_subscription_sources_json || '[]', [])),
     installWarp: toBool(row.install_warp),
     warpLicenseKey: row.warp_license_key || '',
     cfDnsToken: row.cf_dns_token || '',
@@ -387,6 +561,55 @@ export async function getNodeById(services: AppServices, nodeId: string): Promis
   return row ? toNodeRecord(row) : null
 }
 
+export async function probeNodeEdgeSubscriptionSources(
+  services: AppServices,
+  nodeId: string,
+  sources: EdgeSubscriptionSource[] = [],
+): Promise<EdgeSubscriptionProbeResponse | null> {
+  const node = await getNodeById(services, nodeId)
+  if (!node) return null
+  if (node.nodeType !== 'edge') {
+    throw new Error('Only edge nodes support upstream subscription tests')
+  }
+
+  const normalizedSources = normalizeEdgeSubscriptionSources(
+    sources.length > 0 ? sources : (node.edgeSubscriptionSources || []),
+  )
+
+  const results = await Promise.all(normalizedSources.map(async (source) => {
+    try {
+      const response = await fetchEdgeSubscription(source.url)
+      const bytes = typeof TextEncoder !== 'undefined'
+        ? new TextEncoder().encode(response.body).length
+        : response.body.length
+      return {
+        format: source.format,
+        url: source.url,
+        ok: true,
+        status: response.status,
+        statusText: response.statusText,
+        contentType: response.contentType,
+        bytes,
+        finalUrl: response.finalUrl,
+      }
+    } catch (error) {
+      return {
+        format: source.format,
+        url: source.url,
+        ok: false,
+        error: error instanceof Error ? error.message : 'edge upstream probe failed',
+      }
+    }
+  }))
+
+  return {
+    testedAt: nowIso(),
+    successCount: results.filter((item) => item.ok).length,
+    failureCount: results.filter((item) => !item.ok).length,
+    results,
+  }
+}
+
 export async function deleteNode(services: AppServices, nodeId: string): Promise<boolean> {
   const current = await getNodeRow(services, nodeId)
   if (!current) return false
@@ -416,30 +639,33 @@ export async function deleteNode(services: AppServices, nodeId: string): Promise
 }
 
 export async function createNode(services: AppServices, input: CreateNodeInput): Promise<NodeRecord> {
-  const nextNode = parseNodeInput(input)
+  const nextNode = normalizeNodeModeSpecificFields(parseNodeInput(input))
   const id = createId('node')
   const now = nowIso()
   const installWarp = nextNode.installWarp === true ? 1 : 0
+  const edgeUseGithubMirror = nextNode.edgeUseGithubMirror === true ? 1 : 0
   const warpLicenseKey = installWarp ? nextNode.warpLicenseKey.trim() : ''
   const heartbeatIntervalSeconds = normalizeIntervalSeconds(nextNode.heartbeatIntervalSeconds, 15)
   const versionPullIntervalSeconds = normalizeIntervalSeconds(nextNode.versionPullIntervalSeconds, 15)
   await services.db.run(
     `INSERT INTO nodes (
       id, agent_token, name, node_type, region, tags_json, network_type, primary_domain, backup_domain, entry_ip,
-      github_mirror_url, warp_license_key, cf_dns_token, argo_tunnel_token, argo_tunnel_domain, argo_tunnel_port,
-      install_warp, config_revision, desired_release_revision,
-       current_release_revision, current_release_status, heartbeat_interval_seconds, version_pull_interval_seconds, bytes_in_total, bytes_out_total,
-       current_connections, warp_status, warp_ipv4, warp_ipv6, warp_endpoint, warp_account_type, warp_tunnel_protocol, warp_private_key,
-       warp_reserved_json, argo_status, argo_domain,
-       storage_total_bytes, storage_used_bytes, storage_usage_percent, cpu_core_count, memory_total_bytes, memory_used_bytes,
-       permission_mode, sing_box_version, sing_box_status, xray_version, xray_status, protocol_runtime_version, created_at, updated_at
-     ) VALUES (
-       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-     )`,
+      github_mirror_url, edge_use_github_mirror, edge_deploy_asset_url, edge_subscription_sources_json,
+      warp_license_key, cf_dns_token, argo_tunnel_token, argo_tunnel_domain, argo_tunnel_port,
+      install_warp, config_revision, desired_release_revision, current_release_revision, current_release_status,
+      heartbeat_interval_seconds, version_pull_interval_seconds, bytes_in_total, bytes_out_total, current_connections,
+      warp_status, warp_ipv4, warp_ipv6, warp_endpoint, warp_account_type, warp_tunnel_protocol, warp_private_key,
+      warp_reserved_json, argo_status, argo_domain, storage_total_bytes, storage_used_bytes, storage_usage_percent,
+      cpu_core_count, memory_total_bytes, memory_used_bytes, permission_mode, sing_box_version, sing_box_status,
+      xray_version, xray_status, protocol_runtime_version, created_at, updated_at
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?
+      )`,
     [
       id,
       createToken(),
@@ -452,6 +678,9 @@ export async function createNode(services: AppServices, input: CreateNodeInput):
       nextNode.backupDomain,
       nextNode.entryIp,
       nextNode.githubMirrorUrl,
+      edgeUseGithubMirror,
+      nextNode.edgeDeployAssetUrl || DEFAULT_EDGE_DEPLOY_ASSET_URL,
+      JSON.stringify(normalizeEdgeSubscriptionSources(nextNode.edgeSubscriptionSources)),
       warpLicenseKey,
       nextNode.cfDnsToken,
       nextNode.argoTunnelToken,
@@ -502,7 +731,7 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
   const current = await getNodeRow(services, nodeId)
   if (!current) return null
 
-  const nextNode = parseNodeInput({
+  const nextNode = normalizeNodeModeSpecificFields(parseNodeInput({
     name: input.name ?? current.name,
     nodeType: (input.nodeType ?? current.node_type) as CreateNodeInput['nodeType'],
     region: input.region ?? current.region,
@@ -512,6 +741,9 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
     backupDomain: input.backupDomain ?? current.backup_domain,
     entryIp: input.entryIp ?? current.entry_ip,
     githubMirrorUrl: input.githubMirrorUrl ?? current.github_mirror_url,
+    edgeUseGithubMirror: input.edgeUseGithubMirror ?? toBool(current.edge_use_github_mirror),
+    edgeDeployAssetUrl: input.edgeDeployAssetUrl ?? current.edge_deploy_asset_url,
+    edgeSubscriptionSources: input.edgeSubscriptionSources ?? normalizeEdgeSubscriptionSources(parseJsonObject<unknown[]>(current.edge_subscription_sources_json || '[]', [])),
     installWarp: input.installWarp ?? toBool(current.install_warp),
     warpLicenseKey: input.warpLicenseKey ?? current.warp_license_key,
     cfDnsToken: input.cfDnsToken ?? current.cf_dns_token,
@@ -520,25 +752,27 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
     argoTunnelPort: input.argoTunnelPort ?? current.argo_tunnel_port,
     heartbeatIntervalSeconds: input.heartbeatIntervalSeconds ?? current.heartbeat_interval_seconds,
     versionPullIntervalSeconds: input.versionPullIntervalSeconds ?? current.version_pull_interval_seconds,
-  })
+  }))
   const configChanged = determineNodeImpact(input)
   const nextConfigRevision = configChanged
     ? Number(current.config_revision || 1) + 1
     : Number(current.config_revision || 1)
   const installWarp = nextNode.installWarp === true ? 1 : 0
+  const edgeUseGithubMirror = nextNode.edgeUseGithubMirror === true ? 1 : 0
   const warpLicenseKey = installWarp ? nextNode.warpLicenseKey.trim() : ''
   const heartbeatIntervalSeconds = normalizeIntervalSeconds(nextNode.heartbeatIntervalSeconds, 15)
   const versionPullIntervalSeconds = normalizeIntervalSeconds(nextNode.versionPullIntervalSeconds, 15)
 
   await services.db.run(
     `UPDATE nodes
-     SET name = ?, node_type = ?, region = ?, tags_json = ?, network_type = ?,
-         primary_domain = ?, backup_domain = ?, entry_ip = ?,
-         github_mirror_url = ?, warp_license_key = ?, cf_dns_token = ?,
-         argo_tunnel_token = ?, argo_tunnel_domain = ?, argo_tunnel_port = ?,
-         install_warp = ?, heartbeat_interval_seconds = ?, version_pull_interval_seconds = ?,
-         config_revision = ?, updated_at = ?
-     WHERE id = ?`,
+      SET name = ?, node_type = ?, region = ?, tags_json = ?, network_type = ?,
+          primary_domain = ?, backup_domain = ?, entry_ip = ?,
+          github_mirror_url = ?, edge_use_github_mirror = ?, edge_deploy_asset_url = ?, edge_subscription_sources_json = ?,
+          warp_license_key = ?, cf_dns_token = ?,
+          argo_tunnel_token = ?, argo_tunnel_domain = ?, argo_tunnel_port = ?,
+          install_warp = ?, heartbeat_interval_seconds = ?, version_pull_interval_seconds = ?,
+          config_revision = ?, updated_at = ?
+      WHERE id = ?`,
     [
       nextNode.name,
       nextNode.nodeType,
@@ -549,6 +783,9 @@ export async function updateNode(services: AppServices, nodeId: string, input: U
       nextNode.backupDomain,
       nextNode.entryIp,
       nextNode.githubMirrorUrl,
+      edgeUseGithubMirror,
+      nextNode.edgeDeployAssetUrl || DEFAULT_EDGE_DEPLOY_ASSET_URL,
+      JSON.stringify(normalizeEdgeSubscriptionSources(nextNode.edgeSubscriptionSources)),
       warpLicenseKey,
       nextNode.cfDnsToken,
       nextNode.argoTunnelToken,
@@ -778,6 +1015,9 @@ export async function publishNodeRelease(
 ): Promise<ReleaseRecord | null> {
   const node = await getNodeById(services, nodeId)
   if (!node) return null
+  if (node.nodeType === 'edge') {
+    throw new Error('Edge nodes do not support runtime releases')
+  }
 
   const uniqueTemplateIds = uniqueIds(templateIds)
   const templateRows = await getTemplateRows(services, uniqueTemplateIds)
@@ -868,6 +1108,9 @@ export async function previewNodeRelease(
 ): Promise<ReleasePreviewRecord | null> {
   const node = await getNodeById(services, nodeId)
   if (!node) return null
+  if (node.nodeType === 'edge') {
+    throw new Error('Edge nodes do not support runtime releases')
+  }
 
   const uniqueTemplateIds = uniqueIds(templateIds)
   const templateRows = await getTemplateRows(services, uniqueTemplateIds)
@@ -1051,6 +1294,8 @@ export async function recordHeartbeat(services: AppServices, input: HeartbeatInp
 }
 
 export async function listNodeTraffic(services: AppServices, nodeId: string, limit = 24): Promise<TrafficSample[]> {
+  const node = await getNodeRow(services, nodeId)
+  if (!node || isEdgeNodeType(node.node_type)) return []
   const rows = await services.db.all<{
     node_id: string
     at: string
@@ -1078,6 +1323,7 @@ export async function listNodeTraffic(services: AppServices, nodeId: string, lim
 export async function resolveAgentNode(services: AppServices, nodeId: string, token: string): Promise<NodeRow | null> {
   const row = await getNodeRow(services, nodeId)
   if (!row || row.agent_token !== token) return null
+  if (isEdgeNodeType(row.node_type)) return null
   return row
 }
 
@@ -1104,6 +1350,7 @@ export async function getNodeInstallTarget(
 } | null> {
   const row = await getNodeRow(services, nodeId)
   if (!row) return null
+  if (isEdgeNodeType(row.node_type)) return null
   return {
     id: row.id,
     name: row.name,
@@ -1127,6 +1374,12 @@ export async function getNodeInstallTarget(
 export async function getDesiredRelease(services: AppServices, nodeId: string) {
   const node = await getNodeRow(services, nodeId)
   if (!node) return null
+  if (isEdgeNodeType(node.node_type)) {
+    return {
+      node: toNodeRecord(node),
+      release: null,
+    }
+  }
   if (Number(node.desired_release_revision || 0) <= Number(node.current_release_revision || 0)) {
     return {
       node: toNodeRecord(node),
@@ -1200,10 +1453,10 @@ export async function acknowledgeRelease(
   return row ? toReleaseRecord(row) : null
 }
 
-export async function buildPublicSubscriptionDocument(
+async function resolveSubscriptionNodes(
   services: AppServices,
   token: string,
-): Promise<Omit<PublicSubscriptionDocument, 'format'> | null> {
+): Promise<{ subscription: SubscriptionRow; nodes: NodeRow[] } | null> {
   const subscription = await getSubscriptionRowByToken(services, token)
   if (!subscription) return null
 
@@ -1214,8 +1467,16 @@ export async function buildPublicSubscriptionDocument(
     )
     : await services.db.all<NodeRow>('SELECT * FROM nodes ORDER BY updated_at DESC')
 
+  return { subscription, nodes }
+}
+
+async function buildSubscriptionEntriesForNodeRows(
+  services: AppServices,
+  nodes: NodeRow[],
+): Promise<PublicSubscriptionDocument['entries']> {
   const nodeEntries = await Promise.all(
     nodes.map(async (nodeRow): Promise<PublicSubscriptionDocument['entries']> => {
+      if (isEdgeNodeType(nodeRow.node_type)) return []
       const release = await services.db.get<ReleaseRow>(
         'SELECT * FROM releases WHERE node_id = ? AND kind = ? AND status = ? ORDER BY revision DESC LIMIT 1',
         [nodeRow.id, 'runtime', 'healthy'],
@@ -1232,14 +1493,60 @@ export async function buildPublicSubscriptionDocument(
       return parsedArtifact.subscriptionEndpoints
     }),
   )
-  const entries = nodeEntries.flat()
+  return nodeEntries.flat()
+}
+
+export async function buildPublicSubscriptionDocument(
+  services: AppServices,
+  token: string,
+): Promise<Omit<PublicSubscriptionDocument, 'format'> | null> {
+  const resolved = await resolveSubscriptionNodes(services, token)
+  if (!resolved) return null
+  const entries = await buildSubscriptionEntriesForNodeRows(services, resolved.nodes)
 
   return {
-    subscriptionId: subscription.id,
-    name: subscription.name,
+    subscriptionId: resolved.subscription.id,
+    name: resolved.subscription.name,
     generatedAt: nowIso(),
     entries,
   }
+}
+
+export async function buildRenderedPublicSubscriptionDocument(
+  services: AppServices,
+  token: string,
+  format: SubscriptionDocumentFormat,
+): Promise<{ body: string; contentType: string } | null> {
+  const resolved = await resolveSubscriptionNodes(services, token)
+  if (!resolved) return null
+
+  const payload: Omit<PublicSubscriptionDocument, 'format'> = {
+    subscriptionId: resolved.subscription.id,
+    name: resolved.subscription.name,
+    generatedAt: nowIso(),
+    entries: await buildSubscriptionEntriesForNodeRows(services, resolved.nodes),
+  }
+  const localDocument = renderSubscriptionDocument(payload, format)
+  const upstreamDocuments = (await Promise.all(
+    resolved.nodes
+      .filter((nodeRow) => isEdgeNodeType(nodeRow.node_type))
+      .map(async (nodeRow) => {
+        const node = toNodeRecord(nodeRow)
+        const source = getEdgeSourceForFormat(node, format)
+        if (!source) return null
+        try {
+          const body = await fetchEdgeSubscriptionBody(source.url)
+          return {
+            format: source.format,
+            body,
+          }
+        } catch {
+          return null
+        }
+      }),
+  )).filter((item): item is { format: SubscriptionDocumentFormat; body: string } => Boolean(item))
+
+  return mergeRenderedSubscriptionDocument(localDocument, upstreamDocuments, format)
 }
 
 export async function buildSystemStatus(services: AppServices): Promise<SystemStatus> {
@@ -1256,7 +1563,7 @@ export async function buildSystemStatus(services: AppServices): Promise<SystemSt
     nodeCount: Number(nodeCountRow?.value || 0),
     templateCount: Number(templateCountRow?.value || 0),
     releaseCount: Number(releaseCountRow?.value || 0),
-    onlineCount: nodes.filter((item) => isNodeOnline(item.lastSeenAt, item.heartbeatIntervalSeconds)).length,
+    onlineCount: nodes.filter((item) => item.nodeType !== 'edge' && isNodeOnline(item.lastSeenAt, item.heartbeatIntervalSeconds)).length,
     totalBytesIn: Number(totalsRow?.bytes_in || 0),
     totalBytesOut: Number(totalsRow?.bytes_out || 0),
   }

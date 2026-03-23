@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { DEFAULT_EDGE_DEPLOY_ASSET_URL } from './domain'
 
 function validateTemplateCombination(
   input: {
@@ -108,7 +109,28 @@ function validateTemplateCombination(
 }
 
 export const nodeKindSchema = z.enum(['vps', 'edge'])
+export const subscriptionDocumentFormatSchema = z.enum(['plain', 'base64', 'json', 'v2ray', 'clash', 'singbox', 'wireguard'])
 const intervalSecondsSchema = z.number().int().min(5).max(3600)
+
+function isHttpUrl(value: string) {
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+const httpUrlSchema = z.string().trim().max(2000).refine(isHttpUrl, 'Must be a valid http(s) URL')
+export const edgeSubscriptionSourceSchema = z.object({
+  format: subscriptionDocumentFormatSchema,
+  url: httpUrlSchema,
+  enabled: z.boolean().default(true),
+})
+
+export const edgeSourceProbeSchema = z.object({
+  sources: z.array(edgeSubscriptionSourceSchema).max(32).default([]),
+})
 
 const nodeSchemaBase = z.object({
   name: z.string().trim().min(1).max(120),
@@ -120,6 +142,9 @@ const nodeSchemaBase = z.object({
   backupDomain: z.string().trim().max(255).default(''),
   entryIp: z.string().trim().max(255).default(''),
   githubMirrorUrl: z.string().trim().max(500).default(''),
+  edgeUseGithubMirror: z.boolean().default(false),
+  edgeDeployAssetUrl: httpUrlSchema.default(DEFAULT_EDGE_DEPLOY_ASSET_URL),
+  edgeSubscriptionSources: z.array(edgeSubscriptionSourceSchema).max(32).default([]),
   installWarp: z.boolean().default(false),
   warpLicenseKey: z.string().trim().max(255).default(''),
   cfDnsToken: z.string().trim().max(500).default(''),
@@ -131,11 +156,22 @@ const nodeSchemaBase = z.object({
 })
 
 export const createNodeSchema = nodeSchemaBase.superRefine((input, ctx) => {
-  if (input.networkType === 'public' && !input.primaryDomain.trim()) {
+  if (input.nodeType === 'vps' && input.networkType === 'public' && !input.primaryDomain.trim()) {
     ctx.addIssue({
       code: 'custom',
       path: ['primaryDomain'],
       message: 'Public-IP nodes require a primary domain for certificate bootstrap',
+    })
+  }
+
+  const duplicateFormat = input.edgeSubscriptionSources
+    .map((source) => source.format)
+    .find((format, index, values) => values.indexOf(format) !== index)
+  if (duplicateFormat) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['edgeSubscriptionSources'],
+      message: `Duplicate edge subscription format: ${duplicateFormat}`,
     })
   }
 })
@@ -194,8 +230,6 @@ export const createSubscriptionSchema = z.object({
 })
 
 export const updateSubscriptionSchema = createSubscriptionSchema.partial()
-
-export const subscriptionDocumentFormatSchema = z.enum(['plain', 'base64', 'json', 'v2ray', 'clash', 'singbox', 'wireguard'])
 
 export const publishNodeSchema = z.object({
   templateIds: z.array(z.string().trim().min(1)).default([]),

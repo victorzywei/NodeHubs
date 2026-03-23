@@ -1,4 +1,6 @@
 import type {
+  EdgeSubscriptionProbeResponse,
+  EdgeSubscriptionSource,
   NodeRecord,
   ReleaseLogRecord,
   ReleasePreviewRecord,
@@ -87,6 +89,24 @@ export function createNode(adminKey: string, payload: Record<string, unknown>): 
   return request('/api/nodes', {
     method: 'POST',
     body: JSON.stringify(payload),
+  }, adminKey)
+}
+
+export function updateNode(adminKey: string, nodeId: string, payload: Record<string, unknown>): Promise<NodeRecord> {
+  return request(`/api/nodes/${nodeId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  }, adminKey)
+}
+
+export function probeNodeEdgeSources(
+  adminKey: string,
+  nodeId: string,
+  sources: EdgeSubscriptionSource[],
+): Promise<EdgeSubscriptionProbeResponse> {
+  return request(`/api/nodes/${nodeId}/edge-source-probe`, {
+    method: 'POST',
+    body: JSON.stringify({ sources }),
   }, adminKey)
 }
 

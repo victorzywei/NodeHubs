@@ -136,6 +136,8 @@ function expectScriptToPassBashSyntax(script: string, fileName: string): void {
   }
 }
 
+const hasBashSyntaxValidation = bashSyntaxRunner(join(tmpdir(), 'nodehubsapi-bash-probe.sh')) !== null
+
 describe('agent install scripts', () => {
   it('builds a parameterized deploy command', () => {
     const command = buildDeployCommand({
@@ -228,7 +230,7 @@ describe('agent install scripts', () => {
     expect(script).not.toContain('hooks/bootstrap.d')
   })
 
-  it('renders shell scripts that pass bash syntax checks', () => {
+  ;(hasBashSyntaxValidation ? it : it.skip)('renders shell scripts that pass bash syntax checks', () => {
     const installScript = buildAgentInstallScript({
       publicBaseUrl: 'https://control.example.com/',
       nodeId: 'node_1',
@@ -284,7 +286,7 @@ describe('agent install scripts', () => {
     expect(body).toContain("install_url='https://control.example.com/install'")
   })
 
-  it('builds an uninstall command that removes services and files', () => {
+  ;(hasBashSyntaxValidation ? it : it.skip)('builds an uninstall command that removes services and files', () => {
     const command = buildUninstallCommand()
 
     expect(command).not.toContain('\n')

@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import {
+  DEFAULT_EDGE_DEPLOY_ASSET_URL,
   DEFAULT_WARP_LOCAL_PROXY_PORT,
   isNodeOnline,
+  type EdgeSubscriptionProbeResponse,
   type SystemStatus,
   type NodeRecord,
+  type SubscriptionDocumentFormat,
   type TemplateRecord,
   type SubscriptionRecord,
   type ReleaseLogRecord,
@@ -517,6 +520,38 @@ function sortByCreatedAtDesc<T extends { createdAt: string }>(records: T[]) {
 
 // ---- Node Actions ----
 const DEFAULT_GITHUB_MIRROR_URL = 'https://gh-proxy.org'
+const EDGE_SOURCE_FIELDS: Array<{ format: SubscriptionDocumentFormat; label: string; placeholder: string }> = [
+  { format: 'plain', label: 'Plain', placeholder: 'https://example.com/plain-sub.txt' },
+  { format: 'base64', label: 'Base64', placeholder: 'https://example.com/base64-sub.txt' },
+  { format: 'v2ray', label: 'V2Ray', placeholder: 'https://example.com/v2ray-sub.txt' },
+  { format: 'clash', label: 'Clash', placeholder: 'https://example.com/clash.yaml' },
+  { format: 'singbox', label: 'Sing-box', placeholder: 'https://example.com/singbox.json' },
+  { format: 'wireguard', label: 'WireGuard', placeholder: 'https://example.com/wireguard.conf' },
+  { format: 'json', label: 'JSON', placeholder: 'https://example.com/subscription.json' },
+]
+
+type EdgeSourceDraft = Record<SubscriptionDocumentFormat, string>
+
+function createEmptyEdgeSourceDraft(): EdgeSourceDraft {
+  return {
+    plain: '',
+    base64: '',
+    json: '',
+    v2ray: '',
+    clash: '',
+    singbox: '',
+    wireguard: '',
+  }
+}
+
+function createEdgeSourceDraft(sources: NodeRecord['edgeSubscriptionSources'] | undefined): EdgeSourceDraft {
+  const draft = createEmptyEdgeSourceDraft()
+  for (const source of sources || []) {
+    if (!source?.enabled) continue
+    draft[source.format] = source.url || ''
+  }
+  return draft
+}
 
 function createDefaultNewNode() {
   return {
@@ -524,6 +559,8 @@ function createDefaultNewNode() {
     networkType:'public' as 'public'|'noPublicIp',
     primaryDomain:'', backupDomain:'', entryIp:'',
     useGithubMirror:false, githubMirrorUrl:'',
+    edgeDeployAssetUrl: DEFAULT_EDGE_DEPLOY_ASSET_URL,
+    edgeSourceUrls: createEmptyEdgeSourceDraft(),
     installWarp:false,
     warpLicenseKey:'',
     heartbeatIntervalSeconds:15,
@@ -536,6 +573,15 @@ function createDefaultNewNode() {
 }
 
 const newNode = ref(createDefaultNewNode())
+const edgeSettingsSaving = ref(false)
+const edgeSourceProbeLoading = ref(false)
+const edgeSourceProbeReport = ref<EdgeSubscriptionProbeResponse | null>(null)
+const edgeSettingsDraft = ref({
+  useGithubMirror: false,
+  githubMirrorUrl: '',
+  edgeDeployAssetUrl: DEFAULT_EDGE_DEPLOY_ASSET_URL,
+  edgeSourceUrls: createEmptyEdgeSourceDraft(),
+})
 
 function ensureGithubMirrorUrl() {
   if (newNode.value.useGithubMirror && !newNode.value.githubMirrorUrl.trim()) {
@@ -547,6 +593,89 @@ function resetNewNode() {
   newNode.value = createDefaultNewNode()
 }
 
+function isEdgeNode(node: NodeRecord | null | undefined) {
+  return node?.nodeType === 'edge'
+}
+
+function buildEdgeSubscriptionSourcesPayload(sourceUrls: EdgeSourceDraft) {
+  return EDGE_SOURCE_FIELDS
+    .map((field) => ({
+      format: field.format,
+      url: (sourceUrls[field.format] || '').trim(),
+      enabled: true,
+    }))
+    .filter((source) => source.url)
+}
+
+function syncEdgeSettingsDraft(node: NodeRecord | null) {
+  edgeSourceProbeReport.value = null
+  if (!node || node.nodeType !== 'edge') {
+    edgeSettingsDraft.value = {
+      useGithubMirror: false,
+      githubMirrorUrl: '',
+      edgeDeployAssetUrl: DEFAULT_EDGE_DEPLOY_ASSET_URL,
+      edgeSourceUrls: createEmptyEdgeSourceDraft(),
+    }
+    return
+  }
+  edgeSettingsDraft.value = {
+    useGithubMirror: node.edgeUseGithubMirror === true,
+    githubMirrorUrl: node.githubMirrorUrl || '',
+    edgeDeployAssetUrl: node.edgeDeployAssetUrl || DEFAULT_EDGE_DEPLOY_ASSET_URL,
+    edgeSourceUrls: createEdgeSourceDraft(node.edgeSubscriptionSources),
+  }
+}
+
+function getEdgeConfiguredFormats(node: NodeRecord) {
+  return (node.edgeSubscriptionSources || [])
+    .filter((source) => source.enabled !== false && source.url)
+    .map((source) => source.format)
+}
+
+function buildEdgeDeployDownloadUrl(assetUrlRaw: string, useGithubMirror: boolean, githubMirrorUrlRaw: string) {
+  const assetUrl = (assetUrlRaw || DEFAULT_EDGE_DEPLOY_ASSET_URL).trim()
+  if (!assetUrl) return ''
+  const mirrorUrl = (githubMirrorUrlRaw || '').trim()
+  if (useGithubMirror && mirrorUrl && assetUrl.startsWith('https://github.com/')) {
+    return `${mirrorUrl.replace(/\/+$/, '')}/${assetUrl}`
+  }
+  return assetUrl
+}
+
+function getEdgeDeployDownloadUrl(node: Pick<NodeRecord, 'edgeDeployAssetUrl' | 'edgeUseGithubMirror' | 'githubMirrorUrl'>) {
+  return buildEdgeDeployDownloadUrl(
+    node.edgeDeployAssetUrl || DEFAULT_EDGE_DEPLOY_ASSET_URL,
+    node.edgeUseGithubMirror === true,
+    node.githubMirrorUrl || '',
+  )
+}
+
+function getEdgeDraftDeployDownloadUrl() {
+  return buildEdgeDeployDownloadUrl(
+    edgeSettingsDraft.value.edgeDeployAssetUrl,
+    edgeSettingsDraft.value.useGithubMirror,
+    edgeSettingsDraft.value.githubMirrorUrl,
+  )
+}
+
+function openEdgeDeployDownload(node: NodeRecord) {
+  const url = getEdgeDeployDownloadUrl(node)
+  if (!url) {
+    toast('error', '部署文件地址为空')
+    return
+  }
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+function openEdgeDraftDeployDownload() {
+  const url = getEdgeDraftDeployDownloadUrl()
+  if (!url) {
+    toast('error', '部署文件地址为空')
+    return
+  }
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
 async function createNode() {
   const n = newNode.value
   const githubMirrorUrl = n.useGithubMirror ? (n.githubMirrorUrl.trim() || DEFAULT_GITHUB_MIRROR_URL) : ''
@@ -555,19 +684,22 @@ async function createNode() {
       name: n.name,
       nodeType: n.nodeType,
       region: n.region,
-      networkType: n.networkType,
-      primaryDomain: n.networkType === 'public' ? n.primaryDomain.trim() : '',
-      backupDomain: n.networkType === 'public' ? n.backupDomain.trim() : '',
-      entryIp: n.networkType === 'public' ? n.entryIp.trim() : '',
+      networkType: n.nodeType === 'vps' ? n.networkType : 'public',
+      primaryDomain: n.nodeType === 'vps' && n.networkType === 'public' ? n.primaryDomain.trim() : '',
+      backupDomain: n.nodeType === 'vps' && n.networkType === 'public' ? n.backupDomain.trim() : '',
+      entryIp: n.nodeType === 'vps' && n.networkType === 'public' ? n.entryIp.trim() : '',
       githubMirrorUrl,
-      installWarp: n.installWarp,
-      warpLicenseKey: n.installWarp ? n.warpLicenseKey.trim() : '',
-      heartbeatIntervalSeconds: n.heartbeatIntervalSeconds || 15,
-      versionPullIntervalSeconds: n.versionPullIntervalSeconds || 15,
-      cfDnsToken: n.networkType === 'public' ? n.cfDnsToken.trim() : '',
-      argoTunnelToken: n.networkType === 'noPublicIp' ? n.argoTunnelToken.trim() : '',
-      argoTunnelDomain: n.networkType === 'noPublicIp' ? n.argoTunnelDomain.trim() : '',
-      argoTunnelPort: n.networkType === 'noPublicIp' ? (n.argoTunnelPort || 2053) : 2053,
+      edgeUseGithubMirror: n.nodeType === 'edge' ? n.useGithubMirror : false,
+      edgeDeployAssetUrl: n.nodeType === 'edge' ? (n.edgeDeployAssetUrl.trim() || DEFAULT_EDGE_DEPLOY_ASSET_URL) : DEFAULT_EDGE_DEPLOY_ASSET_URL,
+      edgeSubscriptionSources: n.nodeType === 'edge' ? buildEdgeSubscriptionSourcesPayload(n.edgeSourceUrls) : [],
+      installWarp: n.nodeType === 'vps' ? n.installWarp : false,
+      warpLicenseKey: n.nodeType === 'vps' && n.installWarp ? n.warpLicenseKey.trim() : '',
+      heartbeatIntervalSeconds: n.nodeType === 'vps' ? (n.heartbeatIntervalSeconds || 15) : 15,
+      versionPullIntervalSeconds: n.nodeType === 'vps' ? (n.versionPullIntervalSeconds || 15) : 15,
+      cfDnsToken: n.nodeType === 'vps' && n.networkType === 'public' ? n.cfDnsToken.trim() : '',
+      argoTunnelToken: n.nodeType === 'vps' && n.networkType === 'noPublicIp' ? n.argoTunnelToken.trim() : '',
+      argoTunnelDomain: n.nodeType === 'vps' && n.networkType === 'noPublicIp' ? n.argoTunnelDomain.trim() : '',
+      argoTunnelPort: n.nodeType === 'vps' && n.networkType === 'noPublicIp' ? (n.argoTunnelPort || 2053) : 2053,
     })
     showCreateNode.value = false
     resetNewNode()
@@ -577,11 +709,16 @@ async function createNode() {
 
 async function selectNode(n: NodeRecord) {
   selectedNode.value = n; deployCommand.value = ''; uninstallCommand.value = ''
+  syncEdgeSettingsDraft(n)
+  if (isEdgeNode(n)) {
+    nodeReleases.value = []
+    return
+  }
   try { nodeReleases.value = await api.listNodeReleases(adminKey.value, n.id) } catch { nodeReleases.value = [] }
 }
 
 async function loadDeployCommand() {
-  if (!selectedNode.value) return
+  if (!selectedNode.value || isEdgeNode(selectedNode.value)) return
   try {
     const result = await api.getNodeDeployCommand(adminKey.value, selectedNode.value.id)
     deployCommand.value = result.command
@@ -589,11 +726,61 @@ async function loadDeployCommand() {
 }
 
 async function loadUninstallCommand() {
-  if (!selectedNode.value) return
+  if (!selectedNode.value || isEdgeNode(selectedNode.value)) return
   try {
     const result = await api.getNodeUninstallCommand(adminKey.value, selectedNode.value.id)
     uninstallCommand.value = result.command
   } catch (e:any) { toast('error', e.message) }
+}
+
+async function saveSelectedEdgeSettings() {
+  if (!selectedNode.value || selectedNode.value.nodeType !== 'edge') return
+  const githubMirrorUrl = edgeSettingsDraft.value.useGithubMirror
+    ? (edgeSettingsDraft.value.githubMirrorUrl.trim() || DEFAULT_GITHUB_MIRROR_URL)
+    : ''
+  edgeSettingsSaving.value = true
+  try {
+    await api.updateNode(adminKey.value, selectedNode.value.id, {
+      githubMirrorUrl,
+      edgeUseGithubMirror: edgeSettingsDraft.value.useGithubMirror,
+      edgeDeployAssetUrl: edgeSettingsDraft.value.edgeDeployAssetUrl.trim() || DEFAULT_EDGE_DEPLOY_ASSET_URL,
+      edgeSubscriptionSources: buildEdgeSubscriptionSourcesPayload(edgeSettingsDraft.value.edgeSourceUrls),
+    })
+    toast('success', 'Edge 节点设置已保存')
+    await loadAll()
+    await refreshStatus()
+  } catch (e:any) {
+    toast('error', e.message)
+  } finally {
+    edgeSettingsSaving.value = false
+  }
+}
+
+async function testSelectedEdgeSources() {
+  if (!selectedNode.value || selectedNode.value.nodeType !== 'edge') return
+  const sources = buildEdgeSubscriptionSourcesPayload(edgeSettingsDraft.value.edgeSourceUrls)
+  if (sources.length === 0) {
+    toast('error', '请先填写至少一个上游订阅源地址')
+    edgeSourceProbeReport.value = null
+    return
+  }
+  edgeSourceProbeLoading.value = true
+  try {
+    const report = await api.probeNodeEdgeSources(adminKey.value, selectedNode.value.id, sources)
+    edgeSourceProbeReport.value = report
+    if (report.failureCount === 0) {
+      toast('success', `订阅源测试完成，${report.successCount} 个全部可拉取`)
+    } else if (report.successCount > 0) {
+      toast('success', `订阅源测试完成，成功 ${report.successCount} 个，失败 ${report.failureCount} 个`)
+    } else {
+      toast('error', '订阅源测试失败，当前填写的地址都无法拉取')
+    }
+  } catch (e:any) {
+    edgeSourceProbeReport.value = null
+    toast('error', e.message)
+  } finally {
+    edgeSourceProbeLoading.value = false
+  }
 }
 
 function copyToClipboard(text: string) {
@@ -716,6 +903,7 @@ function buildRuntimeCheckCommand(
 }
 
 function getNodeCheckCommands(node: NodeRecord) {
+  if (node.nodeType === 'edge') return []
   const commands = [
     {
       title: 'Agent 全量排查',
@@ -1123,6 +1311,23 @@ watch(() => newNode.value.useGithubMirror, (enabled) => {
   if (enabled) ensureGithubMirrorUrl()
 })
 
+watch(selectedNode, (node) => {
+  syncEdgeSettingsDraft(node)
+})
+
+watch(() => edgeSettingsDraft.value.useGithubMirror, (enabled) => {
+  if (enabled && !edgeSettingsDraft.value.githubMirrorUrl.trim()) {
+    edgeSettingsDraft.value.githubMirrorUrl = DEFAULT_GITHUB_MIRROR_URL
+  }
+})
+
+watch(
+  () => JSON.stringify(edgeSettingsDraft.value.edgeSourceUrls),
+  () => {
+    edgeSourceProbeReport.value = null
+  },
+)
+
 async function openCreateTemplate() {
   resetTemplateForm()
   showCreateTemplate.value = true
@@ -1527,6 +1732,10 @@ function getSubscriptionVisibleNodesLabel(subscription: SubscriptionRecord) {
 }
 
 async function openPublishRelease(node: NodeRecord) {
+  if (node.nodeType === 'edge') {
+    toast('error', 'Edge nodes do not support runtime releases')
+    return
+  }
   publishNode.value = node
   publishMessage.value = ''
   publishPreview.value = null
@@ -1730,10 +1939,15 @@ function getProgressTone(value: number | null) {
 }
 
 function isOnline(n: NodeRecord) {
+  if (n.nodeType === 'edge') return false
   return isNodeOnline(n.lastSeenAt, n.heartbeatIntervalSeconds)
 }
 
 function getNodeDomainDisplay(n: NodeRecord) {
+  if (n.nodeType === 'edge') {
+    const formats = getEdgeConfiguredFormats(n)
+    return formats.length > 0 ? formats.join(' / ') : '-'
+  }
   if (n.networkType === 'noPublicIp') {
     return n.argoDomain || n.argoTunnelDomain || '-'
   }
@@ -1826,6 +2040,7 @@ function getReleaseStatusClass(status: string | null | undefined) {
 }
 
 function getNodeVersionLabel(n: NodeRecord) {
+  if (n.nodeType === 'edge') return '---'
   const revision = Math.max(Number(n.currentReleaseRevision || 0), Number(n.desiredReleaseRevision || 0))
   return revision > 0 ? `r${revision}` : '---'
 }
@@ -1875,6 +2090,7 @@ function getTemplatePortDisplay(template: TemplateRecord) {
 }
 
 function getWarpLabel(n: NodeRecord) {
+  if (n.nodeType === 'edge') return '---'
   const warpIpv4 = (n.warpIpv4 || '').trim()
   if (warpIpv4) return warpIpv4
   const warpIpv6 = (n.warpIpv6 || '').trim()
@@ -2196,7 +2412,7 @@ onMounted(() => {
             <div class="table-wrapper" style="border:none;background:transparent">
               <table class="data-table node-table">
                 <thead><tr>
-                  <th>名称</th><th>类型</th><th>版本</th><th>地区</th><th>域名/Argo</th><th>最后在线</th><th>WARP IPv6</th><th>连接数</th><th>流量</th>
+                  <th>名称</th><th>类型</th><th>版本</th><th>地区</th><th>入口/来源</th><th>最后在线</th><th>WARP IPv6</th><th>连接数</th><th>流量</th>
                 </tr></thead>
                 <tbody>
                   <tr v-for="n in dashboardNodes" :key="n.id" class="cursor-pointer" @click="selectNode(n)">
@@ -2217,8 +2433,8 @@ onMounted(() => {
                     <td class="text-mono truncate">{{ getNodeDomainDisplay(n) }}</td>
                     <td class="text-muted" :title="formatDateTime(n.lastSeenAt)">{{ formatDateTime(n.lastSeenAt) }}</td>
                     <td class="text-mono">{{ getWarpLabel(n) }}</td>
-                    <td>{{ n.currentConnections }}</td>
-                    <td class="text-muted" style="font-size:12px">↑{{ formatBytes(n.bytesOutTotal) }} ↓{{ formatBytes(n.bytesInTotal) }}</td>
+                    <td>{{ n.nodeType === 'edge' ? '---' : n.currentConnections }}</td>
+                    <td class="text-muted" style="font-size:12px">{{ n.nodeType === 'edge' ? '---' : `↑${formatBytes(n.bytesOutTotal)} ↓${formatBytes(n.bytesInTotal)}` }}</td>
                   </tr>
                   <tr v-if="dashboardNodes.length===0"><td colspan="9" class="text-center text-muted" style="padding:32px">暂无节点</td></tr>
                 </tbody>
@@ -2238,7 +2454,7 @@ onMounted(() => {
           <div class="table-wrapper">
             <table class="data-table node-table">
               <thead><tr>
-                <th>名称</th><th>类型</th><th>版本</th><th>地区</th><th>域名/Argo</th><th>最后在线</th><th>WARP IPv6</th><th>连接数</th><th>流量</th><th>操作</th>
+                <th>名称</th><th>类型</th><th>版本</th><th>地区</th><th>入口/来源</th><th>最后在线</th><th>WARP IPv6</th><th>连接数</th><th>流量</th><th>操作</th>
               </tr></thead>
               <tbody>
                 <tr v-for="n in sortedNodes" :key="n.id" class="cursor-pointer" @click="selectNode(n)">
@@ -2259,14 +2475,14 @@ onMounted(() => {
                   <td class="text-mono truncate">{{ getNodeDomainDisplay(n) }}</td>
                   <td class="text-muted" :title="`${timeAgo(n.lastSeenAt)} · ${formatDateTime(n.lastSeenAt)}`">{{ formatDateTime(n.lastSeenAt) }}</td>
                   <td class="text-mono">{{ getWarpLabel(n) }}</td>
-                  <td>{{ n.currentConnections }}</td>
-                  <td class="text-muted" style="font-size:12px">↑{{ formatBytes(n.bytesOutTotal) }} ↓{{ formatBytes(n.bytesInTotal) }}</td>
-                  <td>
-                    <div class="table-actions">
-                      <button class="btn btn-sm btn-secondary" @click.stop="openPublishRelease(n)">发布</button>
-                      <button class="btn btn-sm btn-danger" @click.stop="deleteNodeById(n.id, n.name)">删除</button>
-                    </div>
-                  </td>
+                  <td>{{ n.nodeType === 'edge' ? '---' : n.currentConnections }}</td>
+                  <td class="text-muted" style="font-size:12px">{{ n.nodeType === 'edge' ? '---' : `↑${formatBytes(n.bytesOutTotal)} ↓${formatBytes(n.bytesInTotal)}` }}</td>
+                    <td>
+                      <div class="table-actions">
+                        <button v-if="n.nodeType !== 'edge'" class="btn btn-sm btn-secondary" @click.stop="openPublishRelease(n)">发布</button>
+                        <button class="btn btn-sm btn-danger" @click.stop="deleteNodeById(n.id, n.name)">删除</button>
+                      </div>
+                    </td>
                 </tr>
                 <tr v-if="nodes.length===0"><td colspan="10"><div class="empty-state"><div class="empty-state-icon">🖥️</div><div class="empty-state-title">暂无节点</div><div class="empty-state-text">添加您的第一个代理节点以开始使用</div><button class="btn btn-primary" @click="showCreateNode=true">+ 添加节点</button></div></td></tr>
               </tbody>
@@ -2397,108 +2613,184 @@ onMounted(() => {
             <div class="detail-row"><span class="detail-label">ID</span><span class="detail-value text-mono">{{ selectedNode.id }}</span></div>
             <div class="detail-row"><span class="detail-label">类型</span><span class="detail-value"><span class="tag" :class="{accent:selectedNode.nodeType==='edge'}">{{ selectedNode.nodeType }}</span></span></div>
             <div class="detail-row"><span class="detail-label">地区</span><span class="detail-value">{{ selectedNode.region || '-' }}</span></div>
-            <div class="detail-row"><span class="detail-label">网络类型</span><span class="detail-value"><span class="tag" :class="{accent:selectedNode.networkType==='noPublicIp'}">{{ selectedNode.networkType === 'noPublicIp' ? '无公网IP (Argo)' : '有公网IP' }}</span></span></div>
-            <div class="detail-row"><span class="detail-label">主域名</span><span class="detail-value text-mono">{{ selectedNode.primaryDomain || '-' }}</span></div>
-            <div class="detail-row" v-if="selectedNode.backupDomain"><span class="detail-label">备域名</span><span class="detail-value text-mono">{{ selectedNode.backupDomain }}</span></div>
-            <div class="detail-row"><span class="detail-label">入口 IP</span><span class="detail-value text-mono">{{ selectedNode.entryIp || '-' }}</span></div>
-            <div class="detail-row" v-if="selectedNode.argoTunnelDomain"><span class="detail-label">Argo 域名</span><span class="detail-value text-mono">{{ selectedNode.argoTunnelDomain }}</span></div>
-            <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value"><span class="status-badge" :class="isOnline(selectedNode)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(selectedNode)?'在线':'离线' }}</span></span></div>
+            <template v-if="selectedNode.nodeType === 'edge'">
+              <div class="detail-row"><span class="detail-label">部署文件</span><span class="detail-value text-mono">{{ selectedNode.edgeDeployAssetUrl || DEFAULT_EDGE_DEPLOY_ASSET_URL }}</span></div>
+              <div class="detail-row"><span class="detail-label">镜像下载</span><span class="detail-value">{{ selectedNode.edgeUseGithubMirror ? '已启用' : '未启用' }}</span></div>
+              <div class="detail-row"><span class="detail-label">订阅格式</span><span class="detail-value">{{ getEdgeConfiguredFormats(selectedNode).length ? getEdgeConfiguredFormats(selectedNode).join(' / ') : '未配置' }}</span></div>
+            </template>
+            <template v-else>
+              <div class="detail-row"><span class="detail-label">网络类型</span><span class="detail-value"><span class="tag" :class="{accent:selectedNode.networkType==='noPublicIp'}">{{ selectedNode.networkType === 'noPublicIp' ? '无公网IP (Argo)' : '有公网IP' }}</span></span></div>
+              <div class="detail-row"><span class="detail-label">主域名</span><span class="detail-value text-mono">{{ selectedNode.primaryDomain || '-' }}</span></div>
+              <div class="detail-row" v-if="selectedNode.backupDomain"><span class="detail-label">备域名</span><span class="detail-value text-mono">{{ selectedNode.backupDomain }}</span></div>
+              <div class="detail-row"><span class="detail-label">入口 IP</span><span class="detail-value text-mono">{{ selectedNode.entryIp || '-' }}</span></div>
+              <div class="detail-row" v-if="selectedNode.argoTunnelDomain"><span class="detail-label">Argo 域名</span><span class="detail-value text-mono">{{ selectedNode.argoTunnelDomain }}</span></div>
+              <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value"><span class="status-badge" :class="isOnline(selectedNode)?'online':'offline'"><span class="status-dot"></span>{{ isOnline(selectedNode)?'在线':'离线' }}</span></span></div>
+            </template>
           </div>
-          <div class="detail-section">
-            <div class="detail-section-title">运行与网络</div>
-            <div class="detail-row"><span class="detail-label">权限</span><span class="detail-value">{{ getNodePermissionText(selectedNode) }}</span></div>
-            <div class="detail-row"><span class="detail-label">sing-box</span><span class="detail-value text-mono">{{ getRuntimeKernelText(selectedNode, 'sing-box') }}</span></div>
-            <div class="detail-row"><span class="detail-label">xray</span><span class="detail-value text-mono">{{ getRuntimeKernelText(selectedNode, 'xray') }}</span></div>
-            <div class="detail-row"><span class="detail-label">心跳间隔</span><span class="detail-value">{{ getNodeHeartbeatInterval(selectedNode) }} 秒</span></div>
-            <div class="detail-row"><span class="detail-label">拉取版本间隔</span><span class="detail-value">{{ getNodeVersionPullInterval(selectedNode) }} 秒</span></div>
-            <div class="detail-row">
-              <span class="detail-label">WARP</span>
-              <span class="detail-value">
-                <span class="warp-badge" :class="isWarpRunning(selectedNode) ? 'online' : 'offline'">{{ getWarpStatusText(selectedNode) }}</span>
-              </span>
-            </div>
-            <div class="detail-row"><span class="detail-label">WARP IPv4</span><span class="detail-value text-mono">{{ selectedNode.warpIpv4 || '-' }}</span></div>
-            <div class="detail-row"><span class="detail-label">WARP IPv6</span><span class="detail-value text-mono">{{ selectedNode.warpIpv6 || '-' }}</span></div>
-            <div class="detail-row"><span class="detail-label">WARP Endpoint</span><span class="detail-value text-mono">{{ selectedNode.warpEndpoint || '-' }}</span></div>
-            <div class="detail-row"><span class="detail-label">WARP Account</span><span class="detail-value">{{ getWarpAccountTypeText(selectedNode) }}</span></div>
-            <div class="detail-row"><span class="detail-label">WARP Tunnel</span><span class="detail-value">{{ getWarpTunnelProtocolText(selectedNode) }}</span></div>
-            <div class="detail-row">
-              <span class="detail-label">Argo</span>
-              <span class="detail-value">
-                <span class="warp-badge" :class="isArgoRunning(selectedNode) ? 'online' : 'offline'">{{ getArgoStatusText(selectedNode) }}</span>
-              </span>
-            </div>
-            <div class="detail-row"><span class="detail-label">Argo Domain</span><span class="detail-value text-mono">{{ selectedNode.argoDomain || selectedNode.argoTunnelDomain || '-' }}</span></div>
-          </div>
-          <div class="detail-section">
-            <div class="detail-section-title">心跳上报</div>
-            <div class="detail-row"><span class="detail-label">最近心跳</span><span class="detail-value">{{ timeAgo(selectedNode.lastSeenAt) }}</span></div>
-            <div class="detail-row"><span class="detail-label">最后在线时间</span><span class="detail-value">{{ formatDateTime(selectedNode.lastSeenAt) }}</span></div>
-            <div class="detail-row"><span class="detail-label">CPU</span><span class="detail-value">{{ getCpuMetricText(selectedNode) }}</span></div>
-            <div v-if="getCpuUsagePercent(selectedNode) !== null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="getProgressTone(getCpuUsagePercent(selectedNode))" :style="{width:getCpuUsagePercent(selectedNode)+'%'}"></div></div>
-            <div class="detail-row"><span class="detail-label">内存</span><span class="detail-value">{{ getMemoryMetricText(selectedNode) }}</span></div>
-            <div v-if="getMemoryUsagePercent(selectedNode) !== null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="getProgressTone(getMemoryUsagePercent(selectedNode))" :style="{width:getMemoryUsagePercent(selectedNode)+'%'}"></div></div>
-            <div class="detail-row"><span class="detail-label">存储</span><span class="detail-value">{{ getStorageMetricText(selectedNode) }}</span></div>
-            <div v-if="getStorageUsagePercent(selectedNode) !== null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="getProgressTone(getStorageUsagePercent(selectedNode))" :style="{width:getStorageUsagePercent(selectedNode)+'%'}"></div></div>
-            <div class="detail-row"><span class="detail-label">连接数</span><span class="detail-value">{{ selectedNode.currentConnections }}</span></div>
-            <div class="detail-row"><span class="detail-label">入站流量</span><span class="detail-value">{{ formatBytes(selectedNode.bytesInTotal) }}</span></div>
-            <div class="detail-row"><span class="detail-label">出站流量</span><span class="detail-value">{{ formatBytes(selectedNode.bytesOutTotal) }}</span></div>
-          </div>
-          <div class="detail-section">
-            <div class="detail-section-title">发布记录 ({{ nodeReleases.length }})</div>
-            <div class="text-muted" style="margin-bottom:8px;font-size:12px">点击版本号可查看该版本的应用日志。</div>
-            <div v-for="r in nodeReleases.slice(0,5)" :key="r.id" class="card mb-md" style="padding:12px">
-              <div class="flex items-center justify-between gap-sm">
-                <button
-                  type="button"
-                  class="btn btn-xs btn-ghost"
-                  style="padding:0;font-weight:600;font-size:13px"
-                  @click.stop="openReleaseLog(selectedNode, r.id)"
-                >
-                  版本 #{{ r.revision }}
-                </button>
-                <span class="status-badge" :class="getReleaseStatusClass(r.status)">{{ getReleaseStatusText(r.status) }}</span>
+          <template v-if="selectedNode.nodeType === 'edge'">
+            <div class="detail-section">
+              <div class="detail-section-title">部署资产</div>
+              <div class="form-checkbox-group mb-md">
+                <input id="edge-detail-github-mirror" type="checkbox" class="form-checkbox" v-model="edgeSettingsDraft.useGithubMirror">
+                <label for="edge-detail-github-mirror" class="form-label" style="margin:0">使用 GitHub 镜像下载部署文件</label>
               </div>
-              <div class="text-muted" style="font-size:11px;margin-top:4px">{{ r.kind }} · {{ timeAgo(r.createdAt) }}</div>
-              <div v-if="r.summary" style="font-size:12px;margin-top:4px;color:var(--color-text-secondary)">{{ r.summary }}</div>
+              <div v-if="edgeSettingsDraft.useGithubMirror" class="form-group">
+                <label class="form-label">GitHub 镜像地址</label>
+                <input class="form-input" v-model="edgeSettingsDraft.githubMirrorUrl" placeholder="默认 https://gh-proxy.org，可自定义" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">部署文件链接</label>
+                <input class="form-input" v-model="edgeSettingsDraft.edgeDeployAssetUrl" placeholder="https://github.com/byJoey/cfnew/releases/latest/download/Pages.zip" />
+              </div>
+              <div class="text-muted" style="margin-bottom:12px;font-size:12px">
+                用户可以通过这里下载 Worker/Pages 部署文件。启用 GitHub 镜像后，下载按钮会自动拼接镜像前缀。
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-secondary btn-sm" @click="openEdgeDraftDeployDownload">部署文件下载</button>
+                <button class="btn btn-secondary btn-sm" :disabled="!getEdgeDraftDeployDownloadUrl()" @click="copyToClipboard(getEdgeDraftDeployDownloadUrl())">复制下载链接</button>
+                <button class="btn btn-primary btn-sm" :disabled="edgeSettingsSaving" @click="saveSelectedEdgeSettings">{{ edgeSettingsSaving ? '保存中...' : '保存 Edge 设置' }}</button>
+              </div>
             </div>
-            <div v-if="nodeReleases.length===0" class="text-muted text-center" style="padding:16px;font-size:12px">暂无发布记录</div>
-          </div>
-          <div class="detail-section">
-            <div class="detail-section-title">部署命令</div>
-            <div class="text-muted" style="margin-bottom:8px;font-size:12px">
-              一行命令安装并启动 agent。远端安装脚本会按网络类型执行必选初始化：有公网 IP 安装证书，无公网 IP 安装 Argo，并输出关键进度。
-            </div>
-            <button v-if="!deployCommand" class="btn btn-secondary btn-sm w-full" @click="loadDeployCommand">生成部署命令</button>
-            <div v-else>
-              <div class="code-block command-block" style="max-height:120px;font-size:11px">{{ deployCommand }}</div>
-              <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(deployCommand)">📋 复制部署命令</button>
-            </div>
-          </div>
-          <div class="detail-section">
-            <div class="detail-section-title">一键卸载</div>
-            <button v-if="!uninstallCommand" class="btn btn-danger btn-sm w-full" style="--btn-bg:var(--color-danger);--btn-hover:var(--color-danger)" @click="loadUninstallCommand">生成卸载命令</button>
-            <div v-else>
-              <div class="code-block command-block" style="max-height:120px;font-size:11px">{{ uninstallCommand }}</div>
-              <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(uninstallCommand)">📋 复制卸载命令</button>
-            </div>
-          </div>
-          <div class="detail-section">
-            <div class="detail-section-title">检查命令</div>
-            <div class="text-muted" style="margin-bottom:8px;font-size:12px">
-              下列命令均为单行命令，可整行复制到 VPS 直接执行。
-            </div>
-            <div v-for="item in getNodeCheckCommands(selectedNode)" :key="item.title" class="card mb-md" style="padding:12px">
-              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
-                <div>
-                  <div style="font-size:13px;font-weight:700">{{ item.title }}</div>
-                  <div class="text-muted" style="margin-top:4px;font-size:12px">{{ item.description }}</div>
+            <div class="detail-section">
+              <div class="detail-section-title">上游订阅源</div>
+              <div class="text-muted" style="margin-bottom:12px;font-size:12px">
+                不同客户端格式可分别填写。用户请求我们的订阅地址时，系统会优先匹配对应格式并合并返回。
+              </div>
+              <div v-for="field in EDGE_SOURCE_FIELDS" :key="field.format" class="form-group">
+                <label class="form-label">{{ field.label }}</label>
+                <input class="form-input" v-model="edgeSettingsDraft.edgeSourceUrls[field.format]" :placeholder="field.placeholder" />
+              </div>
+              <div class="detail-row" style="margin-bottom:12px">
+                <span class="detail-label">当前已生效格式</span>
+                <span class="detail-value">{{ getEdgeConfiguredFormats(selectedNode).length ? getEdgeConfiguredFormats(selectedNode).join(' / ') : '未配置' }}</span>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-secondary btn-sm" :disabled="edgeSourceProbeLoading" @click="testSelectedEdgeSources">{{ edgeSourceProbeLoading ? '测试中...' : '测试上游订阅源' }}</button>
+                <button class="btn btn-primary btn-sm" :disabled="edgeSettingsSaving" @click="saveSelectedEdgeSettings">{{ edgeSettingsSaving ? '保存中...' : '保存订阅源配置' }}</button>
+              </div>
+              <div v-if="edgeSourceProbeReport" class="card mt-md" style="padding:12px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+                  <div style="font-size:13px;font-weight:700">最近一次测试</div>
+                  <div class="text-muted" style="font-size:12px">{{ formatDateTime(edgeSourceProbeReport.testedAt) }}</div>
                 </div>
-                <button class="btn btn-secondary btn-xs" @click="copyToClipboard(item.command)">复制</button>
+                <div class="text-muted" style="margin-top:4px;font-size:12px">
+                  成功 {{ edgeSourceProbeReport.successCount }} 个，失败 {{ edgeSourceProbeReport.failureCount }} 个
+                </div>
+                <div v-for="result in edgeSourceProbeReport.results" :key="`${result.format}:${result.url}`" class="card mt-md" style="padding:10px;background:var(--color-panel-bg)">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                    <span class="tag">{{ result.format }}</span>
+                    <span class="status-badge" :class="result.ok ? 'online' : 'offline'">
+                      <span class="status-dot"></span>{{ result.ok ? '可拉取' : '拉取失败' }}
+                    </span>
+                  </div>
+                  <div class="text-mono" style="margin-top:8px;font-size:11px;word-break:break-all">{{ result.url }}</div>
+                  <div v-if="result.ok" class="text-muted" style="margin-top:6px;font-size:12px">
+                    HTTP {{ result.status || 200 }} {{ result.statusText || '' }} · {{ result.contentType || 'unknown' }} · {{ formatBytes(result.bytes || 0) }}
+                  </div>
+                  <div v-else class="text-muted" style="margin-top:6px;font-size:12px;color:var(--color-danger)">
+                    {{ result.error || '拉取失败' }}
+                  </div>
+                </div>
               </div>
-              <div class="code-block command-block" style="margin-top:10px;max-height:180px;font-size:11px">{{ item.command }}</div>
             </div>
-          </div>
+          </template>
+          <template v-else>
+            <div class="detail-section">
+              <div class="detail-section-title">运行与网络</div>
+              <div class="detail-row"><span class="detail-label">权限</span><span class="detail-value">{{ getNodePermissionText(selectedNode) }}</span></div>
+              <div class="detail-row"><span class="detail-label">sing-box</span><span class="detail-value text-mono">{{ getRuntimeKernelText(selectedNode, 'sing-box') }}</span></div>
+              <div class="detail-row"><span class="detail-label">xray</span><span class="detail-value text-mono">{{ getRuntimeKernelText(selectedNode, 'xray') }}</span></div>
+              <div class="detail-row"><span class="detail-label">心跳间隔</span><span class="detail-value">{{ getNodeHeartbeatInterval(selectedNode) }} 秒</span></div>
+              <div class="detail-row"><span class="detail-label">拉取版本间隔</span><span class="detail-value">{{ getNodeVersionPullInterval(selectedNode) }} 秒</span></div>
+              <div class="detail-row">
+                <span class="detail-label">WARP</span>
+                <span class="detail-value">
+                  <span class="warp-badge" :class="isWarpRunning(selectedNode) ? 'online' : 'offline'">{{ getWarpStatusText(selectedNode) }}</span>
+                </span>
+              </div>
+              <div class="detail-row"><span class="detail-label">WARP IPv4</span><span class="detail-value text-mono">{{ selectedNode.warpIpv4 || '-' }}</span></div>
+              <div class="detail-row"><span class="detail-label">WARP IPv6</span><span class="detail-value text-mono">{{ selectedNode.warpIpv6 || '-' }}</span></div>
+              <div class="detail-row"><span class="detail-label">WARP Endpoint</span><span class="detail-value text-mono">{{ selectedNode.warpEndpoint || '-' }}</span></div>
+              <div class="detail-row"><span class="detail-label">WARP Account</span><span class="detail-value">{{ getWarpAccountTypeText(selectedNode) }}</span></div>
+              <div class="detail-row"><span class="detail-label">WARP Tunnel</span><span class="detail-value">{{ getWarpTunnelProtocolText(selectedNode) }}</span></div>
+              <div class="detail-row">
+                <span class="detail-label">Argo</span>
+                <span class="detail-value">
+                  <span class="warp-badge" :class="isArgoRunning(selectedNode) ? 'online' : 'offline'">{{ getArgoStatusText(selectedNode) }}</span>
+                </span>
+              </div>
+              <div class="detail-row"><span class="detail-label">Argo Domain</span><span class="detail-value text-mono">{{ selectedNode.argoDomain || selectedNode.argoTunnelDomain || '-' }}</span></div>
+            </div>
+            <div class="detail-section">
+              <div class="detail-section-title">心跳上报</div>
+              <div class="detail-row"><span class="detail-label">最近心跳</span><span class="detail-value">{{ timeAgo(selectedNode.lastSeenAt) }}</span></div>
+              <div class="detail-row"><span class="detail-label">最后在线时间</span><span class="detail-value">{{ formatDateTime(selectedNode.lastSeenAt) }}</span></div>
+              <div class="detail-row"><span class="detail-label">CPU</span><span class="detail-value">{{ getCpuMetricText(selectedNode) }}</span></div>
+              <div v-if="getCpuUsagePercent(selectedNode) !== null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="getProgressTone(getCpuUsagePercent(selectedNode))" :style="{width:getCpuUsagePercent(selectedNode)+'%'}"></div></div>
+              <div class="detail-row"><span class="detail-label">内存</span><span class="detail-value">{{ getMemoryMetricText(selectedNode) }}</span></div>
+              <div v-if="getMemoryUsagePercent(selectedNode) !== null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="getProgressTone(getMemoryUsagePercent(selectedNode))" :style="{width:getMemoryUsagePercent(selectedNode)+'%'}"></div></div>
+              <div class="detail-row"><span class="detail-label">存储</span><span class="detail-value">{{ getStorageMetricText(selectedNode) }}</span></div>
+              <div v-if="getStorageUsagePercent(selectedNode) !== null" class="progress-bar mb-md"><div class="progress-bar-fill" :class="getProgressTone(getStorageUsagePercent(selectedNode))" :style="{width:getStorageUsagePercent(selectedNode)+'%'}"></div></div>
+              <div class="detail-row"><span class="detail-label">连接数</span><span class="detail-value">{{ selectedNode.currentConnections }}</span></div>
+              <div class="detail-row"><span class="detail-label">入站流量</span><span class="detail-value">{{ formatBytes(selectedNode.bytesInTotal) }}</span></div>
+              <div class="detail-row"><span class="detail-label">出站流量</span><span class="detail-value">{{ formatBytes(selectedNode.bytesOutTotal) }}</span></div>
+            </div>
+            <div class="detail-section">
+              <div class="detail-section-title">发布记录 ({{ nodeReleases.length }})</div>
+              <div class="text-muted" style="margin-bottom:8px;font-size:12px">点击版本号可查看该版本的应用日志。</div>
+              <div v-for="r in nodeReleases.slice(0,5)" :key="r.id" class="card mb-md" style="padding:12px">
+                <div class="flex items-center justify-between gap-sm">
+                  <button
+                    type="button"
+                    class="btn btn-xs btn-ghost"
+                    style="padding:0;font-weight:600;font-size:13px"
+                    @click.stop="openReleaseLog(selectedNode, r.id)"
+                  >
+                    版本 #{{ r.revision }}
+                  </button>
+                  <span class="status-badge" :class="getReleaseStatusClass(r.status)">{{ getReleaseStatusText(r.status) }}</span>
+                </div>
+                <div class="text-muted" style="font-size:11px;margin-top:4px">{{ r.kind }} · {{ timeAgo(r.createdAt) }}</div>
+                <div v-if="r.summary" style="font-size:12px;margin-top:4px;color:var(--color-text-secondary)">{{ r.summary }}</div>
+              </div>
+              <div v-if="nodeReleases.length===0" class="text-muted text-center" style="padding:16px;font-size:12px">暂无发布记录</div>
+            </div>
+            <div class="detail-section">
+              <div class="detail-section-title">部署命令</div>
+              <div class="text-muted" style="margin-bottom:8px;font-size:12px">
+                一行命令安装并启动 agent。远端安装脚本会按网络类型执行必选初始化：有公网 IP 安装证书，无公网 IP 安装 Argo，并输出关键进度。
+              </div>
+              <button v-if="!deployCommand" class="btn btn-secondary btn-sm w-full" @click="loadDeployCommand">生成部署命令</button>
+              <div v-else>
+                <div class="code-block command-block" style="max-height:120px;font-size:11px">{{ deployCommand }}</div>
+                <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(deployCommand)">📋 复制部署命令</button>
+              </div>
+            </div>
+            <div class="detail-section">
+              <div class="detail-section-title">一键卸载</div>
+              <button v-if="!uninstallCommand" class="btn btn-danger btn-sm w-full" style="--btn-bg:var(--color-danger);--btn-hover:var(--color-danger)" @click="loadUninstallCommand">生成卸载命令</button>
+              <div v-else>
+                <div class="code-block command-block" style="max-height:120px;font-size:11px">{{ uninstallCommand }}</div>
+                <button class="btn btn-sm btn-primary mt-md w-full" @click="copyToClipboard(uninstallCommand)">📋 复制卸载命令</button>
+              </div>
+            </div>
+            <div class="detail-section">
+              <div class="detail-section-title">检查命令</div>
+              <div class="text-muted" style="margin-bottom:8px;font-size:12px">
+                下列命令均为单行命令，可整行复制到 VPS 直接执行。
+              </div>
+              <div v-for="item in getNodeCheckCommands(selectedNode)" :key="item.title" class="card mb-md" style="padding:12px">
+                <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+                  <div>
+                    <div style="font-size:13px;font-weight:700">{{ item.title }}</div>
+                    <div class="text-muted" style="margin-top:4px;font-size:12px">{{ item.description }}</div>
+                  </div>
+                  <button class="btn btn-secondary btn-xs" @click="copyToClipboard(item.command)">复制</button>
+                </div>
+                <div class="code-block command-block" style="margin-top:10px;max-height:180px;font-size:11px">{{ item.command }}</div>
+              </div>
+            </div>
+          </template>
         </div>
       </aside>
     </template>
@@ -2634,68 +2926,87 @@ onMounted(() => {
           <div class="form-section-divider">扩展选项</div>
           <div class="form-checkbox-group mb-md">
             <input type="checkbox" class="form-checkbox" v-model="newNode.useGithubMirror" id="github-mirror">
-            <label for="github-mirror" class="form-label" style="margin:0">使用 GitHub 镜像</label>
+            <label for="github-mirror" class="form-label" style="margin:0">{{ newNode.nodeType === 'edge' ? '使用 GitHub 镜像下载部署文件' : '使用 GitHub 镜像' }}</label>
           </div>
           <div v-if="newNode.useGithubMirror" class="form-group">
             <label class="form-label">GitHub 镜像地址</label>
             <input class="form-input" v-model="newNode.githubMirrorUrl" @blur="ensureGithubMirrorUrl" placeholder="默认 https://gh-proxy.org，可自定义" />
           </div>
 
-          <div class="form-section-divider">部署参数</div>
-          <div class="form-row">
+          <template v-if="newNode.nodeType === 'edge'">
+            <div class="form-section-divider">部署资产</div>
             <div class="form-group">
-              <label class="form-label">心跳间隔（秒）</label>
-              <input class="form-input" type="number" min="5" max="3600" step="1" v-model.number="newNode.heartbeatIntervalSeconds" />
+              <label class="form-label">部署文件链接</label>
+              <input class="form-input" v-model="newNode.edgeDeployAssetUrl" placeholder="https://github.com/byJoey/cfnew/releases/latest/download/Pages.zip" />
             </div>
-            <div class="form-group">
-              <label class="form-label">拉取版本间隔（秒）</label>
-              <input class="form-input" type="number" min="5" max="3600" step="1" v-model.number="newNode.versionPullIntervalSeconds" />
+            <div class="text-muted" style="margin-bottom:12px;font-size:12px">
+              默认提供 `Pages.zip` 下载地址，便于用户部署 Worker/Pages。启用 GitHub 镜像后，下载链接会自动走镜像前缀。
             </div>
-          </div>
-          <div class="form-checkbox-group mb-md">
-            <input type="checkbox" class="form-checkbox" v-model="newNode.installWarp" id="node-install-warp">
-            <label for="node-install-warp" class="form-label" style="margin:0">首次部署时安装 WARP（本地代理模式）</label>
-          </div>
-          <div v-if="newNode.installWarp" class="form-group">
-            <label class="form-label">WARP License Key</label>
-            <input class="form-input" v-model="newNode.warpLicenseKey" placeholder="可选，填写后会在首次部署时一起注册" />
-            <div class="text-muted" style="margin-top:8px;font-size:12px">安装脚本会把 WARP 配置为本地 SOCKS5 代理，监听 <span class="text-mono">127.0.0.1:{{ DEFAULT_WARP_LOCAL_PROXY_PORT }}</span>，不会接管整机默认路由。</div>
-          </div>
 
-          <div class="form-section-divider">服务器网络</div>
-          <div class="form-group">
-            <label class="form-label">网络类型</label>
-            <select class="form-select" v-model="newNode.networkType">
-              <option value="public">有公网 IP</option>
-              <option value="noPublicIp">无公网 IP (Argo 隧道)</option>
-            </select>
-          </div>
-
-          <!-- Public IP options -->
-          <template v-if="newNode.networkType==='public'">
-            <div class="form-group"><label class="form-label">主域名</label><input class="form-input" v-model="newNode.primaryDomain" placeholder="node.example.com" /></div>
-            <div class="form-group"><label class="form-label">备域名</label><input class="form-input" v-model="newNode.backupDomain" placeholder="node2.example.com（可选）" /></div>
-            <div class="form-group"><label class="form-label">入口 IP</label><input class="form-input" v-model="newNode.entryIp" placeholder="1.2.3.4" /></div>
-            <div class="form-group">
-              <label class="form-label">Cloudflare DNS API Token</label>
-              <input class="form-input" v-model="newNode.cfDnsToken" placeholder="可选，用于自动签发真实证书；留空则回退为自签名证书" />
+            <div class="form-section-divider">上游订阅源</div>
+            <div class="text-muted" style="margin-bottom:12px;font-size:12px">
+              可以为不同客户端格式分别填写外部订阅地址。后续用户通过我们的订阅链接更新时，会优先命中对应格式。
+            </div>
+            <div v-for="field in EDGE_SOURCE_FIELDS" :key="field.format" class="form-group">
+              <label class="form-label">{{ field.label }}</label>
+              <input class="form-input" v-model="newNode.edgeSourceUrls[field.format]" :placeholder="field.placeholder" />
             </div>
           </template>
+          <template v-else>
+            <div class="form-section-divider">部署参数</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">心跳间隔（秒）</label>
+                <input class="form-input" type="number" min="5" max="3600" step="1" v-model.number="newNode.heartbeatIntervalSeconds" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">拉取版本间隔（秒）</label>
+                <input class="form-input" type="number" min="5" max="3600" step="1" v-model.number="newNode.versionPullIntervalSeconds" />
+              </div>
+            </div>
+            <div class="form-checkbox-group mb-md">
+              <input type="checkbox" class="form-checkbox" v-model="newNode.installWarp" id="node-install-warp">
+              <label for="node-install-warp" class="form-label" style="margin:0">首次部署时安装 WARP（本地代理模式）</label>
+            </div>
+            <div v-if="newNode.installWarp" class="form-group">
+              <label class="form-label">WARP License Key</label>
+              <input class="form-input" v-model="newNode.warpLicenseKey" placeholder="可选，填写后会在首次部署时一起注册" />
+              <div class="text-muted" style="margin-top:8px;font-size:12px">安装脚本会把 WARP 配置为本地 SOCKS5 代理，监听 <span class="text-mono">127.0.0.1:{{ DEFAULT_WARP_LOCAL_PROXY_PORT }}</span>，不会接管整机默认路由。</div>
+            </div>
 
-          <!-- No Public IP (Argo) options -->
-          <template v-if="newNode.networkType==='noPublicIp'">
+            <div class="form-section-divider">服务器网络</div>
             <div class="form-group">
-              <label class="form-label">Argo Tunnel Token</label>
-              <input class="form-input" v-model="newNode.argoTunnelToken" placeholder="可选，绑定固定 Tunnel 时填写" />
+              <label class="form-label">网络类型</label>
+              <select class="form-select" v-model="newNode.networkType">
+                <option value="public">有公网 IP</option>
+                <option value="noPublicIp">无公网 IP (Argo 隧道)</option>
+              </select>
             </div>
-            <div class="form-group">
-              <label class="form-label">隧道域名</label>
-              <input class="form-input" v-model="newNode.argoTunnelDomain" placeholder="可选，例如 tunnel.example.com" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">回源端口</label>
-              <input class="form-input" type="number" v-model.number="newNode.argoTunnelPort" placeholder="2053" />
-            </div>
+
+            <template v-if="newNode.networkType==='public'">
+              <div class="form-group"><label class="form-label">主域名</label><input class="form-input" v-model="newNode.primaryDomain" placeholder="node.example.com" /></div>
+              <div class="form-group"><label class="form-label">备域名</label><input class="form-input" v-model="newNode.backupDomain" placeholder="node2.example.com（可选）" /></div>
+              <div class="form-group"><label class="form-label">入口 IP</label><input class="form-input" v-model="newNode.entryIp" placeholder="1.2.3.4" /></div>
+              <div class="form-group">
+                <label class="form-label">Cloudflare DNS API Token</label>
+                <input class="form-input" v-model="newNode.cfDnsToken" placeholder="可选，用于自动签发真实证书；留空则回退为自签名证书" />
+              </div>
+            </template>
+
+            <template v-if="newNode.networkType==='noPublicIp'">
+              <div class="form-group">
+                <label class="form-label">Argo Tunnel Token</label>
+                <input class="form-input" v-model="newNode.argoTunnelToken" placeholder="可选，绑定固定 Tunnel 时填写" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">隧道域名</label>
+                <input class="form-input" v-model="newNode.argoTunnelDomain" placeholder="可选，例如 tunnel.example.com" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">回源端口</label>
+                <input class="form-input" type="number" v-model.number="newNode.argoTunnelPort" placeholder="2053" />
+              </div>
+            </template>
           </template>
 
         </div>

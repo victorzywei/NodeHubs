@@ -21,6 +21,7 @@ import {
   DEFAULT_WIREGUARD_SERVER_ADDRESS,
 } from './template-constants'
 import { hydrateTemplatePreset, repairTemplateRecord } from './template-defaults'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 
 type RenderContext = {
   releaseId: string
@@ -1097,6 +1098,226 @@ function encodeBase64(value: string): string {
   let binary = ''
   for (const item of bytes) binary += String.fromCharCode(item)
   return btoa(binary)
+}
+
+function decodeBase64(value: string): string {
+  try {
+    const binary = atob(value.replace(/\s+/g, ''))
+    const bytes = Uint8Array.from(binary, (item) => item.charCodeAt(0))
+    return new TextDecoder().decode(bytes)
+  } catch {
+    return ''
+  }
+}
+
+function splitUniqueLines(value: string): string[] {
+  return Array.from(new Set(
+    String(value || '')
+      .replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean),
+  ))
+}
+
+function mergeUniqueByKey<T>(items: T[], getKey: (item: T) => string): T[] {
+  const seen = new Set<string>()
+  const merged: T[] = []
+  for (const item of items) {
+    const key = getKey(item)
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(item)
+  }
+  return merged
+}
+
+function readShareLinkLines(format: SubscriptionDocumentFormat, body: string): string[] {
+  if (format === 'plain') return splitUniqueLines(body)
+  if (format === 'base64' || format === 'v2ray') return splitUniqueLines(decodeBase64(body))
+  return []
+}
+
+function parseJsonDocument(body: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown> | null
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function parseClashDocument(body: string): Record<string, unknown> | null {
+  try {
+    const parsed = parseYaml(body) as Record<string, unknown> | null
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function mergeClashGroups(groups: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const merged = new Map<string, Record<string, unknown>>()
+  for (const group of groups) {
+    const name = String(group.name || '').trim() || JSON.stringify(group)
+    if (!merged.has(name)) {
+      merged.set(name, { ...group })
+      continue
+    }
+    const current = merged.get(name)!
+    const nextProxies = mergeUniqueByKey(
+      [
+        ...((Array.isArray(current.proxies) ? current.proxies : []) as unknown[]),
+        ...((Array.isArray(group.proxies) ? group.proxies : []) as unknown[]),
+      ],
+      (item) => String(item),
+    )
+    merged.set(name, {
+      ...current,
+      ...group,
+      proxies: nextProxies,
+    })
+  }
+  return Array.from(merged.values())
+}
+
+function mergeClashBodies(localBody: string, upstreamBodies: string[]): string {
+  const documents = [localBody, ...upstreamBodies]
+    .map(parseClashDocument)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+  if (documents.length === 0) return localBody
+  const base = { ...documents[0] }
+  const proxies = mergeUniqueByKey(
+    documents.flatMap((doc) => (Array.isArray(doc.proxies) ? doc.proxies : []) as Array<Record<string, unknown>>),
+    (item) => String(item.name || JSON.stringify(item)),
+  )
+  const groups = mergeClashGroups(
+    documents.flatMap((doc) => (Array.isArray(doc['proxy-groups']) ? doc['proxy-groups'] : []) as Array<Record<string, unknown>>),
+  )
+  const rules = mergeUniqueByKey(
+    documents.flatMap((doc) => (Array.isArray(doc.rules) ? doc.rules : []) as string[]),
+    (item) => String(item),
+  )
+  return stringifyYaml({
+    ...base,
+    proxies,
+    'proxy-groups': groups,
+    rules,
+  })
+}
+
+function mergeSingboxBodies(localBody: string, upstreamBodies: string[]): string {
+  const documents = [localBody, ...upstreamBodies]
+    .map(parseJsonDocument)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+  if (documents.length === 0) return localBody
+  const base = { ...documents[0] }
+  const endpoints = mergeUniqueByKey(
+    documents.flatMap((doc) => (Array.isArray(doc.endpoints) ? doc.endpoints : []) as Array<Record<string, unknown>>),
+    (item) => String(item.tag || JSON.stringify(item)),
+  )
+  const outbounds = mergeUniqueByKey(
+    documents.flatMap((doc) => (Array.isArray(doc.outbounds) ? doc.outbounds : []) as Array<Record<string, unknown>>),
+    (item) => String(item.tag || JSON.stringify(item)),
+  )
+  const dnsServers = mergeUniqueByKey(
+    documents.flatMap((doc) => {
+      const dns = doc.dns
+      if (!dns || typeof dns !== 'object') return []
+      return (Array.isArray((dns as { servers?: unknown[] }).servers) ? (dns as { servers?: unknown[] }).servers : []) as Array<Record<string, unknown>>
+    }),
+    (item) => String(item.tag || item.server || JSON.stringify(item)),
+  )
+  const nextDns = dnsServers.length > 0
+    ? {
+        ...(base.dns && typeof base.dns === 'object' ? (base.dns as Record<string, unknown>) : {}),
+        servers: dnsServers,
+      }
+    : base.dns
+  const result: Record<string, unknown> = {
+    ...base,
+    outbounds,
+  }
+  if (endpoints.length > 0) result.endpoints = endpoints
+  if (nextDns) result.dns = nextDns
+  return JSON.stringify(result, null, 2)
+}
+
+function mergeJsonBodies(localBody: string, upstreamBodies: string[]): string {
+  const localDocument = parseJsonDocument(localBody)
+  if (!localDocument) return localBody
+  const localEntries = Array.isArray(localDocument.entries) ? localDocument.entries : []
+  const upstreamEntries = upstreamBodies.flatMap((body) => {
+    const parsed = parseJsonDocument(body)
+    return Array.isArray(parsed?.entries) ? parsed.entries : []
+  })
+  return JSON.stringify({
+    ...localDocument,
+    entries: [...localEntries, ...upstreamEntries],
+  }, null, 2)
+}
+
+function mergeWireguardBodies(localBody: string, upstreamBodies: string[]): string {
+  const blocks = mergeUniqueByKey(
+    [localBody, ...upstreamBodies]
+      .map((body) => String(body || '').trim())
+      .filter(Boolean),
+    (item) => item,
+  )
+  return blocks.join('\n\n')
+}
+
+export function mergeRenderedSubscriptionDocument(
+  localDocument: { body: string; contentType: string },
+  upstreamDocuments: Array<{ format: SubscriptionDocumentFormat; body: string }>,
+  format: SubscriptionDocumentFormat,
+): { body: string; contentType: string } {
+  if (upstreamDocuments.length === 0) return localDocument
+
+  if (format === 'plain' || format === 'base64' || format === 'v2ray') {
+    const mergedLines = mergeUniqueByKey(
+      [
+        ...readShareLinkLines(format, localDocument.body),
+        ...upstreamDocuments.flatMap((document) => readShareLinkLines(document.format, document.body)),
+      ],
+      (item) => item,
+    )
+    const plain = mergedLines.join('\n')
+    return {
+      body: format === 'plain' ? plain : encodeBase64(plain),
+      contentType: 'text/plain; charset=utf-8',
+    }
+  }
+
+  if (format === 'wireguard') {
+    return {
+      body: mergeWireguardBodies(localDocument.body, upstreamDocuments.map((document) => document.body)),
+      contentType: localDocument.contentType,
+    }
+  }
+
+  if (format === 'clash') {
+    return {
+      body: mergeClashBodies(localDocument.body, upstreamDocuments.map((document) => document.body)),
+      contentType: localDocument.contentType,
+    }
+  }
+
+  if (format === 'singbox') {
+    return {
+      body: mergeSingboxBodies(localDocument.body, upstreamDocuments.map((document) => document.body)),
+      contentType: localDocument.contentType,
+    }
+  }
+
+  if (format === 'json') {
+    return {
+      body: mergeJsonBodies(localDocument.body, upstreamDocuments.map((document) => document.body)),
+      contentType: localDocument.contentType,
+    }
+  }
+
+  return localDocument
 }
 
 type ResolvedSubscriptionEntry = SubscriptionEndpoint & {
