@@ -18,6 +18,7 @@ import {
   getDesiredRelease,
   getNodeById,
   getNodeReleaseLog,
+  previewNodeRelease,
   publishNodeRelease,
   recordHeartbeat,
   updateNode,
@@ -378,6 +379,38 @@ describe('heartbeat persistence', () => {
 
     const systemStatus = await buildSystemStatus(services)
     expect(systemStatus.summary.onlineCount).toBe(2)
+  })
+})
+
+describe('warp publish guard', () => {
+  it('blocks preview and publish for warp-exit templates until the official warp proxy is running', async () => {
+    const services = createServices()
+    const node = await createNode(services, createNodeInput({ name: 'Node Guard', primaryDomain: 'guard.example.com' }))
+    const template = await createTemplate(services, createValidTemplateInput({
+      name: 'Warp Exit',
+      warpExit: true,
+      warpRouteMode: 'ipv4',
+    }))
+
+    await expect(previewNodeRelease(services, node.id, [template.id], 'preview warp')).rejects.toThrow(/WARP proxy.*Running/i)
+    await expect(publishNodeRelease(services, node.id, [template.id], 'publish warp')).rejects.toThrow(/WARP proxy.*Running/i)
+
+    await recordHeartbeat(services, {
+      nodeId: node.id,
+      bytesInTotal: 1,
+      bytesOutTotal: 2,
+      currentConnections: 0,
+      cpuUsagePercent: 5,
+      memoryUsagePercent: 10,
+      warpStatus: 'running',
+      protocolRuntimeVersion: 'xray 26.1.23',
+    })
+
+    const preview = await previewNodeRelease(services, node.id, [template.id], 'preview warp')
+    expect(preview?.templateIds).toEqual([template.id])
+
+    const release = await publishNodeRelease(services, node.id, [template.id], 'publish warp')
+    expect(release?.status).toBe('pending')
   })
 })
 

@@ -208,6 +208,8 @@ describe('agent install scripts', () => {
     expect(script).toContain('"$path" version >/dev/null 2>&1')
     expect(script).toContain('Existing $name binary is present but not runnable; reinstalling.')
     expect(script).toContain('install_warp_cli')
+    expect(script).toContain('launch_warp_go_helper() {')
+    expect(script).toContain('bash "$script_path" 4 "$NODE_WARP_LICENSE_KEY"')
     expect(script).toContain('set_warp_proxy_mode() {')
     expect(script).toContain('run_warp_cli mode proxy')
     expect(script).toContain('cat >/var/lib/cloudflare-warp/mdm.xml <<EOF')
@@ -217,6 +219,12 @@ describe('agent install scripts', () => {
     expect(script).toContain('ExecStart=/bin/sh -lc \'exec ${cloudflared_bin} tunnel --url "\\$ARGO_ORIGIN_URL" --edge-ip-version auto --no-autoupdate --protocol http2 >>"\\$ARGO_LOG_FILE" 2>&1\'')
     expect(script).toContain('curl -fL --http1.1 --connect-timeout 20 --retry 3 --retry-delay 1 --retry-all-errors "$resolved_url" -o "$target"')
     expect(script).toContain('/api/nodes/agent/reconcile?nodeId=$NODE_ID&format=env')
+    expect(script.indexOf('run_step "Register and start agent service" write_service')).toBeLessThan(
+      script.indexOf('run_step "Attempt WARP bootstrap when enabled" ensure_warp_bootstrap'),
+    )
+    expect(script.indexOf('run_step "Configure background autostart and start agent" configure_background_agent_startup')).toBeLessThan(
+      script.indexOf('run_step "Attempt WARP bootstrap when enabled" ensure_warp_bootstrap'),
+    )
     expect(script).not.toContain('hooks/bootstrap.d')
   })
 

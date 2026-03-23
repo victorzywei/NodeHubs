@@ -596,6 +596,18 @@ async function persistRepairedTemplates(
   return repairedTemplates
 }
 
+function isWarpProxyRunning(status: string | undefined): boolean {
+  return (status || '').trim().toLowerCase().includes('running')
+}
+
+function assertWarpProxyReadyForTemplates(node: Pick<NodeRecord, 'warpStatus'>, templates: Pick<TemplateRecord, 'name' | 'warpExit'>[]): void {
+  const warpTemplates = templates.filter((template) => template.warpExit)
+  if (warpTemplates.length === 0) return
+  if (isWarpProxyRunning(node.warpStatus)) return
+  const templateNames = warpTemplates.map((template) => template.name).join(', ')
+  throw new Error(`Selected templates require the official WARP proxy to be Running before preview or publish: ${templateNames}`)
+}
+
 export async function createTemplate(services: AppServices, input: CreateTemplateInput): Promise<TemplateRecord> {
   const nextTemplate = parseTemplateInput(input)
   const id = createId('tpl')
@@ -776,13 +788,15 @@ export async function publishNodeRelease(
     throw new Error('Template releases require at least one protocol template')
   }
 
+  const repairedTemplates = await persistRepairedTemplates(services, templateRows)
+  assertWarpProxyReadyForTemplates(node, repairedTemplates)
+
   const reserved = await reserveNodeReleaseSlot(services, nodeId)
   if (!reserved) return null
 
   const releaseId = createId('rel')
   const artifactKey = `releases/${nodeId}/r${reserved.revision}.json`
   const summary = summarizeRelease(uniqueTemplateIds, message)
-  const repairedTemplates = await persistRepairedTemplates(services, templateRows)
 
   try {
     const artifact = renderReleaseArtifact({
@@ -868,6 +882,7 @@ export async function previewNodeRelease(
   const createdAt = nowIso()
   const summary = summarizeRelease(uniqueTemplateIds, message)
   const repairedTemplates = templateRows.map((row) => repairTemplateRecord(toTemplateRecord(row)))
+  assertWarpProxyReadyForTemplates(node, repairedTemplates)
   const artifact = renderReleaseArtifact({
     releaseId: createId('preview'),
     revision: previewRevision,

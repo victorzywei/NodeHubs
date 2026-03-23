@@ -1030,18 +1030,45 @@ configure_warp_cli() {
   log "warp-cli local proxy mode is ready on 127.0.0.1:$WARP_PROXY_PORT"
 }
 
+launch_warp_go_helper() {
+  local script_path source_url
+  source_url="https://gitlab.com/fscarmen/warp/-/raw/main/warp-go.sh"
+  [ -n "$TMP_DIR" ] || TMP_DIR="$(mktemp -d)"
+  mkdir -p "$TMP_DIR"
+  script_path="$TMP_DIR/warp-go.sh"
+  log "Launching warp-go helper script for manual follow-up."
+  if command -v wget >/dev/null 2>&1; then
+    wget -N -O "$script_path" "$source_url" >/dev/null 2>&1 || return 1
+  elif command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$source_url" -o "$script_path" >/dev/null 2>&1 || return 1
+  elif command -v busybox >/dev/null 2>&1; then
+    busybox wget -O "$script_path" "$source_url" >/dev/null 2>&1 || return 1
+  else
+    return 1
+  fi
+  chmod +x "$script_path" >/dev/null 2>&1 || true
+  if [ -n "$NODE_WARP_LICENSE_KEY" ]; then
+    bash "$script_path" 4 "$NODE_WARP_LICENSE_KEY"
+    return $?
+  fi
+  bash "$script_path" 4
+}
+
 ensure_warp_bootstrap() {
   if [ "$NODE_INSTALL_WARP" != "1" ]; then
     return 0
   fi
-  is_root || {
-    warn "Install WARP requested, but current deployment is user mode; skipping."
+  if is_root && install_warp_cli && ensure_warp_service && configure_warp_cli; then
+    log "Official warp-cli bootstrap completed."
     return 0
-  }
-  install_warp_cli || return 1
-  ensure_warp_service || return 1
-  configure_warp_cli || return 1
-  log "Official warp-cli bootstrap completed."
+  fi
+  if ! is_root; then
+    warn "Install WARP requested, but current deployment is user mode; official warp-cli bootstrap skipped."
+  else
+    warn "Official warp-cli bootstrap failed or is unsupported on this host."
+  fi
+  launch_warp_go_helper || warn "Failed to launch warp-go helper script."
+  return 0
 }
 
 read_existing_env_value() {
@@ -2225,12 +2252,12 @@ run_step "Write agent environment" write_agent_env
 run_step "Install or update agent binary" write_agent_binary
 run_step "Prepare network bootstrap" run_network_bootstrap
 run_step "Install runtime binaries" install_runtime_binaries
-run_step "Install WARP when enabled" ensure_warp_bootstrap
 if [ "$USE_SYSTEMD" = "1" ]; then
   run_step "Register and start agent service" write_service
 else
   run_step "Configure background autostart and start agent" configure_background_agent_startup
 fi
+run_step "Attempt WARP bootstrap when enabled" ensure_warp_bootstrap
 cleanup_tmp_dir
 log "Install finished. Printing summary."
 print_summary

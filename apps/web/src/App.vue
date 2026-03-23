@@ -1579,6 +1579,18 @@ function toggleAllPublishTemplates() {
   publishTemplateIds.value = sortedTemplates.value.map((template) => template.id)
 }
 
+const publishSelectedTemplates = computed(() => {
+  const selectedIds = new Set(publishTemplateIds.value)
+  return sortedTemplates.value.filter((template) => selectedIds.has(template.id))
+})
+
+const publishWarpBlockedReason = computed(() => {
+  if (!publishNode.value || publishSelectedTemplates.value.length === 0) return ''
+  if (!publishSelectedTemplates.value.some((template) => template.warpExit)) return ''
+  if (isWarpRunning(publishNode.value)) return ''
+  return 'Selected templates require the official WARP proxy, and this node must report WARP status Running before preview or publish.'
+})
+
 async function loadPublishPreview() {
   if (!publishNode.value) {
     publishPreview.value = null
@@ -1589,6 +1601,12 @@ async function loadPublishPreview() {
   if (publishTemplateIds.value.length === 0) {
     publishPreview.value = null
     publishPreviewError.value = ''
+    publishPreviewLoading.value = false
+    return
+  }
+  if (publishWarpBlockedReason.value) {
+    publishPreview.value = null
+    publishPreviewError.value = publishWarpBlockedReason.value
     publishPreviewLoading.value = false
     return
   }
@@ -1618,6 +1636,10 @@ async function publishSelectedRelease() {
   if (!publishNode.value) return
   if (publishTemplateIds.value.length === 0) {
     toast('error', 'Select at least one template')
+    return
+  }
+  if (publishWarpBlockedReason.value) {
+    toast('error', publishWarpBlockedReason.value)
     return
   }
   try {
@@ -1835,7 +1857,7 @@ function getNodeVersionPullInterval(node: NodeRecord | null) {
   return normalizeIntervalSeconds(node?.versionPullIntervalSeconds, 15)
 }
 
-const publishBlocked = computed(() => publishTemplateIds.value.length === 0)
+const publishBlocked = computed(() => publishTemplateIds.value.length === 0 || Boolean(publishWarpBlockedReason.value))
 const allPublishTemplatesSelected = computed(() => templates.value.length > 0 && publishTemplateIds.value.length === templates.value.length)
 const sortedNodes = computed(() => sortByCreatedAtDesc(nodes.value))
 const sortedTemplates = computed(() => sortByCreatedAtDesc(templates.value))
@@ -2570,6 +2592,9 @@ onMounted(() => {
                     <div class="publish-template-meta">{{ template.engine }} / {{ template.protocol }} / {{ template.transport }} / {{ template.tlsMode }}</div>
                   </div>
                 </label>
+              </div>
+              <div v-if="publishWarpBlockedReason" class="publish-preview-error" style="margin-top:8px">
+                {{ publishWarpBlockedReason }}
               </div>
             </div>
             <div class="form-group">
