@@ -1271,8 +1271,9 @@ export function mergeRenderedSubscriptionDocument(
   localDocument: { body: string; contentType: string },
   upstreamDocuments: Array<{ format: SubscriptionDocumentFormat; body: string }>,
   format: SubscriptionDocumentFormat,
+  failedEdgeNodes: Array<{ nodeId: string; nodeName: string }> = [],
 ): { body: string; contentType: string } {
-  if (upstreamDocuments.length === 0) return localDocument
+  if (upstreamDocuments.length === 0 && failedEdgeNodes.length === 0) return localDocument
 
   if (format === 'plain' || format === 'base64' || format === 'v2ray') {
     const mergedLines = mergeUniqueByKey(
@@ -1282,6 +1283,11 @@ export function mergeRenderedSubscriptionDocument(
       ],
       (item) => item,
     )
+    if (format === 'plain' && failedEdgeNodes.length > 0) {
+      for (const failed of failedEdgeNodes) {
+        mergedLines.push(`# WARNING: Edge upstream unavailable for node: ${failed.nodeName}`)
+      }
+    }
     const plain = mergedLines.join('\n')
     return {
       body: format === 'plain' ? plain : encodeBase64(plain),
@@ -1311,8 +1317,16 @@ export function mergeRenderedSubscriptionDocument(
   }
 
   if (format === 'json') {
+    const mergedObj = JSON.parse(mergeJsonBodies(localDocument.body, upstreamDocuments.map((document) => document.body)))
+    if (failedEdgeNodes.length > 0) {
+      mergedObj.warnings = failedEdgeNodes.map((failed) => ({
+        nodeId: failed.nodeId,
+        nodeName: failed.nodeName,
+        message: 'Edge upstream unavailable, entries omitted',
+      }))
+    }
     return {
-      body: mergeJsonBodies(localDocument.body, upstreamDocuments.map((document) => document.body)),
+      body: JSON.stringify(mergedObj, null, 2),
       contentType: localDocument.contentType,
     }
   }

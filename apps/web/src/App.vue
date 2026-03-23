@@ -708,7 +708,7 @@ async function createNode() {
       edgeUseGithubMirror: n.nodeType === 'edge' ? n.useGithubMirror : false,
       edgeUuid: n.nodeType === 'edge' ? n.edgeUuid : '',
       edgeDeployAssetUrl: n.nodeType === 'edge' ? (n.edgeDeployAssetUrl.trim() || DEFAULT_EDGE_DEPLOY_ASSET_URL) : DEFAULT_EDGE_DEPLOY_ASSET_URL,
-      edgeSubscriptionSources: [],
+      edgeSubscriptionSources: n.nodeType === 'edge' ? buildEdgeSubscriptionSourcesPayload(n.edgeSourceUrls) : [],
       installWarp: n.nodeType === 'vps' ? n.installWarp : false,
       warpLicenseKey: n.nodeType === 'vps' && n.installWarp ? n.warpLicenseKey.trim() : '',
       heartbeatIntervalSeconds: n.nodeType === 'vps' ? (n.heartbeatIntervalSeconds || 15) : 15,

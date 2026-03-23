@@ -1502,25 +1502,43 @@ async function buildSubscriptionEntriesForNodeRows(
   services: AppServices,
   nodes: NodeRow[],
 ): Promise<PublicSubscriptionDocument['entries']> {
-  const nodeEntries = await Promise.all(
-    nodes.map(async (nodeRow): Promise<PublicSubscriptionDocument['entries']> => {
-      if (isEdgeNodeType(nodeRow.node_type)) return []
-      const release = await services.db.get<ReleaseRow>(
-        'SELECT * FROM releases WHERE node_id = ? AND kind = ? AND status = ? ORDER BY revision DESC LIMIT 1',
-        [nodeRow.id, 'runtime', 'healthy'],
-      )
-      if (!release) return []
-      const artifact = await services.artifacts.get(release.artifact_key)
-      if (!artifact) return []
-      const parsedArtifact = parseReleaseArtifact(artifact.body)
-      if (!parsedArtifact) return []
-      const releaseTemplates = hydrateReleaseTemplates(parsedArtifact.templates || [], release)
-      if (releaseTemplates.length > 0) {
-        return buildSubscriptionEntries(toNodeRecord(nodeRow), releaseTemplates)
-      }
-      return parsedArtifact.subscriptionEndpoints
-    }),
+  const vpsNodes = nodes.filter((n) => !isEdgeNodeType(n.node_type))
+  if (vpsNodes.length === 0) return []
+
+  const nodeIds = vpsNodes.map((n) => n.id)
+  const placeholders = nodeIds.map(() => '?').join(',')
+  
+  const latestReleases = await services.db.all<ReleaseRow>(
+    `SELECT r.* FROM releases r
+     INNER JOIN (
+       SELECT node_id, MAX(revision) AS max_rev
+       FROM releases
+       WHERE kind = 'runtime' AND status = 'healthy' AND node_id IN (${placeholders})
+       GROUP BY node_id
+     ) latest ON r.node_id = latest.node_id AND r.revision = latest.max_rev`,
+    nodeIds
   )
+
+  const artifactPromises = latestReleases.map(async (release) => {
+    const artifact = await services.artifacts.get(release.artifact_key)
+    return { release, artifact }
+  })
+  const resolvedArtifacts = await Promise.all(artifactPromises)
+
+  const nodeEntries = vpsNodes.map((nodeRow): PublicSubscriptionDocument['entries'] => {
+    const releaseData = resolvedArtifacts.find((item) => item.release.node_id === nodeRow.id)
+    if (!releaseData || !releaseData.artifact) return []
+
+    const parsedArtifact = parseReleaseArtifact(releaseData.artifact.body)
+    if (!parsedArtifact) return []
+
+    const releaseTemplates = hydrateReleaseTemplates(parsedArtifact.templates || [], releaseData.release)
+    if (releaseTemplates.length > 0) {
+      return buildSubscriptionEntries(toNodeRecord(nodeRow), releaseTemplates)
+    }
+    return parsedArtifact.subscriptionEndpoints
+  })
+
   return nodeEntries.flat()
 }
 
@@ -1567,14 +1585,26 @@ export async function buildRenderedPublicSubscriptionDocument(
           return {
             format: source.format,
             body,
+            error: false,
+            nodeId: node.id,
+            nodeName: node.name,
           }
         } catch {
-          return null
+          return {
+            format: source.format,
+            body: '',
+            error: true,
+            nodeId: node.id,
+            nodeName: node.name,
+          }
         }
       }),
-  )).filter((item): item is { format: SubscriptionDocumentFormat; body: string } => Boolean(item))
+  )).filter((item): item is NonNullable<typeof item> => Boolean(item))
 
-  return mergeRenderedSubscriptionDocument(localDocument, upstreamDocuments, format)
+  const successfulDocuments = upstreamDocuments.filter((d) => !d.error).map((d) => ({ format: d.format, body: d.body }))
+  const failedEdgeNodes = upstreamDocuments.filter((d) => d.error).map((d) => ({ nodeId: d.nodeId, nodeName: d.nodeName }))
+
+  return mergeRenderedSubscriptionDocument(localDocument, successfulDocuments, format, failedEdgeNodes)
 }
 
 export async function buildSystemStatus(services: AppServices): Promise<SystemStatus> {
