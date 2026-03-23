@@ -2638,9 +2638,8 @@ onMounted(() => {
             <div class="detail-row"><span class="detail-label">地区</span><span class="detail-value">{{ selectedNode.region || '-' }}</span></div>
             <template v-if="selectedNode.nodeType === 'edge'">
               <div class="detail-row"><span class="detail-label">UUID</span><span class="detail-value text-mono">{{ selectedNode.edgeUuid || '-' }}</span></div>
-              <div class="detail-row"><span class="detail-label">外链地址</span><span class="detail-value text-mono">{{ selectedNode.edgePanelUrl || '-' }}</span></div>
+              <div class="detail-row"><span class="detail-label">上游控制面板</span><span class="detail-value text-mono">{{ selectedNode.edgePanelUrl || '-' }}</span></div>
               <div class="detail-row"><span class="detail-label">部署文件</span><span class="detail-value text-mono">{{ selectedNode.edgeDeployAssetUrl || DEFAULT_EDGE_DEPLOY_ASSET_URL }}</span></div>
-              <div class="detail-row"><span class="detail-label">镜像下载</span><span class="detail-value">{{ selectedNode.edgeUseGithubMirror ? '已启用' : '未启用' }}</span></div>
               <div class="detail-row"><span class="detail-label">订阅格式</span><span class="detail-value">{{ getEdgeConfiguredFormats(selectedNode).length ? getEdgeConfiguredFormats(selectedNode).join(' / ') : '未配置' }}</span></div>
             </template>
             <template v-else>
@@ -2655,14 +2654,6 @@ onMounted(() => {
           <template v-if="selectedNode.nodeType === 'edge'">
             <div class="detail-section">
               <div class="detail-section-title">部署资产</div>
-              <div class="form-checkbox-group mb-md">
-                <input id="edge-detail-github-mirror" type="checkbox" class="form-checkbox" v-model="edgeSettingsDraft.useGithubMirror">
-                <label for="edge-detail-github-mirror" class="form-label" style="margin:0">使用 GitHub 镜像下载部署文件</label>
-              </div>
-              <div v-if="edgeSettingsDraft.useGithubMirror" class="form-group">
-                <label class="form-label">GitHub 镜像地址</label>
-                <input class="form-input" v-model="edgeSettingsDraft.githubMirrorUrl" placeholder="默认 https://gh-proxy.org，可自定义" />
-              </div>
               <div class="form-group">
                 <label class="form-label">UUID</label>
                 <div style="display:flex;gap:8px">
@@ -2670,22 +2661,26 @@ onMounted(() => {
                   <button class="btn btn-secondary btn-sm" type="button" @click="regenerateSelectedEdgeUuid">生成</button>
                 </div>
               </div>
-              <div class="form-group">
-                <label class="form-label">外链地址</label>
-                <input class="form-input" v-model="edgeSettingsDraft.edgePanelUrl" placeholder="https://example.com" />
-              </div>
-              <div class="form-group">
-                <label class="form-label">部署文件链接</label>
-                <input class="form-input" v-model="edgeSettingsDraft.edgeDeployAssetUrl" placeholder="https://github.com/byJoey/cfnew/releases/latest/download/Pages.zip" />
+              <div class="detail-row" style="margin-bottom:12px">
+                <span class="detail-label">部署文件链接</span>
+                <span class="detail-value text-mono">{{ selectedNode.edgeDeployAssetUrl || DEFAULT_EDGE_DEPLOY_ASSET_URL }}</span>
               </div>
               <div class="text-muted" style="margin-bottom:12px;font-size:12px">
                 用户可以通过这里下载 Worker/Pages 部署文件。启用 GitHub 镜像后，下载按钮会自动拼接镜像前缀。
               </div>
               <div style="display:flex;gap:8px;flex-wrap:wrap">
-                <button class="btn btn-secondary btn-sm" :disabled="!edgeSettingsDraft.edgePanelUrl.trim()" @click="openEdgeExternalLink">打开外链</button>
                 <button class="btn btn-secondary btn-sm" @click="openEdgeDraftDeployDownload">部署文件下载</button>
                 <button class="btn btn-secondary btn-sm" :disabled="!getEdgeDraftDeployDownloadUrl()" @click="copyToClipboard(getEdgeDraftDeployDownloadUrl())">复制下载链接</button>
-                <button class="btn btn-primary btn-sm" :disabled="edgeSettingsSaving" @click="saveSelectedEdgeSettings">{{ edgeSettingsSaving ? '保存中...' : '保存 Edge 设置' }}</button>
+              </div>
+              <div class="form-group" style="margin-top:12px">
+                <label class="form-label">上游控制面板</label>
+                <div style="display:flex;gap:8px">
+                  <input class="form-input" v-model="edgeSettingsDraft.edgePanelUrl" placeholder="https://example.com" />
+                  <button class="btn btn-secondary btn-sm" type="button" :disabled="!edgeSettingsDraft.edgePanelUrl.trim()" @click="openEdgeExternalLink">打开</button>
+                </div>
+              </div>
+              <div class="text-muted" style="font-size:12px">
+                UUID 和上游控制面板地址修改后，请在下方点击保存订阅源配置。
               </div>
             </div>
             <div class="detail-section">
