@@ -20,18 +20,14 @@ import * as api from './lib/api'
 import {
   PanelApiError,
   getPanelSession,
-  isLocalPanelMode,
   listBackendProfiles,
   loginToPanel,
   saveBackendProfiles as savePanelBackendProfiles,
 } from './lib/panel-api'
 import {
-  BACKEND_PROFILES_STORAGE_KEY,
   CURRENT_BACKEND_STORAGE_KEY,
-  LEGACY_ADMIN_KEY_STORAGE_KEY,
   createBackendProfileId,
   normalizeBackendApiBase,
-  sanitizeBackendProfiles,
   type BackendProfile,
 } from './shared/backend-profiles'
 
@@ -44,51 +40,6 @@ interface BackendDraft {
 }
 
 const THEME_STORAGE_KEY = 'nh_ui_theme'
-function resolveDefaultBackendApiBase() {
-  const envApiBaseUrl = normalizeBackendApiBase(import.meta.env.VITE_API_BASE || '')
-  if (envApiBaseUrl) return envApiBaseUrl
-  if (typeof window !== 'undefined' && window.location.origin) {
-    return normalizeBackendApiBase(window.location.origin)
-  }
-  return ''
-}
-
-function createDefaultBackendProfile(): BackendProfile | null {
-  const apiBaseUrl = resolveDefaultBackendApiBase()
-  const legacyAdminKey = localStorage.getItem(LEGACY_ADMIN_KEY_STORAGE_KEY) || ''
-  if (!apiBaseUrl && !legacyAdminKey) return null
-
-  return {
-    id: createBackendProfileId(),
-    name: import.meta.env.VITE_API_BASE ? '默认后端' : '当前站点',
-    apiBaseUrl,
-    adminKey: legacyAdminKey,
-  }
-}
-
-function loadLegacyBackendProfiles(): BackendProfile[] {
-  try {
-    const raw = localStorage.getItem(BACKEND_PROFILES_STORAGE_KEY)
-    if (raw) {
-      const profiles = sanitizeBackendProfiles(JSON.parse(raw))
-      if (profiles.length > 0) {
-        return profiles
-      }
-    }
-  } catch {
-    // Ignore broken local storage payloads during one-time migration.
-  }
-
-  const fallback = createDefaultBackendProfile()
-  return fallback ? [fallback] : []
-}
-
-function clearLegacyBackendStorage(removeProfiles = true) {
-  if (removeProfiles) {
-    localStorage.removeItem(BACKEND_PROFILES_STORAGE_KEY)
-  }
-  localStorage.removeItem(LEGACY_ADMIN_KEY_STORAGE_KEY)
-}
 
 function resolveInitialBackendId(profiles: BackendProfile[], preferredId = ''): string {
   const stored = preferredId || localStorage.getItem(CURRENT_BACKEND_STORAGE_KEY) || ''
@@ -202,7 +153,6 @@ function setBackendProfiles(nextProfiles: BackendProfile[], preferredId = curren
 async function persistBackendProfiles(nextProfiles: BackendProfile[], preferredId = currentBackendId.value) {
   const result = await savePanelBackendProfiles(nextProfiles)
   setBackendProfiles(result.profiles, preferredId)
-  clearLegacyBackendStorage(!isLocalPanelMode())
   return result.profiles
 }
 
@@ -233,18 +183,7 @@ async function loadPanelBackendProfiles() {
   backendProfilesLoading.value = true
   try {
     const result = await listBackendProfiles()
-    let nextProfiles = result.profiles
-
-    if (nextProfiles.length === 0) {
-      const legacyProfiles = loadLegacyBackendProfiles()
-      if (legacyProfiles.length > 0) {
-        const seeded = await savePanelBackendProfiles(legacyProfiles)
-        nextProfiles = seeded.profiles
-        clearLegacyBackendStorage(!isLocalPanelMode())
-      }
-    }
-
-    setBackendProfiles(nextProfiles)
+    setBackendProfiles(result.profiles)
     panelError.value = ''
   } catch (panelApiError) {
     if (panelApiError instanceof PanelApiError && panelApiError.status === 401) {
@@ -430,7 +369,6 @@ async function login() {
     const s = await api.getSystemStatus(adminKey.value)
     status.value = s; loggedIn.value = true
     await updateCurrentBackendAdminKey(adminKey.value)
-    clearLegacyBackendStorage(!isLocalPanelMode())
     await loadAll()
   } catch (e:any) { error.value = e.message || '连接认证失败' }
   loading.value = false
@@ -443,7 +381,6 @@ async function logout() {
     // Ignore persisted key cleanup failures during logout.
   }
   adminKey.value = ''
-  clearLegacyBackendStorage(!isLocalPanelMode())
   clearLoadedData()
 }
 

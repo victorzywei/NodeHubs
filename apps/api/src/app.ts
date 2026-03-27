@@ -3,6 +3,7 @@ import { cors } from 'hono/cors'
 import type { AppServices } from './lib/app-types'
 import { fail } from './lib/response'
 import { nodeRoutes } from './routes/nodes'
+import { panelRoutes } from './routes/panel'
 import { publicSubscriptionRoutes, subscriptionRoutes } from './routes/subscriptions'
 import { systemRoutes } from './routes/system'
 import { templateRoutes } from './routes/templates'
@@ -19,6 +20,7 @@ export function createApp(resolveServices: (request: Request, env: unknown) => P
   })
 
   app.route('/api/system', systemRoutes)
+  app.route('/api/panel', panelRoutes)
   app.route('/api/templates', templateRoutes)
   app.route('/api/subscriptions', subscriptionRoutes)
   app.route('/api/nodes', nodeRoutes)

@@ -101,6 +101,7 @@ docker compose up --build
 Default runtime layout:
 
 - `app`: Node API + built web assets
+- panel access is password-gated via `PANEL_PASSWORD`, matching the Cloudflare panel flow
 
 Persistent volume:
 
@@ -193,6 +194,8 @@ npm run build -w apps/web
 ```bash
 npm run pages:deploy -w apps/web
 ```
+
+For Docker and Node mode, set the same `PANEL_PASSWORD` / `PANEL_SESSION_SECRET` values from `.env.example`; backend profiles are persisted server-side through the same panel authentication flow as Cloudflare mode.
 
 ## Current release model
 

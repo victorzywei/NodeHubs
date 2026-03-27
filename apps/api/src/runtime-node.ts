@@ -1,8 +1,9 @@
-import { mkdirSync, readFileSync, readdirSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { APP_VERSION } from './lib/constants'
 import type { AppServices } from './lib/app-types'
 import type { SqlAdapter, SqlValue } from './lib/db'
+import { applySqliteMigrations } from './lib/migrations'
 import { DatabaseSync, type DatabaseSyncInstance } from './lib/node-sqlite'
 import { resolveApiMigrationsDir, resolveApiStoragePath } from './lib/runtime-paths'
 import { FileArtifactStore } from './storage/file-store'
@@ -17,38 +18,8 @@ function resolveArtifactsDir(): string {
   return process.env.ARTIFACTS_DIR || resolveApiStoragePath('artifacts')
 }
 
-function shouldIgnoreMigrationError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false
-  const message = error.message.toLowerCase()
-  return message.includes('duplicate column name')
-}
-
-function splitSqlStatements(sqlText: string): string[] {
-  return sqlText
-    .split(';')
-    .map((statement) => statement.trim())
-    .filter(Boolean)
-}
-
 function applyMigrations(db: DatabaseSyncInstance): void {
-  const migrationDir = resolveApiMigrationsDir()
-  const migrationFiles = readdirSync(migrationDir)
-    .filter((name) => name.endsWith('.sql'))
-    .sort((a, b) => a.localeCompare(b))
-
-  for (const migrationFile of migrationFiles) {
-    const migrationPath = resolve(migrationDir, migrationFile)
-    const sqlText = readFileSync(migrationPath, 'utf8')
-    const statements = splitSqlStatements(sqlText)
-    for (const statement of statements) {
-      try {
-        db.exec(`${statement};`)
-      } catch (error) {
-        if (shouldIgnoreMigrationError(error)) continue
-        throw error
-      }
-    }
-  }
+  applySqliteMigrations(db, resolveApiMigrationsDir())
 }
 
 function normalizeParams(params: SqlValue[] = []): Array<string | number | null> {
@@ -88,6 +59,12 @@ export function getNodeServices(): AppServices {
     dbDriver: 'sqlite',
     artifactDriver: 'local',
     adminKey: process.env.ADMIN_KEY || '',
+    panel: process.env.PANEL_PASSWORD
+      ? {
+        password: process.env.PANEL_PASSWORD,
+        sessionSecret: process.env.PANEL_SESSION_SECRET || process.env.PANEL_PASSWORD,
+      }
+      : null,
     publicBaseUrl: process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${process.env.PORT || '3000'}`,
     db: createSqliteAdapter(sqlite),
     artifacts,

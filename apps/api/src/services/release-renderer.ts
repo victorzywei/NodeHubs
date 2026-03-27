@@ -20,7 +20,7 @@ import {
   DEFAULT_WIREGUARD_PORT,
   DEFAULT_WIREGUARD_SERVER_ADDRESS,
 } from './template-constants'
-import { hydrateTemplatePreset, repairTemplateRecord } from './template-defaults'
+import { hydrateTemplatePreset } from './template-defaults'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 
 type RenderContext = {
@@ -404,25 +404,24 @@ function defaultTemplateSni(node: NodeRecord, server: string): string {
 }
 
 function normalizeTemplate(node: NodeRecord, template: TemplateRecord): NormalizedTemplate {
-  const repairedTemplate = repairTemplateRecord(template)
-  ensureProtocolSupport(repairedTemplate)
-  ensureTemplateCompatibility(repairedTemplate)
-  const defaults = repairedTemplate.defaults || {}
+  ensureProtocolSupport(template)
+  ensureTemplateCompatibility(template)
+  const defaults = template.defaults || {}
   const server = readString(defaults, 'server', defaultTemplateServer(node))
   if (!server) {
-    throw new Error(`Node ${node.name} does not have a reachable domain or entry IP for template ${repairedTemplate.name}`)
+    throw new Error(`Node ${node.name} does not have a reachable domain or entry IP for template ${template.name}`)
   }
 
-  const protocol = repairedTemplate.protocol.toLowerCase()
-  const transport = repairedTemplate.transport.toLowerCase()
-  const tlsMode = repairedTemplate.tlsMode
+  const protocol = template.protocol.toLowerCase()
+  const transport = template.transport.toLowerCase()
+  const tlsMode = template.tlsMode
   if (protocol === 'wireguard' && node.networkType === 'noPublicIp') {
-    throw new Error(`Template ${repairedTemplate.name} requires a public IP node for wireguard`)
+    throw new Error(`Template ${template.name} requires a public IP node for wireguard`)
   }
-  const warpExit = repairedTemplate.warpExit === true || readBoolean(defaults.warp_exit, false)
-  const warpRouteModeRaw = readString(defaults, 'warp_route_mode', repairedTemplate.warpRouteMode || 'all')
+  const warpExit = template.warpExit === true
+  const warpRouteModeRaw = template.warpRouteMode || 'all'
   const warpRouteMode: TemplateRecord['warpRouteMode'] = warpRouteModeRaw === 'ipv4' || warpRouteModeRaw === 'ipv6' ? warpRouteModeRaw : 'all'
-  const templateListenPort = readNumber(defaults, ['serverPort', 'port'], defaultPort(repairedTemplate))
+  const templateListenPort = readNumber(defaults, ['serverPort'], defaultPort(template))
   const listenPort = node.networkType === 'noPublicIp'
     ? Number(node.argoTunnelPort || 2053)
     : templateListenPort
@@ -441,9 +440,9 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
   const wireguardMtu = readNumber(defaults, ['mtu'], DEFAULT_WIREGUARD_MTU)
   const wireguardPersistentKeepalive = readNumber(defaults, ['persistentKeepalive'], 0)
   const normalized: NormalizedTemplate = {
-    id: repairedTemplate.id,
-    name: repairedTemplate.name,
-    engine: repairedTemplate.engine,
+    id: template.id,
+    name: template.name,
+    engine: template.engine,
     protocol,
     transport,
     tlsMode,
@@ -454,8 +453,8 @@ function normalizeTemplate(node: NodeRecord, template: TemplateRecord): Normaliz
     listenPort,
     host,
     sni,
-    path: normalizePath(readString(defaults, 'path', `/connect/${repairedTemplate.id.slice(-6)}`)),
-    serviceName: readString(defaults, 'serviceName', `grpc-${repairedTemplate.id.slice(-6)}`),
+    path: normalizePath(readString(defaults, 'path', `/connect/${template.id.slice(-6)}`)),
+    serviceName: readString(defaults, 'serviceName', `grpc-${template.id.slice(-6)}`),
     uuid: readString(defaults, 'uuid'),
     password: readString(defaults, 'password'),
     method: readString(defaults, 'method', 'aes-128-gcm'),

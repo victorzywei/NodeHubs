@@ -1,2 +1,4 @@
 ADMIN_KEY=dev-admin-key
+PANEL_PASSWORD=change-me
+PANEL_SESSION_SECRET=change-me-too
 PUBLIC_BASE_URL=http://127.0.0.1:8787

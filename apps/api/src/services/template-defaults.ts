@@ -217,13 +217,6 @@ export function repairTemplateDefaults(template: TemplateLike): Record<string, u
   return defaults
 }
 
-export function repairTemplateRecord(template: TemplateRecord): TemplateRecord {
-  return {
-    ...template,
-    defaults: repairTemplateDefaults(template),
-  }
-}
-
 export function hydrateTemplatePreset(preset: TemplatePreset): TemplatePreset {
   return {
     ...preset,

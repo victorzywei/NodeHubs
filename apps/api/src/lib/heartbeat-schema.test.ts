@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { heartbeatSchema } from '@contracts/index'
 
 describe('heartbeat schema', () => {
-  it('accepts legacy agents that send a null warpReserved field', () => {
+  it('rejects a null warpReserved field', () => {
     const parsed = heartbeatSchema.safeParse({
       nodeId: 'node_1',
       bytesInTotal: 0,
@@ -34,9 +34,6 @@ describe('heartbeat schema', () => {
       protocolRuntimeVersion: '',
     })
 
-    expect(parsed.success).toBe(true)
-    expect(parsed.success && parsed.data.permissionMode).toBe('root')
-    expect(parsed.success && parsed.data.singBoxStatus).toBe('running')
-    expect(parsed.success && parsed.data.xrayStatus).toBe('stopping')
+    expect(parsed.success).toBe(false)
   })
 })

@@ -40,7 +40,7 @@ import {
   renderReleaseArtifact,
   renderSubscriptionDocument,
 } from './release-renderer'
-import { repairTemplateDefaults, repairTemplateRecord } from './template-defaults'
+import { repairTemplateDefaults } from './template-defaults'
 
 type NodeRow = {
   id: string
@@ -837,30 +837,6 @@ export async function listTemplates(services: AppServices): Promise<TemplateReco
   return rows.map(toTemplateRecord)
 }
 
-async function persistRepairedTemplates(
-  services: AppServices,
-  templateRows: TemplateRow[],
-): Promise<TemplateRecord[]> {
-  const repairedTemplates: TemplateRecord[] = []
-
-  for (const row of templateRows) {
-    const currentTemplate = toTemplateRecord(row)
-    const repairedTemplate = repairTemplateRecord(currentTemplate)
-    repairedTemplates.push(repairedTemplate)
-
-    if (JSON.stringify(currentTemplate.defaults) === JSON.stringify(repairedTemplate.defaults)) {
-      continue
-    }
-
-    await services.db.run(
-      'UPDATE templates SET defaults_json = ?, updated_at = ? WHERE id = ?',
-      [JSON.stringify(repairedTemplate.defaults), nowIso(), repairedTemplate.id],
-    )
-  }
-
-  return repairedTemplates
-}
-
 function isWarpProxyRunning(status: string | undefined): boolean {
   return (status || '').trim().toLowerCase().includes('running')
 }
@@ -1056,8 +1032,8 @@ export async function publishNodeRelease(
     throw new Error('Template releases require at least one protocol template')
   }
 
-  const repairedTemplates = await persistRepairedTemplates(services, templateRows)
-  assertWarpProxyReadyForTemplates(node, repairedTemplates)
+  const templates = templateRows.map((row) => toTemplateRecord(row))
+  assertWarpProxyReadyForTemplates(node, templates)
 
   const reserved = await reserveNodeReleaseSlot(services, nodeId)
   if (!reserved) return null
@@ -1080,7 +1056,7 @@ export async function publishNodeRelease(
         desiredReleaseRevision: reserved.revision,
         currentReleaseStatus: 'pending',
       },
-      templates: repairedTemplates,
+      templates,
     })
     const stored = await services.artifacts.putJson(artifactKey, artifact)
 
@@ -1152,8 +1128,8 @@ export async function previewNodeRelease(
   const previewRevision = Number(node.desiredReleaseRevision || 0) + 1
   const createdAt = nowIso()
   const summary = summarizeRelease(uniqueTemplateIds, message)
-  const repairedTemplates = templateRows.map((row) => repairTemplateRecord(toTemplateRecord(row)))
-  assertWarpProxyReadyForTemplates(node, repairedTemplates)
+  const templates = templateRows.map((row) => toTemplateRecord(row))
+  assertWarpProxyReadyForTemplates(node, templates)
   const artifact = renderReleaseArtifact({
     releaseId: createId('preview'),
     revision: previewRevision,
@@ -1167,7 +1143,7 @@ export async function previewNodeRelease(
       desiredReleaseRevision: previewRevision,
       currentReleaseStatus: 'pending',
     },
-    templates: repairedTemplates,
+    templates,
   })
 
   return {
@@ -1186,7 +1162,7 @@ function hydrateReleaseTemplates(
   release: Pick<ReleaseRow, 'created_at' | 'updated_at'>,
 ): TemplateRecord[] {
   return templates.map((template) =>
-    repairTemplateRecord({
+    ({
       id: template.id,
       name: template.name,
       engine: template.engine,

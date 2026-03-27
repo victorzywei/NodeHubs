@@ -8,6 +8,8 @@ export interface WorkerBindings {
   ARTIFACTS: R2Bucket
   ASSETS?: Fetcher
   ADMIN_KEY: string
+  PANEL_PASSWORD?: string
+  PANEL_SESSION_SECRET?: string
   PUBLIC_BASE_URL?: string
 }
 
@@ -37,6 +39,12 @@ export function getWorkerServices(bindings: WorkerBindings, requestUrl: string):
     dbDriver: 'd1',
     artifactDriver: 'r2',
     adminKey: String(bindings.ADMIN_KEY || ''),
+    panel: bindings.PANEL_PASSWORD
+      ? {
+        password: String(bindings.PANEL_PASSWORD),
+        sessionSecret: String(bindings.PANEL_SESSION_SECRET || bindings.PANEL_PASSWORD),
+      }
+      : null,
     publicBaseUrl: String(bindings.PUBLIC_BASE_URL || new URL(requestUrl).origin),
     db: createD1Adapter(bindings.DB),
     artifacts: new R2ArtifactStore(bindings.ARTIFACTS),
