@@ -1,0 +1,57 @@
+- generic [ref=e21]:
+  - complementary [ref=e22]:
+    - generic [ref=e23]:
+      - generic [ref=e24]:
+        - img "NodeHub" [ref=e26]
+        - generic [ref=e27]:
+          - generic [ref=e28]: NodeHub
+          - generic [ref=e29]: v0.1.18
+      - generic [ref=e30]:
+        - generic [ref=e31]: Docker 模式
+        - generic [ref=e32]:
+          - button "浅色" [ref=e33] [cursor=pointer]
+          - button "深色" [ref=e34] [cursor=pointer]
+    - navigation [ref=e35]:
+      - generic [ref=e36] [cursor=pointer]:
+        - generic [ref=e37]: 📊
+        - generic [ref=e38]: 仪表盘
+      - generic [ref=e39] [cursor=pointer]:
+        - generic [ref=e40]: 🖥️
+        - generic [ref=e41]: 节点
+        - generic [ref=e42]: "0"
+      - generic [ref=e43] [cursor=pointer]:
+        - generic [ref=e44]: 📋
+        - generic [ref=e45]: 模板
+        - generic [ref=e46]: "0"
+      - generic [ref=e47] [cursor=pointer]:
+        - generic [ref=e48]: 🔗
+        - generic [ref=e49]: 订阅
+        - generic [ref=e50]: "0"
+    - generic [ref=e51]:
+      - button "管理后端" [ref=e52] [cursor=pointer]:
+        - generic [ref=e53]: 管理后端
+      - button "断开连接" [ref=e54] [cursor=pointer]:
+        - generic [ref=e55]: 断开连接
+      - button "编辑后端" [ref=e56] [cursor=pointer]:
+        - generic [ref=e57]: 编辑后端
+  - main [ref=e58]:
+    - generic [ref=e60]:
+      - generic [ref=e63]:
+        - heading "连接后端" [level=1] [ref=e64]
+        - paragraph [ref=e65]: 面板已解锁，默认已选中 东京 Worker。
+      - generic [ref=e66]:
+        - generic [ref=e67]:
+          - generic [ref=e68]:
+            - generic [ref=e69]: 东京 Worker
+            - generic [ref=e70]: https://demo.example.com
+          - generic [ref=e71]:
+            - button "新增" [ref=e72] [cursor=pointer]
+            - button "编辑" [ref=e73] [cursor=pointer]
+        - generic [ref=e74]:
+          - generic [ref=e75]:
+            - generic [ref=e76]: 管理密钥
+            - textbox "请输入当前后端的管理密钥" [ref=e77]
+          - paragraph [ref=e78]: 现在切换后端时会停留在主工作区。如果这个后端已经保存过密钥，可以直接连接。
+          - generic [ref=e79]:
+            - button "连接后端" [ref=e80] [cursor=pointer]
+            - button "管理后端" [ref=e81] [cursor=pointer]

@@ -23,7 +23,6 @@ import {
   isLocalPanelMode,
   listBackendProfiles,
   loginToPanel,
-  logoutFromPanel,
   saveBackendProfiles as savePanelBackendProfiles,
 } from './lib/panel-api'
 import {
@@ -110,10 +109,6 @@ function createEmptyBackendDraft(profile?: Partial<BackendProfile>): BackendDraf
 function getBackendBaseLabel(profile: BackendProfile | null): string {
   if (!profile) return '未配置后端'
   return profile.apiBaseUrl || '同源站点'
-}
-
-function getBackendOptionLabel(profile: BackendProfile): string {
-  return profile.name + ' - ' + getBackendBaseLabel(profile)
 }
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -310,21 +305,6 @@ async function initializePanel() {
   }
 }
 
-async function logoutPanel() {
-  adminKey.value = ''
-  clearLoadedData()
-  try {
-    await logoutFromPanel()
-  } catch {
-    // Best effort panel logout.
-  }
-  panelAuthenticated.value = false
-  panelPassword.value = ''
-  panelError.value = ''
-  setBackendProfiles([], '')
-  closeBackendModal()
-}
-
 function clearLoadedData() {
   loggedIn.value = false
   error.value = ''
@@ -353,11 +333,6 @@ async function switchBackend(backendId: string, reconnect = true) {
   if (reconnect && adminKey.value) {
     await login()
   }
-}
-
-async function onBackendSelectionChange(backendId: string) {
-  if (!backendId || backendId === currentBackendId.value) return
-  await switchBackend(backendId)
 }
 
 function openCreateBackendModal() {
@@ -2244,12 +2219,23 @@ onMounted(() => {
     <!-- Sidebar -->
     <aside class="app-sidebar">
       <div class="sidebar-header">
-        <div class="sidebar-logo">
-          <img class="brand-logo-image" :src="nodehubIcon" alt="NodeHub" />
+        <div class="sidebar-brand">
+          <div class="sidebar-logo">
+            <img class="brand-logo-image" :src="nodehubIcon" alt="NodeHub" />
+          </div>
+          <div class="sidebar-brand-copy">
+            <div class="sidebar-title">NodeHub</div>
+            <div class="sidebar-version">v{{ status?.appVersion || '0.1.0' }}</div>
+          </div>
         </div>
-        <div>
-          <div class="sidebar-title">NodeHub</div>
-          <div class="sidebar-version">v{{ status?.appVersion || '0.1.0' }}</div>
+        <div class="sidebar-header-tools">
+          <div class="sidebar-mode-badge" :class="status?.mode||'docker'">
+            {{ status?.mode === 'cloudflare' ? 'Cloudflare 模式' : 'Docker 模式' }}
+          </div>
+          <div class="theme-switcher sidebar-theme-switcher">
+            <button class="theme-chip" :class="{active: uiTheme==='legacy'}" @click="setUiTheme('legacy')">浅色</button>
+            <button class="theme-chip" :class="{active: uiTheme==='midnight'}" @click="setUiTheme('midnight')">深色</button>
+          </div>
         </div>
       </div>
       <nav class="sidebar-nav">
@@ -2272,37 +2258,16 @@ onMounted(() => {
         </div>
       </nav>
       <div class="sidebar-footer">
-        <div class="backend-panel sidebar-backend-panel">
-          <div class="backend-panel-header">
-            <div>
-              <div class="backend-panel-title">当前后端</div>
-              <div class="backend-panel-meta">{{ currentBackend?.name || '未选择后端' }}</div>
-            </div>
-            <div class="backend-panel-actions">
-              <button class="btn btn-secondary btn-xs" type="button" @click="openCreateBackendModal">新增</button>
-              <button class="btn btn-secondary btn-xs" type="button" :disabled="!currentBackend" @click="openEditBackendModal()">编辑</button>
-            </div>
-          </div>
-          <div class="backend-panel-base">{{ getBackendBaseLabel(currentBackend) }}</div>
-          <select class="form-select backend-select" :value="currentBackendId" :disabled="backendProfilesLoading || backendProfiles.length === 0" @change="onBackendSelectionChange(($event.target as HTMLSelectElement).value)">
-            <option v-if="backendProfiles.length === 0" value="">请先添加后端配置</option>
-            <option v-for="profile in backendProfiles" :key="profile.id" :value="profile.id">{{ getBackendOptionLabel(profile) }}</option>
-          </select>
-          <p v-if="panelError" class="backend-form-hint" style="margin-top:10px;color:var(--color-danger)">{{ panelError }}</p>
-        </div>
-        <div class="sidebar-mode-badge" :class="status?.mode||'docker'">
-          {{ status?.mode === 'cloudflare' ? 'Cloudflare 模式' : 'Docker 模式' }}
-        </div>
-        <div class="theme-switcher sidebar-theme-switcher">
-          <button class="theme-chip" :class="{active: uiTheme==='legacy'}" @click="setUiTheme('legacy')">浅色</button>
-          <button class="theme-chip" :class="{active: uiTheme==='midnight'}" @click="setUiTheme('midnight')">深色</button>
-        </div>
-        <button class="btn btn-ghost btn-sm mt-md" @click="logout" style="width:100%;justify-content:flex-start;gap:8px">
-          <span>断开当前后端</span>
+        <button class="btn btn-secondary btn-sm sidebar-action-btn" type="button" @click="openCreateBackendModal">
+          <span>管理后端</span>
         </button>
-        <button class="btn btn-ghost btn-sm" @click="logoutPanel" style="width:100%;justify-content:flex-start;gap:8px">
-          <span>锁定面板</span>
+        <button class="btn btn-ghost btn-sm sidebar-action-btn" type="button" @click="logout">
+          <span>断开连接</span>
         </button>
+        <button v-if="currentBackend" class="btn btn-secondary btn-sm sidebar-action-btn" type="button" @click="openEditBackendModal()">
+          <span>编辑后端</span>
+        </button>
+        <p v-if="panelError" class="backend-form-hint sidebar-panel-hint" style="color:var(--color-danger)">{{ panelError }}</p>
       </div>
     </aside>
 
@@ -2474,7 +2439,7 @@ onMounted(() => {
               <button class="btn btn-primary" @click="showCreateNode=true">+ 添加节点</button>
             </div>
           </div>
-          <div class="table-wrapper">
+          <div class="table-wrapper responsive-table">
             <table class="data-table node-table">
               <thead><tr>
                 <th>名称</th><th>类型</th><th>版本</th><th>地区</th><th>入口/来源</th><th>最后在线</th><th>WARP IPv6</th><th>连接数</th><th>流量</th><th>操作</th>
@@ -2511,6 +2476,70 @@ onMounted(() => {
               </tbody>
             </table>
           </div>
+          <div class="mobile-data-list" aria-label="节点移动卡片列表">
+            <div v-if="nodes.length===0" class="card empty-state-card">
+              <div class="empty-state">
+                <div class="empty-state-icon">🖥️</div>
+                <div class="empty-state-title">暂无节点</div>
+                <div class="empty-state-text">添加您的第一个代理节点以开始使用</div>
+                <button class="btn btn-primary" @click="showCreateNode=true">+ 添加节点</button>
+              </div>
+            </div>
+            <article v-for="n in sortedNodes" :key="`${n.id}-mobile`" class="mobile-data-card cursor-pointer" @click="selectNode(n)">
+              <div class="mobile-data-card-header">
+                <div class="mobile-data-card-copy">
+                  <div class="mobile-data-card-title node-name" :class="isOnline(n) ? 'online' : 'offline'">{{ n.name }}</div>
+                  <div class="mobile-data-card-subtitle text-mono">{{ getNodeDomainDisplay(n) }}</div>
+                </div>
+                <div class="mobile-card-tags">
+                  <span class="status-badge" :class="isOnline(n)?'online':'offline'">
+                    <span class="status-dot"></span>{{ isOnline(n) ? '在线' : '离线' }}
+                  </span>
+                  <span class="tag" :class="{accent:n.nodeType==='edge'}">{{ n.nodeType }}</span>
+                </div>
+              </div>
+              <div class="mobile-card-grid">
+                <div class="mobile-card-item">
+                  <div class="mobile-card-label">版本</div>
+                  <div class="mobile-card-value">
+                    <button
+                      type="button"
+                      class="release-revision"
+                      :class="getNodeVersionToneClass(n)"
+                      :disabled="getNodeVersionLabel(n) === '---'"
+                      @click.stop="openNodeReleaseLog(n)"
+                    >
+                      {{ getNodeVersionLabel(n) }}
+                    </button>
+                  </div>
+                </div>
+                <div class="mobile-card-item">
+                  <div class="mobile-card-label">地区</div>
+                  <div class="mobile-card-value">{{ n.region || '-' }}</div>
+                </div>
+                <div class="mobile-card-item">
+                  <div class="mobile-card-label">最后在线</div>
+                  <div class="mobile-card-value" :title="`${timeAgo(n.lastSeenAt)} · ${formatDateTime(n.lastSeenAt)}`">{{ formatDateTime(n.lastSeenAt) }}</div>
+                </div>
+                <div class="mobile-card-item">
+                  <div class="mobile-card-label">WARP IPv6</div>
+                  <div class="mobile-card-value text-mono">{{ getWarpLabel(n) }}</div>
+                </div>
+                <div class="mobile-card-item">
+                  <div class="mobile-card-label">连接数</div>
+                  <div class="mobile-card-value">{{ n.nodeType === 'edge' ? '---' : n.currentConnections }}</div>
+                </div>
+                <div class="mobile-card-item">
+                  <div class="mobile-card-label">流量</div>
+                  <div class="mobile-card-value">{{ n.nodeType === 'edge' ? '---' : `↑${formatBytes(n.bytesOutTotal)} ↓${formatBytes(n.bytesInTotal)}` }}</div>
+                </div>
+              </div>
+              <div class="mobile-card-actions">
+                <button v-if="n.nodeType !== 'edge'" class="btn btn-sm btn-secondary" @click.stop="openPublishRelease(n)">发布</button>
+                <button class="btn btn-sm btn-danger" @click.stop="deleteNodeById(n.id, n.name)">删除</button>
+              </div>
+            </article>
+          </div>
         </div>
 
         <!-- Templates Page -->
@@ -2521,7 +2550,7 @@ onMounted(() => {
               <button class="btn btn-primary" @click="openCreateTemplate">+ 添加模板</button>
             </div>
           </div>
-          <div class="table-wrapper">
+          <div class="table-wrapper responsive-table">
             <table class="data-table">
               <thead><tr><th>名称</th><th>引擎</th><th>协议</th><th>传输</th><th>端口</th><th>TLS</th><th>WARP</th><th>创建时间</th><th>操作</th></tr></thead>
               <tbody>
@@ -2544,6 +2573,48 @@ onMounted(() => {
               </tbody>
             </table>
           </div>
+          <div class="mobile-data-list" aria-label="模板移动卡片列表">
+            <div v-if="templates.length===0" class="card empty-state-card">
+              <div class="empty-state">
+                <div class="empty-state-icon">📋</div>
+                <div class="empty-state-title">暂无模板</div>
+                <div class="empty-state-text">创建协议模板来配置您的节点</div>
+                <button class="btn btn-primary" @click="openCreateTemplate">+ 添加模板</button>
+              </div>
+            </div>
+            <article v-for="t in sortedTemplates" :key="`${t.id}-mobile`" class="mobile-data-card">
+              <div class="mobile-data-card-header">
+                <div class="mobile-data-card-copy">
+                  <div class="mobile-data-card-title">{{ t.name }}</div>
+                  <div class="mobile-card-tags">
+                    <span class="tag" :class="{accent:t.engine==='sing-box'}">{{ t.engine }}</span>
+                    <span class="tag">{{ t.protocol }}</span>
+                    <span class="tag">{{ t.transport }}</span>
+                  </div>
+                </div>
+                <span class="status-badge" :class="t.tlsMode==='reality'?'applying':t.tlsMode==='tls'?'healthy':'offline'">{{ t.tlsMode }}</span>
+              </div>
+              <div class="mobile-card-grid">
+                <div class="mobile-card-item">
+                  <div class="mobile-card-label">端口</div>
+                  <div class="mobile-card-value text-mono">{{ getTemplatePortDisplay(t) }}</div>
+                </div>
+                <div class="mobile-card-item">
+                  <div class="mobile-card-label">WARP</div>
+                  <div class="mobile-card-value">
+                    <span class="tag" :class="{accent:t.warpExit}">{{ t.warpExit ? `on/${t.warpRouteMode}` : 'off' }}</span>
+                  </div>
+                </div>
+                <div class="mobile-card-item">
+                  <div class="mobile-card-label">创建时间</div>
+                  <div class="mobile-card-value">{{ timeAgo(t.createdAt) }}</div>
+                </div>
+              </div>
+              <div class="mobile-card-actions">
+                <button class="btn btn-sm btn-secondary" @click="openEditTemplate(t)">编辑</button>
+              </div>
+            </article>
+          </div>
         </div>
 
         <!-- Subscriptions Page -->
@@ -2554,7 +2625,7 @@ onMounted(() => {
               <button class="btn btn-primary" @click="openCreateSubscription">+ 添加订阅</button>
             </div>
           </div>
-          <div class="table-wrapper">
+          <div class="table-wrapper responsive-table">
             <table class="data-table">
               <thead><tr><th>名称</th><th>令牌</th><th>状态</th><th>可见节点</th><th>创建时间</th><th>订阅地址</th><th>操作</th></tr></thead>
               <tbody>
@@ -2578,6 +2649,48 @@ onMounted(() => {
                 <tr v-if="subscriptions.length===0"><td colspan="7"><div class="empty-state"><div class="empty-state-icon">🔗</div><div class="empty-state-title">暂无订阅</div><div class="empty-state-text">创建订阅以供客户端访问</div><button class="btn btn-primary" @click="openCreateSubscription">+ 添加订阅</button></div></td></tr>
               </tbody>
             </table>
+          </div>
+          <div class="mobile-data-list" aria-label="订阅移动卡片列表">
+            <div v-if="subscriptions.length===0" class="card empty-state-card">
+              <div class="empty-state">
+                <div class="empty-state-icon">🔗</div>
+                <div class="empty-state-title">暂无订阅</div>
+                <div class="empty-state-text">创建订阅以供客户端访问</div>
+                <button class="btn btn-primary" @click="openCreateSubscription">+ 添加订阅</button>
+              </div>
+            </div>
+            <article v-for="s in sortedSubscriptions" :key="`${s.id}-mobile`" class="mobile-data-card">
+              <div class="mobile-data-card-header">
+                <div class="mobile-data-card-copy">
+                  <div class="mobile-data-card-title">{{ s.name }}</div>
+                  <div class="mobile-data-card-subtitle text-mono">{{ s.token }}</div>
+                </div>
+                <span class="status-badge" :class="s.enabled?'online':'offline'"><span class="status-dot"></span>{{ s.enabled ? 'Enabled' : 'Disabled' }}</span>
+              </div>
+              <div class="mobile-card-grid">
+                <div class="mobile-card-item">
+                  <div class="mobile-card-label">可见节点</div>
+                  <div class="mobile-card-value">{{ getSubscriptionVisibleNodesLabel(s) }}</div>
+                </div>
+                <div class="mobile-card-item">
+                  <div class="mobile-card-label">创建时间</div>
+                  <div class="mobile-card-value">{{ timeAgo(s.createdAt) }}</div>
+                </div>
+              </div>
+              <div class="mobile-card-block">
+                <div class="mobile-card-label">订阅地址</div>
+                <div class="sub-url-actions mobile-sub-url-actions">
+                  <button class="btn btn-xs btn-secondary" @click="openSubscriptionQr(s, 'v2ray', 'V2Ray')" title="复制并显示 V2Ray 订阅二维码">V2Ray</button>
+                  <button class="btn btn-xs btn-secondary" @click="openSubscriptionQr(s, 'clash', 'Clash')" title="复制并显示 Clash 订阅二维码">Clash</button>
+                  <button class="btn btn-xs btn-secondary" @click="openSubscriptionQr(s, 'singbox', 'SingBox')" title="复制并显示 Sing-Box 订阅二维码">SingBox</button>
+                  <button class="btn btn-xs btn-secondary" @click="openSubscriptionQr(s, 'wireguard', 'WireGuard')" title="复制并显示 WireGuard 订阅链接">WireGuard</button>
+                  <button class="btn btn-xs btn-ghost" @click="openSubscriptionQr(s, 'plain', '通用')" title="复制并显示通用订阅二维码">通用</button>
+                </div>
+              </div>
+              <div class="mobile-card-actions">
+                <button class="btn btn-sm btn-secondary" @click="openEditSubscription(s)">编辑</button>
+              </div>
+            </article>
           </div>
         </div>
         </template>
